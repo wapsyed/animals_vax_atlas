@@ -88,19 +88,19 @@ datacuration_clean %>%
 ```{r}
 mice_vaccination_mining = datacuration_clean %>% 
   filter(str_detect(organism,"Mus musculus")) %>% 
-  filter(!str_detect(str_to_lower(title), "cancer|tumor")) %>% 
+  filter(!str_detect(str_to_lower(title), "cancer|tumor|autoimmune|drug")) %>% 
   filter(str_detect(str_to_lower(title), "vaccin|immuniz"))
 
 
-mice_vaccination_mining %>% 
-  write_csv(here("tables", "mice_vaccination_mining.csv"))
+mice_vaccination_mining
 ```
 
 
-
+BioProject metadata
 ```{r}
 library(rentrez)
 
+#Single
 bioprojectid = mice_vaccination_mining$id[[1]]
 bioproject_meta = entrez_summary(db = "bioproject", id = bioprojectid) %>% 
   as.tibble() %>% 
@@ -112,19 +112,15 @@ bioproject_meta = entrez_summary(db = "bioproject", id = bioprojectid) %>%
          project_target_material,
          project_target_capture,
          organism_name)
-  
 
 
 #Loop
 bioproject_ids <- mice_vaccination_mining$id
-
-# Função para extrair metadados de cada BioProject
-get_bioproject_metadata <- function(bioprojectid) {
-  entrez_summary(db = "bioproject", id = bioprojectid) %>%
+bioproject_metadata_df <- map_dfr(bioproject_ids, ~
+  entrez_summary(db = "bioproject", id = .x) %>%
     as.list() %>%
-    tibble::as_tibble() %>%
+    as_tibble() %>%
     select(
-      project_id,
       project_name,
       project_description,
       organism_name,
@@ -132,30 +128,112 @@ get_bioproject_metadata <- function(bioprojectid) {
       project_target_material,
       project_target_capture
     ) %>%
-    mutate(bioproject_id = bioprojectid)  # adiciona o ID original
-}
+    mutate(bioproject_id = .x)
+)
 
-# Aplicar a função a todos os IDs
-bioproject_metadata_df <- map_dfr(bioproject_ids, 
-                                  ~entrez_summary(db = "bioproject", id = bioprojectid) %>%
-    as.list() %>%
-    tibble::as_tibble() %>%
-    select(
-      project_id,
-      project_name,
-      project_description,
-      organism_name,
-      project_data_type,
-      project_target_material,
-      project_target_capture
-    ) %>%
-    mutate(bioproject_id = bioprojectid))
+
+bioproject_metadata_df = bioproject_metadata_df %>% 
+  filter(!str_detect(project_description, "cancer|neoantigen|tumor|autoimmune|drug|opioid"))
 
 # Visualizar
-print(bioproject_metadata_df)
+bioproject_metadata_df %>% 
+  write_excel_csv2(here("tables", "mice_vaccination_mining2.csv"))
 
+mice_vaccination_mining2 <- read_delim("tables/mice_vaccination_mining2.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+
+bioproject_metadata_df
 
 ```
+
+
+GEO
+```{r}
+library(glue)
+#Single ------
+# query NCBI GEO 
+geo_ids <- "GSE199750"
+terms <- entrez_db_searchable(db = "gds")  # for reference: searchable fields
+# first, get additional information about this series, including its db ID.
+series <- entrez_search("gds",
+                        term = glue("{geo_ids}[ACCN] AND gse[ETYP]"))
+# use the ID to fetch details, including the sample table
+series_summary = entrez_summary(db = "gds", id = series$ids)
+series_summary_df = data_frame(bioproject = series_summary$bioproject,
+                               uid = series_summary$uid,
+                               gse= series_summary$gse,
+                               gds= series_summary$gds,
+                               title= series_summary$title,
+                               summary= series_summary$summary,
+                               gpl= series_summary$gpl,
+                               n_samples= series_summary$n_samples,
+                               platformtitle= series_summary$platformtitle)
+
+#Multiple -------
+
+# geo_ids = read_delim(here("tables", "gds_result.txt"), delim = "\n", col_names = F) %>% 
+#   mutate(X1 = str_c("GSE", X1, sep = "") %>% 
+#            str_remove(., "200"))
+#   pull()
+
+text = readLines(here("tables", "gds_result (1).txt"))
+text_collapsed <- paste(text, collapse = "\n")
+gse_ids <- str_extract_all(conteudo, "GSE\\d+\\b") %>% unlist() %>% unique()
+
+
+geo_metadata_df <- map_dfr(gse_ids, ~ {
+  result <- entrez_search("gds", term = glue("{.x}[ACCN] AND gse[ETYP]"))
+
+  if (length(result$ids) == 0) {
+    return(tibble(gse = .x, error = "Not found"))
+  }
+
+  summary <- entrez_summary(db = "gds", id = result$ids)
+
+  tibble(
+    gse = .x,
+    uid = summary$uid,
+    gds = summary$gds,
+    bioproject = summary$bioproject,
+    title = summary$title,
+    summary_text = summary$summary,
+    gpl = summary$gpl,
+    n_samples = summary$n_samples,
+    platformtitle = summary$platformtitle
+  ) %>% 
+    mutate(bioproject_id = str_remove(bioproject, "PRJNA"))
+})
+print(geo_metadata_df)
+
+  
+  
+```
+
+
+Merge by Bioproject ID
+```{r}
+mice_vaccination_mining_ManualAnnotation <- read_csv(here("tables", "mice_vaccination_mining_ManualAnnotation.csv")) %>% 
+  mutate(bioproject_id = as.character(bioproject_id),
+         project_id = as.character(project_id))
+
+mice_vaccination_mining_ManualAnnotation
+
+
+mice_vaccination_annotated = geo_metadata_df %>% 
+  inner_join(mice_vaccination_mining_ManualAnnotation,
+             by = "bioproject_id") %>% 
+  select(gse, bioproject, title, summary_text,
+         project_description, n_samples,
+         Notes, keywords, timepoints:project_target_material
+         ) %>% 
+  arrange(-n_samples)
+
+mice_vaccination_annotated %>% 
+  write_csv(here("tables", "mice_vaccination_annotated.csv"))
+```
+
+
 
 
 
