@@ -34,6 +34,7 @@ library(factoextra)
 library(reshape2)
 library(ComplexHeatmap)
 library(janitor)
+library(paletteer)
 ```
 
 
@@ -472,7 +473,7 @@ print(ggImmune_cells_cellsbyimmune)
 
 ```{r}
 organism = "org.Mm.eg.db"
-install.packages("GO.db")
+# install.packages("GO.db")
 BiocManager::install(organism, character.only = TRUE)
 library(organism, character.only = TRUE)
 library(clusterProfiler)
@@ -524,6 +525,8 @@ mm_immunego_go.bp = go_bp %>%
          genes = symbol) %>% 
   mutate(process = toupper(process),
          immune_set = "Mouse_ImmuneGO")
+
+
 ```
 
 Annotation
@@ -531,6 +534,9 @@ Annotation
 There are 943 processes retrieved, but only 18 are directly annotated using Human ImmuneGO. Most general immunological processes are in, like innate immune response,immune response, adaptive immune response, and others.
 ```{r}
 #Merge annotations with Human ImmuneGO
+
+ImmuneGO_BTM_grouped_genesets_specific = read_csv(here("VaxGO", "ImmuneGO_BTM_grouped_genesets_specific.csv"))
+
 ## There are 943 processes
 mm_immunego_annotation = mm_immunego_go.bp %>% 
   select(process, genes, immune_set) %>% 
@@ -554,7 +560,15 @@ mm_immunego_annotation %>%
   saveRDS(here("VaxGO", "mm_immunego_annotation.rds"))
 mm_immunego_annotation %>% 
   write_excel_csv(here("VaxGO", "mm_immunego_annotation.csv"))
-  
+```
+
+
+
+### Stats
+There are only 18 immune processes matched by name, and 925 unmatched.
+```{r}
+mm_immunego_annotation = read_csv(here("VaxGO", "mm_immunego_annotation.csv"))
+
 #How many are not in?
 ## 925
 mm_immunego_annotation %>% 
@@ -572,7 +586,12 @@ mm_immunego_annotation %>%
 
 
 ```
+
+
+
 Annotate by merging genes with the same symbol (using upper case) by specific processes
+There are 2,224 genes not annotated in ImmuneGO human
+
 ```{r}
 mm_immunego_annotation_genes = mm_immunego_annotation %>% 
   separate_rows(genes, sep = ",") %>% 
@@ -609,8 +628,7 @@ mm_btm_annotation_genes_human = mm_immunego_annotation_genes %>%
             by = "genes")
 
 
-
-#There are 2,450 genes not annotated in ImmuneGO human
+#There are 2,450 genes not annotated in BTM human
 mm_btm_annotation_genes_human %>% 
   filter(is.na(process))
 ```
@@ -654,23 +672,251 @@ mm_ImmuneGO_BTM_annotation_genes_human %>%
 
 ```
 
-
-
-
-
-
+### Manual annotation
 
 ```{r}
 mm_immunego_annotated = mm_immunego_go.bp %>% 
   group_by(process) %>%
   summarize(genes = paste0(genes, collapse = ",")) %>%
-  inner_join(ImmuneGO_BTM_grouped_genesets_specific %>% dplyr::select(-genes) %>% distinct(), by = "process")
-
-# write.csv(ImmuneGO_Annotated_GO_26_2_24, file = "ImmuneGO_Annotated_GO_26_2_24.csv", row.names = F)
-# 
-# write.csv(ImmuneGO_Annotated_Genes_26_2_24, file = "ImmuneGO_Annotated_Genes_26_2_24.csv", row.names = F)
+  left_join(ImmuneGO_BTM_grouped_genesets_specific %>% 
+              dplyr::select(-genes) %>% 
+              distinct() %>% 
+              mutate(process = str_to_upper(process)), by = "process")
 
 ```
+
+
+#### Approach 1
+
+```{r}
+ImmuneGO_Mouse_Manual <- read_excel(here("VaxGO", "ImmuneGO_Mouse.xlsx"))
+```
+
+#### Approach 2
+By percentage: The gene sets were merged exclusively by genes that were in both gene sets. The percentage was calculated by the frequency of each process in human ImmuneGO divided by the mouse set_size.
+```{r}
+mm_immunego_annotation_genes_match = mm_immunego_annotation_genes %>% 
+  select(process_mice = process, genes_mice = genes_upper, set_size) %>% 
+  distinct() %>% 
+  inner_join(ImmuneGO_BTM_grouped_genesets %>%
+            filter(immune_set %in% c("ImmuneGO", "ImmuneGO by Modules")) %>% 
+              separate_rows(genes) %>% 
+              select(process, genes, immune_system:cells,
+                     immune_set,
+                     set_size_human = set_size) %>% 
+              rename(process_human = process, 
+                     genes_human = genes) %>% 
+              mutate(immune_system = if_else(is.na(immune_system), "Manual annotation", immune_system),
+                     immune_subsystem = if_else(is.na(immune_subsystem), "Manual annotation", immune_subsystem),
+                     cells = if_else(is.na(cells), "Manual annotation", cells)),
+            by = join_by("genes_mice" == "genes_human")) %>% 
+  distinct() %>% 
+  group_by(process_mice, process_human) %>% 
+  arrange(process_mice, process_human) %>% 
+  summarize(set_size_mice = set_size,
+            set_size_human, 
+            match_human = n(),
+            match_perc = match_human/set_size*100,
+            immune_system,
+            immune_subsystem,
+            cells,
+            immune_set) %>% 
+  distinct() %>% 
+  ungroup() %>% 
+  group_by(process_mice) %>% 
+  arrange(-match_human, -match_perc) %>% 
+  ungroup()
+mm_immunego_annotation_genes_match
+```
+
+
+General processes
+```{r fig.height=5, fig.width=8}
+#General processes
+mm_immunego_annotation_genes_match_general = mm_immunego_annotation_genes_match %>% 
+  group_by(process_mice) %>% 
+  filter(immune_set == "ImmuneGO") %>% 
+  slice_max(match_perc) %>% 
+  slice_max(set_size_human) %>% 
+  mutate(immune_system = case_when(process_human == "CELLULAR ADAPTIVE IMMUNE SYSTEM" ~ "Adaptive",				
+                                    process_human == "INNATE IMMUNE SYSTEM" ~ "Innate",				
+                                    process_human == "COMPLEMENT" ~ "Complement",				
+                                    process_human == "LEUKOCYTES" ~ "General",				
+                                    process_human == "ADAPTIVE IMMUNE SYSTEM" ~ "Adaptive",				
+                                    process_human == "T CELL" ~ "Adaptive",				
+                                    process_human == "B CELL" ~ "Adaptive",				
+                                    process_human == "HUMORAL ADAPTIVE IMMUNE SYSTEM" ~ "Adaptive",				
+                                    process_human == "IMMUNOGLOBULIN MEDIATED RESPONSE" ~ "Adaptive",				
+                                    process_human == "ANTIMICROBIAL" ~ "Undefined",
+                                    process_human == "ARPP" ~ "Innate",				
+                                    process_human == "NEUTROPHIL" ~ "Innate",				
+                                    process_human == "ANTIVIRAL & IFN" ~ "Innate",				
+                                    process_human == "DENDRITIC CELL" ~ "Innate",				
+                                    process_human == "EOSINOPHIL" ~ "Innate",				
+                                    process_human == "MAST CELL" ~ "Innate",				
+                                    process_human == "MONOCYTE" ~ "Innate",				
+                                    process_human == "INFLAMMATION" ~ "Innate",				
+                                    process_human == "NK CELL" ~ "Innate",				
+                                    process_human == "MACROPHAGE" ~ "Innate",
+                                    T ~ immune_system))
+
+mm_immunego_annotation_genes_match_general_plot = mm_immunego_annotation_genes_match_general %>% 
+ggplot(.) +
+  aes(
+    x = match_human,
+    y = match_perc,
+    size = set_size_mice,
+    label = paste("human:", process_human, ", mice:", process_mice)
+  ) +
+  geom_point(pch = 21, 
+             color = "black", 
+             fill = NA) +
+  geom_point(pch = 21,
+             aes(fill = immune_system),
+             alpha = 0.3) +
+  # geom_text_repel(aes(label = ifelse(match_human > 40,
+  #                    paste("mouse:", process_mice, "\nto human:", process_human),
+  #                    NA)),
+  #                  na.rm = TRUE,
+  #                  size = 2,
+  #                  hjust = 0,
+  #                  fill = NA) +
+  scale_x_continuous(expand = c(0.01,0.01),
+                     limits = c(0, 200)) +
+  scale_y_continuous(expand = c(0.01,0.01),
+                     limits = c(0, 100)) +
+  theme_minimal() +
+  scale_fill_npg() +
+  # scale_fill_paletteer_d("ghibli::MarnieLight1") +
+  theme(
+    legend.position = "right",
+    plot.caption = element_text(hjust = 0, size = 5),
+    axis.text.x = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    axis.text.y = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    plot.title = element_text(size = 15),
+    axis.title.y = element_text(color = "black"),
+    panel.border = element_blank(),
+    panel.grid.major.y = element_line(size = 0, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    panel.grid.major.x = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    axis.line.x = element_line(size = 0.5,
+                               colour = "black",
+                               linetype = 1),
+    axis.line.y = element_line(size = 0.5 ,
+                               colour = "black",
+                               linetype = 1),
+    axis.ticks.x = element_line(size = 0.5, color = "black"),
+    axis.ticks.y = element_line(size = 0.5, color = "black"),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(1, 1, 0, 0, "cm")
+  ) +
+  labs(x = "Match to human processes",
+       y = "%Match",
+       size = "Mouse set size",
+       fill = "ImmuneGO Human",
+       title = "Mouse GO match to Human ImmuneGO annotation",
+       subtitle = "Manual grouped annotation")
+
+mm_immunego_annotation_genes_match_general_plot
+  
+```
+
+
+Specific processes
+```{r fig.height=5, fig.width=8}
+#General processes
+mm_immunego_annotation_genes_match_specific = mm_immunego_annotation_genes_match %>% 
+  group_by(process_mice) %>% 
+  filter(immune_set == "ImmuneGO by Modules") %>% 
+  slice_max(match_perc) %>% 
+  slice_max(set_size_human)
+
+mm_immunego_annotation_genes_match_specific %>% 
+  view()
+```
+
+
+```{r fig.height=5, fig.width=8}
+mm_immunego_annotation_genes_match_specific_plot = mm_immunego_annotation_genes_match_specific %>% 
+ggplot(.) +
+  aes(
+    x = match_human,
+    y = match_perc,
+    size = set_size_mice,
+    label = paste("human:", process_human, ", mice:", process_mice)
+  ) +
+  geom_point(pch = 21, 
+             color = "black", 
+             fill = NA) +
+  geom_point(pch = 21,
+             aes(fill = immune_system),
+             alpha = 0.3) +
+  # geom_text_repel(aes(label = ifelse(match_human > 40,
+  #                    paste("mouse:", process_mice, "\nto human:", process_human),
+  #                    NA)),
+  #                  na.rm = TRUE,
+  #                  size = 2,
+  #                  hjust = 0,
+  #                  fill = NA) +
+  scale_x_continuous(expand = c(0.01,0.01),
+                     limits = c(0, 200)) +
+  scale_y_continuous(expand = c(0.01,0.01),
+                     limits = c(0, 100)) +
+  theme_minimal() +
+  scale_fill_npg() +
+  # scale_fill_paletteer_d("ghibli::MarnieLight1") +
+  theme(
+    legend.position = "right",
+    plot.caption = element_text(hjust = 0, size = 5),
+    axis.text.x = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    axis.text.y = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    plot.title = element_text(size = 15),
+    axis.title.y = element_text(color = "black"),
+    panel.border = element_blank(),
+    panel.grid.major.y = element_line(size = 0, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    panel.grid.major.x = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    axis.line.x = element_line(size = 0.5,
+                               colour = "black",
+                               linetype = 1),
+    axis.line.y = element_line(size = 0.5 ,
+                               colour = "black",
+                               linetype = 1),
+    axis.ticks.x = element_line(size = 0.5, color = "black"),
+    axis.ticks.y = element_line(size = 0.5, color = "black"),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(1, 1, 0, 0, "cm")
+  ) +
+  labs(x = "Match to human processes",
+       y = "%Match",
+       size = "Mouse set size",
+       fill = "ImmuneGO Human",
+       title = "Mouse GO match to Human ImmuneGO annotation",
+       subtitle = "Specific processes")
+
+mm_immunego_annotation_genes_match_specific_plot
+
+mm_immunego_annotation_genes_match_specific
+```
+
 
 Group immune system genes by process and cell
 
