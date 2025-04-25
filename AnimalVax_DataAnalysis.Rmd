@@ -35,6 +35,16 @@ library(reshape2)
 library(ComplexHeatmap)
 library(janitor)
 library(paletteer)
+library(edgeR)
+library(limma)
+library(mogene10sttranscriptcluster.db)
+```
+# Aesthetics
+```{r}
+library("scales")
+pal_npg()
+pal_npg("nrc")(10)
+show_col(pal_npg("nrc")(10))
 ```
 
 
@@ -537,6 +547,8 @@ There are 943 processes retrieved, but only 18 are directly annotated using Huma
 
 ImmuneGO_BTM_grouped_genesets_specific = read_csv(here("VaxGO", "ImmuneGO_BTM_grouped_genesets_specific.csv"))
 
+ImmuneGO_Annotated_GO_specific_original <- read_csv(here("VaxGO", "ImmuneGO_Annotated_GO_specific_originalGOs.csv"))
+
 ## There are 943 processes
 mm_immunego_annotation = mm_immunego_go.bp %>% 
   select(process, genes, immune_set) %>% 
@@ -550,11 +562,10 @@ mm_immunego_annotation = mm_immunego_go.bp %>%
             immune_set) %>% 
   distinct() %>% 
   ungroup()  %>% 
-  left_join(ImmuneGO_BTM_grouped_genesets_specific %>% 
-              mutate(process = str_to_upper(process)) %>% 
-              filter(immune_set == "ImmuneGO by Modules") %>% 
-              select(process:cells),
-                by = "process")
+  left_join(ImmuneGO_Annotated_GO_specific_original %>% 
+              mutate(process_human = str_to_upper(process)) %>% 
+              select(process_go_human = process_go, process_human = process, go_term_human = go_term, immune_system:cells),
+                by = join_by("process" == "process_go_human"))
 #Save
 mm_immunego_annotation %>% 
   saveRDS(here("VaxGO", "mm_immunego_annotation.rds"))
@@ -730,6 +741,22 @@ mm_immunego_annotation_genes_match
 ```
 
 
+Specific processes
+```{r}
+mm_immunego_annotation_genes_match = mm_immunego_annotation_genes %>% 
+  select(process_mice = process, set_size) %>% 
+  distinct() %>% 
+  inner_join(ImmuneGO_Annotated_GO_specific_original %>%
+              select(process, process_go_human = process_go, genes, immune_system:cells,
+                     immune_set,
+                     set_size_human = set_size) %>% 
+              rename(process_human = process, 
+                     genes_human = genes),
+            by = join_by("process_mice" == "process_go_human")) 
+```
+
+
+
 General processes
 ```{r fig.height=5, fig.width=8}
 #General processes
@@ -840,8 +867,10 @@ mm_immunego_annotation_genes_match_specific = mm_immunego_annotation_genes_match
   slice_max(match_perc) %>% 
   slice_max(set_size_human)
 
+
+#Save
 mm_immunego_annotation_genes_match_specific %>% 
-  view()
+  write_csv(here("VaxGO", "mm_immunego_annotation_genes_match_specific_semimanual.csv"))
 ```
 
 
@@ -914,7 +943,9 @@ ggplot(.) +
 
 mm_immunego_annotation_genes_match_specific_plot
 
-mm_immunego_annotation_genes_match_specific
+mm_immunego_annotation_genes_match_general_plot/mm_immunego_annotation_genes_match_specific_plot +
+  patchwork::plot_layout(guides = "collect",
+                         axis_titles = "collect")
 ```
 
 
@@ -1550,6 +1581,242 @@ btm_immune_joined_stats_plot
 
 #Benchmarking models
 
+
+
+
+## Download datasets
+
+Download general data (counts data and metadata). GEO supplementary
+files have the counts matrices. Download studies individually. I
+recommend downloading large files from the GEO website.
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
+###### GSE120661 ----
+#Metadata 
+filename = "GSE120661"
+GSE120661 <- getGEO("GSE120661", GSEMatrix = TRUE) 
+eset <- GSE120661[[1]]
+
+GSE120661_metadata = eset %>% 
+  pData() %>% 
+  dplyr::select( 
+    geo_sample = "geo_accession", 
+    subject_id = "title",
+    sex = "gender:ch1", 
+    treatment = "treatment:ch1", 
+    tissue = "tissue:ch1",
+    timepoint = "timepoint:ch1",
+    animal_replicate = "animal replicate:ch1",
+    strain = "strain/background:ch1") %>% 
+  mutate(treatment = fct_relevel(treatment, "saline"),
+         timepoint = fct_relevel(timepoint, "0"),
+         condition = paste(treatment, timepoint, tissue, sep = "_"))
+write_csv(GSE120661_metadata, file = here("tables", "GSE120661_metadata.csv"))
+
+#Counts matrix from Expression set
+eset <- exprs(eset)
+
+# Quick check. Normalization needed? Yes
+eset_12 <- eset[ ,1:12]
+exprs(eset_12) <- exprs(eset_12)[ ,1:12]
+boxplot(exprs(eset_12), las=2, cex.axis = 0.7, boxwex=0.6, outline=FALSE)
+
+#Normalize data
+exprs_matrix.norm <- normalizeBetweenArrays(exprs(eset))
+
+#Check
+exprs_matrix.norm_12 <- exprs_matrix.norm[ ,1:12]
+boxplot(exprs_matrix.norm_12, las=2, cex.axis = 0.7, boxwex=0.6, outline=FALSE)
+boxplot(exprs(eset_12), las=2, cex.axis = 0.7, boxwex=0.6, outline=FALSE)
+boxplot(exprs_matrix.norm_12, las=2, cex.axis = 0.7, boxwex=0.6, outline=FALSE)
+
+#To dataframe
+GSE120661_counts_normalized = exprs_matrix.norm %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), log2)) #Log transformation
+
+GSE120661_counts_normalized %>% 
+  saveRDS(here("tables", "GSE120661_counts_normalized.rds"))
+```
+
+Differential expression by limma
+```{r}
+GSE120661_metadata = read_csv(here("tables", "GSE120661_metadata.csv")) 
+
+GSE120661_metadata = GSE120661_metadata %>% 
+  mutate(timepoint = as.integer(timepoint) %>% 
+           as.character() %>% 
+           as.factor() %>% 
+           fct_relevel(., "0"),
+         treatment = fct_relevel(treatment, "saline"),
+         condition = paste(treatment, timepoint, tissue, sep = "_"))
+
+GSE120661_counts_normalized = read_rds(here("tables", "GSE120661_counts_normalized.rds"))
+
+#Select and filter
+#Filter PBMC samples
+GSE120661_samples_pbmc_vector = GSE120661_metadata %>% 
+  filter(tissue == "PBMC") %>% 
+  select(geo_sample) %>% 
+  pull(geo_sample)
+
+GSE120661_samples_pbmc = GSE120661_metadata %>% 
+  filter(tissue == "PBMC")
+
+#Select only PBMC samples counts
+GSE120661_counts_normalized_matrix = GSE120661_counts_normalized %>% 
+  select(c(GSE120661_samples_pbmc_vector)) %>% 
+  as.matrix()
+
+eset_filtered <- ExpressionSet(
+  assayData = GSE120661_counts_normalized_matrix,
+  phenoData = AnnotatedDataFrame(GSE120661_samples_pbmc %>% column_to_rownames("geo_sample"))
+)
+```
+
+
+```{r}
+design <- model.matrix(~ timepoint * treatment + 0, eset_filtered) # 0 defines the way we compare the samples
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+#Fit Limma model
+
+fit <- lmFit(eset_filtered, design)
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+```
+
+```{r}
+#Test for Fluad
+cont.matrix <- makeContrasts(timepoint4.treatmentFluad - treatmentFluad,
+                             timepoint8.treatmentFluad - treatmentFluad,
+                             timepoint24.treatmentFluad - treatmentFluad,
+                             timepoint48.treatmentFluad - treatmentFluad,
+                             timepoint72.treatmentFluad - treatmentFluad,
+                             timepoint168.treatmentFluad - treatmentFluad,
+                             levels=design)
+
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2, proportion = 0.05)
+
+# Get all DEGs
+all_degs = topTable(fit2, adjust="fdr", p.value=0.05, number=Inf) %>% 
+  rownames_to_column("probe") %>% 
+  pivot_longer(cols = -c(probe, AveExpr, F, P.Value, adj.P.Val),
+               names_to = "comparison",
+               values_to = "LogFC") %>% 
+  select(comparison, everything()) %>% 
+  mutate(comparison = str_replace(comparison, "\\.\\.\\.", "_") %>% 
+           str_replace(., "timepoint", "Time") %>% 
+           str_replace(., "treatment", "")) %>% 
+  separate(comparison, sep = "_", into = c("comparisonA", "comparisonRef")) %>% 
+  mutate(comparisonRef = str_replace(comparisonRef, "treatment", "Time0")) %>% 
+  mutate(condition = case_when(comparisonA == "Time4.Fluad"	~ "Fluad_4_PBMC",
+                               comparisonA == "Time8.Fluad"	~ "Fluad_8_PBMC",
+                               comparisonA == "Time24.Fluad"	~ "Fluad_24_PBMC",
+                               comparisonA == "Time48.Fluad"	~ "Fluad_48_PBMC",
+                               comparisonA == "Time72.Fluad"	~ "Fluad_72_PBMC",
+                               comparisonA == "Time168.Fluad"	~ "Fluad_168_PBMC",
+                               T~comparisonA)) %>% 
+  select(condition, everything())
+	
+all_degs
+```
+
+Gene annotation
+```{r}
+library(biomaRt)
+
+## set up biomart
+ensembl_mart <- useMart("ensembl")
+ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
+
+## this is the MGI symbol for the gene we're interested in
+gene_id <- featureNames(eset)
+
+listAttributes(ensembl_mart)
+
+annot <- getBM(
+  attributes = c("agilent_sureprint_g3_ge_8x60k", #Agilent microarray data (design ID 028005, retrieved from GEO)
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "mgi_symbol"),
+  filters = "agilent_sureprint_g3_ge_8x60k",
+  values = gene_id,  # <- Replace with your vector of probe IDs
+  mart = ensembl_mart
+)
+
+#Name genes
+all_degs_annotated = annot %>% 
+  rename(probe = agilent_sureprint_g3_ge_8x60k) %>% 
+  inner_join(all_degs, by = "probe") %>% 
+  clean_names()
+
+all_degs_annotated %>% 
+  arrange(-log_fc)
+```
+
+
+```{r}
+
+all_degs_annotated %>% 
+  inner_join(GSE120661_metadata, by = "condition") %>% 
+  mutate(timepoint = as.character(timepoint) %>% as.integer()) %>% 
+  filter(mgi_symbol == "Tlr8") %>% 
+  ggplot() +
+  aes(x = timepoint,
+      y = log_fc,
+      fill = treatment) +
+    geom_line(aes(color = treatment)) +
+  geom_point(pch = 21,
+             color = "black") +
+  scale_x_continuous(breaks = c(0, 4, 8, 24, 48, 72, 168),minor_breaks = F) +
+    scale_fill_npg() +
+  theme_light() +
+  theme(
+    legend.position = "right",
+    plot.caption = element_text(hjust = 0, size = 5),
+    axis.text.x = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    axis.text.y = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    plot.title = element_text(size = 15),
+    axis.title.y = element_text(color = "black"),
+    panel.border = element_blank(),
+    panel.grid.major.y = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    panel.grid.major.x = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    axis.line.x = element_line(size = 0.5,
+                               colour = "black",
+                               linetype = 1),
+    axis.line.y = element_line(size = 0.5 ,
+                               colour = "black",
+                               linetype = 1),
+    axis.ticks.x = element_line(size = 0.5, color = "black"),
+    axis.ticks.y = element_line(size = 0.5, color = "black"),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(1, 1, 0, 0, "cm")
+  ) +
+  labs(x = "Time (h)",
+       y = "LogFold-Change")
+
+
+all_degs_annotated %>% 
+  arrange(mgi_symbol)
+```
+
+
+
+
 ## Found in translation
 Ref: Normand, R., Du, W., Briller, M. et al. Found In Translation: a machine learning model for mouse-to-human inference. Nat Methods 15, 1067–1073 (2018). https://doi.org/10.1038/s41592-018-0214-9
 Github: https://github.com/shenorrLabTRDF/FIT.mouse2man 
@@ -1585,17 +1852,276 @@ AllData_V2.0 %>%
   clean_names() %>%
   select(disease:csp_id) %>% 
   distinct()
+
+AllData_V2.0 %>% 
+  filter(str_detect(DataType, "Microarray"))
+
+AllData_V2.0 %>% 
+  filter(str_detect(DataType, "RNAseq"))
 ```
 
 
 ```{r}
 #Checking applicability of the model to your data
 test = FIT.mouse2man::RunClassifier(MouseData = RNAseq_sample, DataType = "rnaseq")
+```
 
+
+```{r}
 #Fit
 fit_example = FIT.mouse2man::FIT(MouseFile = here("FIT_Mouse2man", "rnaseq_sample.csv"), 
-                                 DataType = "rnaseq") # Runs the FIT pipeline which computes prediction of the human effect-size per gene  
+                                 DataType = "rnaseq") # Runs the FIT pipeline which computes prediction of the human effect-size per gene
+
+fit_example
+?FIT.mouse2man::FIT
+```
+
+
+###Fluad
+```{r}
+all_degs_fit1 = all_degs_annotated %>% 
+  # filter(condition == "Fluad_24_PBMC") %>% 
+  arrange(mgi_symbol, entrezgene_id) %>% 
+  arrange(entrezgene_id) %>% 
+  distinct() %>% 
+  select(MM.Entrez = entrezgene_id, 
+         row = entrezgene_id,
+         EffectSize = log_fc, 
+         condition) 
+
+delete_rows_dupes = all_degs_fit1 %>% 
+  filter(condition == "Fluad_4_PBMC") %>% 
+  select(row, EffectSize) %>% 
+  distinct() %>% 
+  drop_na() %>% 
+  get_dupes(row) %>% 
+  select(row) %>% 
+  distinct() %>% 
+  pull(row)
+
+all_degs_fit2 = all_degs_fit1 %>% 
+  filter(!row %in% c(delete_rows_dupes)) %>% 
+  drop_na()
+
+all_degs_fit2 %>% 
+  write_csv(here("tables", "Fluad_PBMC_FIT_mouse_allTimePoints.csv"))
+```
+
+
+```{r}
+#Fit
+delete_dupes = all_degs_fit2 %>% 
+  filter(condition == "Fluad_24_PBMC",
+         !row %in% c(delete_rows_dupes)) %>% 
+  get_dupes(row) %>% 
+  pull(row)
+
+all_degs_fit2 %>% 
+  filter(condition == "Fluad_24_PBMC",
+         !row %in% c(delete_dupes)) %>% 
+  column_to_rownames("row") %>% 
+  select(-condition) %>% 
+  write_csv(here("tables", "Fluad_24_PBMC_FIT_mouse.csv"))
+
+
+fit_example = FIT.mouse2man::FIT(MouseFile = here("tables", "Fluad_24_PBMC_FIT_mouse.csv"), 
+                                 DataType = "rnaseq") # Runs the FIT pipeline which computes prediction of the human effect-size per gene
+
+fit_example_geneA = fit_example %>% 
+  clean_names() %>% 
+  # filter(human_symbol == "TLR8") %>% 
+  pivot_longer(cols = c(mouse_effect_size:fit_prediction),
+               names_to = "measure", 
+               values_to = "value")
+
+fit_example_geneA_top10 = fit_example %>% 
+  mutate(diff = Mouse_EffectSize - FIT_prediction) %>% 
+  arrange(abs(diff)) %>% 
+  clean_names() %>% 
+           select(mouse_symbol) %>% 
+           distinct() %>% 
+           slice_head(n = 10) %>% 
+           pull(mouse_symbol)
+
+
+fit_example_geneA %>% 
+  filter(mouse_symbol %in% c(fit_example_geneA_top10)) %>% 
+  arrange(mouse_symbol) %>% 
+  ggplot() +
+  aes(x = human_symbol,
+      y = value) +
+  geom_point(aes(color = measure,
+                 shape = condition)) +
+  theme_light() +
+  theme(
+    legend.position = "right",
+    plot.caption = element_text(hjust = 0, size = 5),
+    axis.text.x = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    axis.text.y = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    plot.title = element_text(size = 15),
+    axis.title.y = element_text(color = "black"),
+    panel.border = element_blank(),
+    panel.grid.major.y = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    panel.grid.major.x = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    axis.line.x = element_line(size = 0.5,
+                               colour = "black",
+                               linetype = 1),
+    axis.line.y = element_line(size = 0.5 ,
+                               colour = "black",
+                               linetype = 1),
+    axis.ticks.x = element_line(size = 0.5, color = "black"),
+    axis.ticks.y = element_line(size = 0.5, color = "black"),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(1, 1, 0, 0, "cm")
+  )
+  
+```
+
+
+###Loops
+```{r}
+# Generate csv for every condition
+all_conditions <- unique(all_degs_fit2$condition)
+purrr::walk(all_conditions, function(cond) {
+  
+  delete_dupes <- all_degs_fit2 %>%
+    filter(condition == cond) %>%
+    get_dupes(row) %>%
+    pull(row)
+  
+  filtered_df <- all_degs_fit2 %>%
+    filter(condition == cond, !row %in% delete_dupes) %>%
+    select(-condition) %>% 
+    column_to_rownames("row")
+  
+  file_name <- paste0(cond, "_FIT_mouse.csv")
+  file_path <- here("tables", file_name)
+  
+  write_csv(filtered_df, file_path)
+})
 
 ```
+
+```{r}
+# FIT loop
+fit_results_combined <- map2_dfr(all_conditions, all_conditions, function(cond, cond_name) {
+  
+  # 1. Monta o caminho do CSV
+  file_path <- here("tables", paste0(cond, "_FIT_mouse.csv"))
+  
+  # 2. Roda o FIT
+  fit_output <- FIT.mouse2man::FIT(MouseFile = file_path, DataType = "rnaseq")
+  
+  # 3. Converte para tibble e adiciona a coluna da condição
+  fit_output_tbl <- as_tibble(fit_output) %>%
+    mutate(condition = cond_name)
+  
+  return(fit_output_tbl)
+})
+
+fit_results_combined
+```
+
+
+```{r fig.height=5, fig.width=5}
+fit_example_geneA = fit_results_combined %>% 
+  clean_names() %>% 
+  # filter(human_symbol == "TLR8") %>%
+  select(condition, everything()) %>% 
+  pivot_longer(cols = c(mouse_effect_size:fit_prediction),
+               names_to = "measure", 
+               values_to = "value")
+
+fit_example_geneA_top3 = fit_example_geneA %>% 
+           filter(measure == "mouse_effect_size") %>% 
+           select(mouse_symbol, value) %>% 
+           distinct() %>% 
+           arrange(-value) %>% 
+           slice_head(n = 3) %>% 
+           pull(mouse_symbol)
+
+
+fit_example_topgenes_plot = fit_example_geneA %>% 
+  inner_join(GSE120661_metadata %>% 
+               mutate(timepoint = as.character(timepoint) %>% 
+                        as.integer()) %>% 
+               select(!geo_sample:subject_id) %>% 
+               select(-animal_replicate) %>% 
+               distinct(), by = "condition") %>% 
+  filter(mouse_symbol %in% c(fit_example_geneA_top3)) %>% 
+  ggplot() +
+  aes(x = timepoint,
+      y = value) +
+  # geom_ribbon(aes(ymin = ci_low, 
+  #                 ymax = ci_high),
+  #             fill = "red",
+  #             alpha = 0.1) +
+  geom_errorbar(aes(ymin = ci_low, 
+                  ymax = ci_high,
+                  color = measure)) +
+  geom_line(aes(color = measure)) +
+  geom_point(aes(color = measure)) +
+  scale_x_continuous(breaks = c(0, 4, 8, 24, 48, 72, 168),minor_breaks = F) +
+  scale_color_manual(
+  values = c(
+    fit_prediction = "#E64B35FF", 
+    mouse_effect_size = "#4DBBD5FF"
+  ),
+  labels = c(
+    fit_prediction = "FIT Prediction",
+    mouse_effect_size = "Mouse Effect Size"
+  )
+)+
+  facet_wrap(~human_symbol, ncol = 1) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    plot.caption = element_text(hjust = 0, size = 5),
+    axis.text.x = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    axis.text.y = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    plot.title = element_text(size = 15),
+    axis.title.y = element_text(color = "black"),
+    panel.border = element_blank(),
+    panel.grid.major.y = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    panel.grid.major.x = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    axis.line.x = element_line(size = 0.5,
+                               colour = "black",
+                               linetype = 1),
+    axis.line.y = element_line(size = 0.5 ,
+                               colour = "black",
+                               linetype = 1),
+    axis.ticks.x = element_line(size = 0.5, color = "black"),
+    axis.ticks.y = element_line(size = 0.5, color = "black"),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(0.5, 0.2, 0.2, 0.2, "cm")
+  )+
+  labs(color = "Measure",
+       x = "Time (h)",
+       y = "LogFold-Change",
+       title = "Prediction - Influenza, Fluad Vaccine")
+
+fit_example_topgenes_plot
+```
+
 
 
