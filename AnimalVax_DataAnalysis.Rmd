@@ -2013,7 +2013,10 @@ Psoriasis_classifier_neg = FIT.mouse2man::Psoriasis_classifier_neg
 slopes_per_gene_V2.0 = FIT.mouse2man::slopes_per_gene_V2.0
 StaphInfection_classifier_pos = FIT.mouse2man::StaphInfection_classifier_pos
 AllData_V2.0 = FIT.mouse2man::AllData_V2.0 #Training data
+```
 
+
+```{r}
 #Samples
 microarray_sample = FIT.mouse2man::microarray_sample #Sample Microarray
 microarray_sample %>% 
@@ -2115,6 +2118,8 @@ all_degs_fit2 %>%
 fit_example = FIT.mouse2man::FIT(MouseFile = here("tables", "Fluad_24_PBMC_FIT_mouse.csv"), 
                                  DataType = "rnaseq") # Runs the FIT pipeline which computes prediction of the human effect-size per gene
 
+fit_example = fit_example %>% 
+  mutate(condition = "Fluad_24_PBMC")
 
 fit_example %>% saveRDS(here("FIT_Mouse2man", "Fluad_24_PBMC_FIT_mouse_results.rds"))
 fit_example
@@ -2122,7 +2127,7 @@ fit_example
 
 
 Check gene by gene
-15613 entrez IDs
+14,401 entrez IDs
 ```{r}
 fit_example %>% 
   select(`MM.Entrez` = `Mouse.Entrez`, 
@@ -2141,7 +2146,32 @@ fit_example_geneA = fit_example %>%
   # filter(human_symbol == "TLR8") %>% 
   pivot_longer(cols = c(mouse_effect_size:fit_prediction),
                names_to = "measure", 
-               values_to = "value")
+               values_to = "value") 
+
+
+fit_example_geneA = all_degs_annotated_fit %>% 
+  rename(mouse_entrez = entrezgene_id_mouse,
+         human_entrez = entrezgene_id_human,
+         mouse_symbol = mgi_symbol,
+         ci_low = ci_l,
+         ci_high = ci_r,
+         value = log_fc) %>% 
+  select(mouse_entrez,
+         human_entrez,
+         mouse_symbol,
+         human_symbol,
+         value,
+         ci_low,
+         ci_high,
+         adj_p_val,
+         p_value, 
+         condition) %>% 
+  mutate(measure = "mouse_effect_size",
+         mouse_entrez = as.character(mouse_entrez)) %>% 
+  bind_rows(fit_example_geneA_mouse)
+
+fit_example_geneA %>% 
+  arrange(mouse_entrez)
 
 fit_example_geneA_top10 = fit_example %>% 
   mutate(diff = Mouse_EffectSize - FIT_prediction) %>% 
@@ -2151,9 +2181,10 @@ fit_example_geneA_top10 = fit_example %>%
            distinct() %>% 
            slice_head(n = 10) %>% 
            pull(mouse_symbol)
+```
 
 
-
+```{r}
 fit_example_geneA %>% 
   inner_join(GSE120661_metadata %>% 
                select(!c(geo_sample, subject_id, animal_replicate)) %>% 
@@ -2167,6 +2198,7 @@ fit_example_geneA %>%
       y = value) +
   geom_point(aes(color = measure,
                  shape = timepoint), position = position_dodge2(width = 0.2)) +
+  geom_errorbar(mapping = aes(y))
   theme_light() +
   theme(
     legend.position = "right",
@@ -2355,8 +2387,24 @@ purrr::walk(all_conditions, function(cond) {
 })
 
 ```
+## Loop FIT for every timepoint
+Obs: Make sure that datasets from FIT package were retrieved
+
+Initial number of genes: 15503
+Number of genes for which FIT predictions will be calculated: 14401
 
 ```{r}
+#Import files
+pca_rotations = FIT.mouse2man::pca_rotations
+best_models = FIT.mouse2man::best_models
+HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez
+MM_Entrez_symbol_desc = FIT.mouse2man::MM_Entrez_symbol_desc
+Psoriasis_classifier_neg = FIT.mouse2man::Psoriasis_classifier_neg
+slopes_per_gene_V2.0 = FIT.mouse2man::slopes_per_gene_V2.0
+StaphInfection_classifier_pos = FIT.mouse2man::StaphInfection_classifier_pos
+AllData_V2.0 = FIT.mouse2man::AllData_V2.0 #Training data
+
+
 # FIT loop
 fit_results_combined <- map2_dfr(all_conditions, all_conditions, function(cond, cond_name) {
   
@@ -2379,10 +2427,10 @@ fit_results_combined %>% saveRDS(here("FIT_Mouse2man", "FIT_FLUAD_alltimes.csv")
 ```
 
 
-```{r fig.height=5, fig.width=5}
 
+```{r fig.height=5, fig.width=5}
 fit_results_combined = read_rds(here("FIT_Mouse2man", "FIT_FLUAD_alltimes.csv"))
-fit_example_geneA = fit_results_combined %>% 
+fit_example_results = fit_results_combined %>% 
   clean_names() %>% 
   # filter(human_symbol == "TLR8") %>%
   select(condition, everything()) %>% 
@@ -2390,23 +2438,65 @@ fit_example_geneA = fit_results_combined %>%
                names_to = "measure", 
                values_to = "value")
 
-fit_example_geneA_top3 = fit_example_geneA %>% 
+fit_example_mouse = all_degs_annotated_fit %>% 
+  rename(mouse_entrez = entrezgene_id_mouse,
+         human_entrez = entrezgene_id_human,
+         mouse_symbol = mgi_symbol,
+         ci_low = ci_l,
+         ci_high = ci_r,
+         value = log_fc) %>% 
+  select(mouse_entrez,
+         human_entrez,
+         mouse_symbol,
+         human_symbol,
+         value,
+         ci_low,
+         ci_high,
+         adj_p_val,
+         p_value, 
+         condition) %>% 
+  mutate(measure = "mouse_effect_size",
+         mouse_entrez = as.character(mouse_entrez),
+         up_down = case_when(measure > 0 ~"+",
+                             measure <0 ~ "+",
+                             T~"-"),
+         ci_size = ci_high - ci_low) %>% 
+  filter(mouse_entrez %in% c(fit_example_results$mouse_entrez))
+
+fit_example_results_ready = fit_example_mouse %>% 
+  bind_rows(fit_example_results) %>% 
+  arrange(mouse_symbol) %>% 
+  select(condition, everything()) %>% 
+  select(!c(adj_p_val, p_value, description)) 
+
+fit_example_results %>% 
+  arrange(mouse_entrez)
+```
+
+
+```{r fig.height=5, fig.width=5}
+fit_example_geneA_top5 = fit_example_geneA %>% 
            filter(measure == "mouse_effect_size") %>% 
-           select(mouse_symbol, value) %>% 
+           select(human_symbol, value) %>% 
            distinct() %>% 
            arrange(-value) %>% 
-           slice_head(n = 3) %>% 
-           pull(mouse_symbol)
+  select(human_symbol) %>% 
+  distinct() %>% 
+           slice_head(n = 5) %>% 
+           pull(human_symbol)
+fit_example_geneA_top5
+```
 
 
-fit_example_topgenes_plot = fit_example_geneA %>% 
+```{r fig.height=5, fig.width=5}
+fit_example_topgenes_plot = fit_example_results_ready%>% 
   inner_join(GSE120661_metadata %>% 
                mutate(timepoint = as.character(timepoint) %>% 
                         as.integer()) %>% 
                select(!geo_sample:subject_id) %>% 
                select(-animal_replicate) %>% 
                distinct(), by = "condition") %>% 
-  filter(mouse_symbol %in% c(fit_example_geneA_top3)) %>% 
+  filter(human_symbol %in% c(fit_example_geneA_top5)) %>% 
   ggplot() +
   aes(x = timepoint,
       y = value) +
