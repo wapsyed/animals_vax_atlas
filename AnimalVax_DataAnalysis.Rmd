@@ -1671,11 +1671,6 @@ GSE120661_samples_pbmc = GSE120661_metadata %>%
 GSE120661_counts_normalized_matrix = GSE120661_counts_normalized %>% 
   select(c(GSE120661_samples_pbmc_vector)) %>% 
   as.matrix()
-
-eset_filtered <- ExpressionSet(
-  assayData = GSE120661_counts_normalized_matrix,
-  phenoData = AnnotatedDataFrame(GSE120661_samples_pbmc %>% column_to_rownames("geo_sample"))
-)
 ```
 
 ## Annotate genes
@@ -1695,7 +1690,8 @@ annot <- getBM(
   attributes = c("agilent_sureprint_g3_ge_8x60k", #Agilent microarray data (design ID 028005, retrieved from GEO)
                  "ensembl_gene_id",
                  "entrezgene_id",
-                 "mgi_symbol"),
+                 "mgi_symbol",
+                 "description"),
   filters = "agilent_sureprint_g3_ge_8x60k",
   values = gene_id,  # <- Replace with your vector of probe IDs
   mart = ensembl_mart
@@ -1703,35 +1699,98 @@ annot <- getBM(
 ```
 
 ## Filter genes with highest median expression
+
+- 39,430 probes in the microarray,
+- 39,392 that were annotated in BiomaRt (~99.90%)
+- 37,983 probes had a correspondent mgi symbol (96.33% of probes in microarray)
+- 31,140 probes had a correspondent entrez id (78.97% of probes in microarray)
+- 30,787 probes with entrez id also had a correspondent mgi_symbol (78.08% of probes in microarray)
+- 22,435 probes have an entrez gene id. As this is the input in FIT, we used this to filter, not mgi_symbol (56.89% of probes in microarray)
+- 21,744 genes were filtered by the highest median (55.14% were kept from the microarray)
+- 86 Dupes. The duplication is due to different mgi_symbols. Same Entrez IDs can correspond to different mgi_symbol
+- 20849 probes were used (52.87%)
+
 ```{r}
-GSE120661_counts_normalized_summary = GSE120661_counts_normalized %>% 
+
+#Get annotations for each probe 
+
+GSE120661_counts_normalized_summary = GSE120661_counts_normalized_matrix %>% 
+  as.data.frame() %>% 
   rownames_to_column("probe") %>% 
   pivot_longer(cols = -probe,
                names_to = "sample",
                values_to = "expression") %>% 
   group_by(probe) %>% 
   summarize(mean = mean(expression,na.rm = TRUE),
-            median = median(expression, na.rm = T))
-
-
-GSE120661_counts_normalized_summary = GSE120661_counts_normalized_summary %>% 
-  left_join(annot %>% 
+            median = median(expression, na.rm = T)) %>%  
+  inner_join(annot %>% 
               rename(probe = agilent_sureprint_g3_ge_8x60k), 
-            by = "probe") %>% 
+            by = "probe") 
+
+# Stats
+## 39430 probes in the microarray
+GSE120661_counts_normalized_matrix %>% dim()
+## 37,983 probes with mgi_symbol
+GSE120661_counts_normalized_summary %>% 
   drop_na(mgi_symbol) %>% 
-  group_by(mgi_symbol)
-  
+  filter(mgi_symbol != "")
+## 31,140 probes with Entrez gene id
+GSE120661_counts_normalized_summary %>% 
+  drop_na(entrezgene_id)
+## 30,787 of these probes with mgi_symbol also had a correspondent entrez gene id
+GSE120661_counts_normalized_summary %>% 
+  drop_na(mgi_symbol) %>% 
+  filter(mgi_symbol != "") %>% 
+  drop_na(entrezgene_id)
+## 30,787 probes with entrez id also had a correspondent mgi_symbol
+GSE120661_counts_normalized_summary %>% 
+  drop_na(entrezgene_id) %>% 
+  filter(mgi_symbol != "") 
+
+#Get the probes with the highest median across samples for each entrez_id
+GSE120661_expression_highest_median_probes = GSE120661_counts_normalized_summary %>% 
+  drop_na(entrezgene_id) %>% 
+  group_by(entrezgene_id) %>% 
+  slice_max(median) %>% 
+  ungroup() %>% 
+  arrange(entrezgene_id, probe)  %>% 
+  select(probe, entrezgene_id, mgi_symbol, median) %>% 
+  distinct()
+
+#86 Dupes. The duplication is due to different mgi_symbols. Same Entrez IDs can correspond to different mgi_symbol
+GSE120661_expression_highest_median_probes %>% 
+  get_dupes(entrezgene_id)
+
+#Modify expression matrix
+GSE120661_counts_normalized_matrix = GSE120661_counts_normalized_matrix %>% 
+  as.data.frame() %>% 
+  rownames_to_column("probe") %>% 
+  filter(probe %in% c(GSE120661_expression_highest_median_probes$probe)) %>% 
+  column_to_rownames("probe") %>% 
+  as.matrix()
+
+GSE120661_counts_normalized_matrix %>% dim()
+
 ```
 
 
 
-#Differential gene expression
+##Differential gene expression
 ```{r}
+dim(GSE120661_counts_normalized_matrix) #20849   279
+
+dim(AnnotatedDataFrame(GSE120661_samples_pbmc %>% column_to_rownames("geo_sample"))) #279
+    
+eset_filtered <- ExpressionSet(
+  assayData = GSE120661_counts_normalized_matrix ,
+  phenoData = AnnotatedDataFrame(GSE120661_samples_pbmc %>% column_to_rownames("geo_sample"))
+)
+
+
 design <- model.matrix(~ timepoint * treatment + 0, eset_filtered) # 0 defines the way we compare the samples
 colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
 
 #Fit Limma model
-
 fit <- lmFit(eset_filtered, design)
 colnames(design) %>% 
   as.data.frame() %>% 
@@ -1749,24 +1808,30 @@ cont.matrix <- makeContrasts(timepoint4.treatmentFluad - treatmentFluad,
                              levels=design)
 
 fit2 <- contrasts.fit(fit, cont.matrix)
-# fit2 <- eBayes(fit2, proportion = 0.05, )
-
 fit2 <- treat(fit2, lfc = 0.0)
-all_degs = topTreat(fit2, adjust = "fdr", p.value = 0.05, number = Inf, confint = TRUE) 
 
-all_degs
+#Get DEGs
+## For one contrast (example)
+# all_degs = topTreat(fit2, coef = 1, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE)
+
+## For every contrast
+results_list <- lapply(1:ncol(fit2), function(i) {
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("probe")
+    
+})
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
 
 # Get all DEGs
-all_degs = all_degs %>% 
-  rownames_to_column("probe") %>% 
-  pivot_longer(cols = -c(probe, AveExpr, t, P.Value, adj.P.Val, CI.L, CI.R),
-               names_to = "comparison",
-               values_to = "LogFC") %>% 
+all_degs = all_contrasts_degs %>% 
   select(comparison, everything()) %>% 
   mutate(comparison = str_replace(comparison, "\\.\\.\\.", "_") %>% 
            str_replace(., "timepoint", "Time") %>% 
            str_replace(., "treatment", "")) %>% 
-  separate(comparison, sep = "_", into = c("comparisonA", "comparisonRef")) %>% 
+  separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef")) %>% 
   mutate(comparisonRef = str_replace(comparisonRef, "treatment", "Time0")) %>% 
   mutate(condition = case_when(comparisonA == "Time4.Fluad"	~ "Fluad_4_PBMC",
                                comparisonA == "Time8.Fluad"	~ "Fluad_8_PBMC",
@@ -1781,77 +1846,101 @@ all_degs
 ```
 
 ### Gene annotation
+- 27,317 genes in the input matrix
+- 25,035 probes from DGE analysis (no lfc threshold)
+
+About FIT genes:
+- 16,425 genes in FIT analysis (including human and mouse genes)
+- 16,417 unique mouse to human genes (are duplicated)
+- 34 genes have either different hgnc symbol to mgi symbol, or the other way.
+- 16 human genes are repeated because of different Entrez IDs
+- 14,357 mouse genes in FIT are in the limma output. 
+- 14,448 unique human genes 
+- 223 mouse symbols correspond to the same or another human symbol
+
 ```{r}
-library(biomaRt)
-
-## set up biomart
-ensembl_mart <- useMart("ensembl")
-ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
-
-## this is the MGI symbol for the gene we're interested in
-gene_id <- GSE120661_counts_normalized %>% rownames()
-
-listAttributes(ensembl_mart)
-
-annot <- getBM(
-  attributes = c("agilent_sureprint_g3_ge_8x60k", #Agilent microarray data (design ID 028005, retrieved from GEO)
-                 "ensembl_gene_id",
-                 "entrezgene_id",
-                 "mgi_symbol",
-                 "hgnc_symbol"),
-  filters = "agilent_sureprint_g3_ge_8x60k",
-  values = gene_id,  # <- Replace with your vector of probe IDs
-  mart = ensembl_mart
-)
-
-
 #Name genes
-all_degs_annotated = annot %>% 
-  rename(probe = agilent_sureprint_g3_ge_8x60k) %>% 
-  inner_join(all_degs, by = "probe") %>% 
+all_degs_annotated =  all_degs %>% 
+  inner_join(GSE120661_expression_highest_median_probes, by = "probe") %>% 
   clean_names()
 
-
+#Stats
+## 20,849 probes
 all_degs_annotated %>% 
   select(probe) %>% 
   distinct()
 
+## 21,408 symbols
 all_degs_annotated %>% 
-  select(probe, mgi_symbol) %>% 
+  select(mgi_symbol) %>% 
   distinct()
 
-all_degs_annotated %>% 
-  select(probe, mgi_symbol) %>% 
-  distinct() %>% 
-  get_dupes()
+#Get human symbol from FIT genes
+library(FIT.mouse2man)
 
-all_degs_annotated %>% 
-  arrange(-log_fc)
+HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez # 16,425 genes
 
-all_degs_annotated %>% 
-  select(mgi_symbol, hgnc_symbol) %>% 
+fit_genes = HS_MM_Symbol_Entrez %>% 
+  select(mgi_symbol = MGI.symbol,
+         human_symbol = HGNC_symbol,
+         entrezgene_id_mouse = Mouse.Ortholog,
+         entrezgene_id_human = Human.Entrez) %>% 
+  rownames_to_column("del") %>% 
+  select(!del) 
+
+## 16,417 unique mouse and human genes
+fit_genes %>% 
+  select(mgi_symbol,
+         human_symbol) %>% 
   distinct()
 
-all_degs_annotated %>% 
-  select(mgi_symbol, hgnc_symbol) %>% 
+## 34 genes have either different hgnc symbol to mgi symbol, or the other way.
+HS_MM_Symbol_Entrez %>% 
+  filter(MGI.symbol %in% c(fit_genes %>% 
+                             select(human_symbol, mgi_symbol) %>% 
+  get_dupes() %>% 
+  .$mgi_symbol))
+
+## 16 human genes are repeated because of different Entrez IDs
+HS_MM_Symbol_Entrez %>% 
+  filter(HGNC_symbol %in% c(fit_genes %>% 
+                             select(human_symbol, mgi_symbol) %>% 
+  get_dupes() %>% 
+  .$human_symbol))
+
+all_degs_annotated_fit = all_degs_annotated %>% 
+  select(-mgi_symbol) %>% 
+  rename(entrezgene_id_mouse = entrezgene_id) %>% 
+  inner_join(fit_genes, by = "entrezgene_id_mouse")
+
+## 15,591 mouse gene symbols from the Limma output are inside FIT genes
+all_degs_annotated_fit %>% 
+  select(mgi_symbol) %>% 
+  distinct()
+## 15,613 mouse entrez id from the Limma output are inside FIT genes
+all_degs_annotated_fit %>% 
+  select(entrezgene_id_mouse) %>% 
   distinct()
 
 
-all_degs_annotated %>% 
-  select(mgi_symbol, probe) %>% 
-  filter(mgi_symbol != "") %>% 
-  distinct() %>% 
-  get_dupes(mgi_symbol)
+## 15,685 human genes from the Limma output are inside FIT genes
+all_degs_annotated_fit %>% 
+  select(human_symbol) %>% 
+  distinct()
 
 
 all_degs_annotated %>% 
   saveRDS(here("tables", "Fluad_all_degs_annotated.rds"))
+
+all_degs_annotated_fit %>% 
+  saveRDS(here("tables", "Fluad_all_degs_annotated_FIT.rds"))
+
 ```
 
 
 ```{r}
-all_degs_annotated = readRDS(here("tables", "Fluad_all_degs_annotated.rds"))
-all_degs_annotated %>% 
+all_degs_annotated_fit = readRDS(here("tables", "Fluad_all_degs_annotated_FIT.rds"))
+all_degs_annotated_fit %>% 
   inner_join(GSE120661_metadata, by = "condition") %>% 
   mutate(timepoint = as.character(timepoint) %>% as.integer()) %>% 
   filter(mgi_symbol == "Tlr8") %>% 
@@ -1959,7 +2048,6 @@ test = FIT.mouse2man::RunClassifier(MouseData = RNAseq_sample, DataType = "rnase
 
 ```{r}
 #Fit
-
 fit_example = FIT.mouse2man::FIT(MouseFile = here("FIT_Mouse2man", "rnaseq_sample.csv"), 
                                  DataType = "rnaseq") # Runs the FIT pipeline which computes prediction of the human effect-size per gene
 
@@ -1977,16 +2065,13 @@ fit_example$Human.symbol %>% unique() %>% length()
 ###Fluad
 ```{r}
 
-fit_example$Mouse.symbol %>% unique() %>% length()
-fit_example$Human.symbol %>% unique() %>% length()
-
-all_degs_fit1 = all_degs_annotated %>% 
+all_degs_fit1 = all_degs_annotated_fit %>% 
   # filter(condition == "Fluad_24_PBMC") %>% 
-  arrange(mgi_symbol, entrezgene_id) %>% 
-  arrange(entrezgene_id) %>% 
+  arrange(mgi_symbol, entrezgene_id_mouse) %>% 
+  arrange(entrezgene_id_mouse) %>% 
   distinct() %>% 
-  select(MM.Entrez = entrezgene_id, 
-         row = entrezgene_id,
+  select(MM.Entrez = entrezgene_id_mouse, 
+         row = entrezgene_id_mouse,
          EffectSize = log_fc, 
          condition) 
 
@@ -2015,8 +2100,7 @@ all_degs_fit2 = read_csv(here("tables", "Fluad_PBMC_FIT_mouse_allTimePoints.csv"
 
 #Fit
 delete_dupes = all_degs_fit2 %>% 
-  filter(condition == "Fluad_24_PBMC",
-         !row %in% c(delete_rows_dupes)) %>% 
+  filter(condition == "Fluad_24_PBMC") %>% 
   get_dupes(row) %>% 
   pull(row)
 
@@ -2030,13 +2114,20 @@ all_degs_fit2 %>%
 
 fit_example = FIT.mouse2man::FIT(MouseFile = here("tables", "Fluad_24_PBMC_FIT_mouse.csv"), 
                                  DataType = "rnaseq") # Runs the FIT pipeline which computes prediction of the human effect-size per gene
+
+
+fit_example %>% saveRDS(here("FIT_Mouse2man", "Fluad_24_PBMC_FIT_mouse_results.rds"))
+fit_example
 ```
 
 
 Check gene by gene
+15613 entrez IDs
 ```{r}
 fit_example %>% 
-  select(`MM.Entrez` = `Mouse.Entrez`, Mouse.symbol, Human.symbol) %>% 
+  select(`MM.Entrez` = `Mouse.Entrez`, 
+         Mouse.symbol, 
+         Human.symbol) %>% 
   distinct()
 
 all_degs_fit2$MM.Entrez %>% unique() %>% length()
