@@ -33,6 +33,7 @@ library(corto)
 library(factoextra)
 library(reshape2)
 library(ComplexHeatmap)
+library(gghighlight)
 library(janitor)
 library(paletteer)
 library(edgeR)
@@ -1654,6 +1655,8 @@ GSE120661_metadata = GSE120661_metadata %>%
 
 GSE120661_counts_normalized = read_rds(here("tables", "GSE120661_counts_normalized.rds"))
 
+GSE120661_counts_normalized %>% rownames() %>% length()
+
 #Select and filter
 #Filter PBMC samples
 GSE120661_samples_pbmc_vector = GSE120661_metadata %>% 
@@ -1675,7 +1678,54 @@ eset_filtered <- ExpressionSet(
 )
 ```
 
+## Annotate genes
+```{r}
+library(biomaRt)
 
+## set up biomart
+ensembl_mart <- useMart("ensembl")
+ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
+
+## this is the MGI symbol for the gene we're interested in
+gene_id <- GSE120661_counts_normalized %>% rownames()
+
+listAttributes(ensembl_mart)
+
+annot <- getBM(
+  attributes = c("agilent_sureprint_g3_ge_8x60k", #Agilent microarray data (design ID 028005, retrieved from GEO)
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "mgi_symbol"),
+  filters = "agilent_sureprint_g3_ge_8x60k",
+  values = gene_id,  # <- Replace with your vector of probe IDs
+  mart = ensembl_mart
+)
+```
+
+## Filter genes with highest median expression
+```{r}
+GSE120661_counts_normalized_summary = GSE120661_counts_normalized %>% 
+  rownames_to_column("probe") %>% 
+  pivot_longer(cols = -probe,
+               names_to = "sample",
+               values_to = "expression") %>% 
+  group_by(probe) %>% 
+  summarize(mean = mean(expression,na.rm = TRUE),
+            median = median(expression, na.rm = T))
+
+
+GSE120661_counts_normalized_summary = GSE120661_counts_normalized_summary %>% 
+  left_join(annot %>% 
+              rename(probe = agilent_sureprint_g3_ge_8x60k), 
+            by = "probe") %>% 
+  drop_na(mgi_symbol) %>% 
+  group_by(mgi_symbol)
+  
+```
+
+
+
+#Differential gene expression
 ```{r}
 design <- model.matrix(~ timepoint * treatment + 0, eset_filtered) # 0 defines the way we compare the samples
 colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
@@ -1699,12 +1749,17 @@ cont.matrix <- makeContrasts(timepoint4.treatmentFluad - treatmentFluad,
                              levels=design)
 
 fit2 <- contrasts.fit(fit, cont.matrix)
-fit2 <- eBayes(fit2, proportion = 0.05)
+# fit2 <- eBayes(fit2, proportion = 0.05, )
+
+fit2 <- treat(fit2, lfc = 0.0)
+all_degs = topTreat(fit2, adjust = "fdr", p.value = 0.05, number = Inf, confint = TRUE) 
+
+all_degs
 
 # Get all DEGs
-all_degs = topTable(fit2, adjust="fdr", p.value=0.05, number=Inf) %>% 
+all_degs = all_degs %>% 
   rownames_to_column("probe") %>% 
-  pivot_longer(cols = -c(probe, AveExpr, F, P.Value, adj.P.Val),
+  pivot_longer(cols = -c(probe, AveExpr, t, P.Value, adj.P.Val, CI.L, CI.R),
                names_to = "comparison",
                values_to = "LogFC") %>% 
   select(comparison, everything()) %>% 
@@ -1725,7 +1780,7 @@ all_degs = topTable(fit2, adjust="fdr", p.value=0.05, number=Inf) %>%
 all_degs
 ```
 
-Gene annotation
+### Gene annotation
 ```{r}
 library(biomaRt)
 
@@ -1734,7 +1789,7 @@ ensembl_mart <- useMart("ensembl")
 ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
 
 ## this is the MGI symbol for the gene we're interested in
-gene_id <- featureNames(eset)
+gene_id <- GSE120661_counts_normalized %>% rownames()
 
 listAttributes(ensembl_mart)
 
@@ -1742,11 +1797,13 @@ annot <- getBM(
   attributes = c("agilent_sureprint_g3_ge_8x60k", #Agilent microarray data (design ID 028005, retrieved from GEO)
                  "ensembl_gene_id",
                  "entrezgene_id",
-                 "mgi_symbol"),
+                 "mgi_symbol",
+                 "hgnc_symbol"),
   filters = "agilent_sureprint_g3_ge_8x60k",
   values = gene_id,  # <- Replace with your vector of probe IDs
   mart = ensembl_mart
 )
+
 
 #Name genes
 all_degs_annotated = annot %>% 
@@ -1754,8 +1811,37 @@ all_degs_annotated = annot %>%
   inner_join(all_degs, by = "probe") %>% 
   clean_names()
 
+
+all_degs_annotated %>% 
+  select(probe) %>% 
+  distinct()
+
+all_degs_annotated %>% 
+  select(probe, mgi_symbol) %>% 
+  distinct()
+
+all_degs_annotated %>% 
+  select(probe, mgi_symbol) %>% 
+  distinct() %>% 
+  get_dupes()
+
 all_degs_annotated %>% 
   arrange(-log_fc)
+
+all_degs_annotated %>% 
+  select(mgi_symbol, hgnc_symbol) %>% 
+  distinct()
+
+all_degs_annotated %>% 
+  select(mgi_symbol, hgnc_symbol) %>% 
+  distinct()
+
+
+all_degs_annotated %>% 
+  select(mgi_symbol, probe) %>% 
+  filter(mgi_symbol != "") %>% 
+  distinct() %>% 
+  get_dupes(mgi_symbol)
 
 
 all_degs_annotated %>% 
@@ -1764,7 +1850,7 @@ all_degs_annotated %>%
 
 
 ```{r}
-
+all_degs_annotated = readRDS(here("tables", "Fluad_all_degs_annotated.rds"))
 all_degs_annotated %>% 
   inner_join(GSE120661_metadata, by = "condition") %>% 
   mutate(timepoint = as.character(timepoint) %>% as.integer()) %>% 
@@ -1873,16 +1959,27 @@ test = FIT.mouse2man::RunClassifier(MouseData = RNAseq_sample, DataType = "rnase
 
 ```{r}
 #Fit
+
 fit_example = FIT.mouse2man::FIT(MouseFile = here("FIT_Mouse2man", "rnaseq_sample.csv"), 
                                  DataType = "rnaseq") # Runs the FIT pipeline which computes prediction of the human effect-size per gene
 
+fit_example %>% 
+  saveRDS(here("tables", "fit_example.rds"))
+
 fit_example
+
+fit_example$Mouse.symbol %>% unique() %>% length()
+fit_example$Human.symbol %>% unique() %>% length()
 ?FIT.mouse2man::FIT
 ```
 
 
 ###Fluad
 ```{r}
+
+fit_example$Mouse.symbol %>% unique() %>% length()
+fit_example$Human.symbol %>% unique() %>% length()
+
 all_degs_fit1 = all_degs_annotated %>% 
   # filter(condition == "Fluad_24_PBMC") %>% 
   arrange(mgi_symbol, entrezgene_id) %>% 
@@ -1914,7 +2011,6 @@ all_degs_fit2 %>%
 
 
 ```{r}
-
 all_degs_fit2 = read_csv(here("tables", "Fluad_PBMC_FIT_mouse_allTimePoints.csv"))
 
 #Fit
@@ -1934,7 +2030,21 @@ all_degs_fit2 %>%
 
 fit_example = FIT.mouse2man::FIT(MouseFile = here("tables", "Fluad_24_PBMC_FIT_mouse.csv"), 
                                  DataType = "rnaseq") # Runs the FIT pipeline which computes prediction of the human effect-size per gene
+```
 
+
+Check gene by gene
+```{r}
+fit_example %>% 
+  select(`MM.Entrez` = `Mouse.Entrez`, Mouse.symbol, Human.symbol) %>% 
+  distinct()
+
+all_degs_fit2$MM.Entrez %>% unique() %>% length()
+
+```
+
+
+```{r}
 fit_example_geneA = fit_example %>% 
   clean_names() %>% 
   # filter(human_symbol == "TLR8") %>% 
@@ -2368,7 +2478,7 @@ pairwise_human_fit = fit_example_human %>%
          human_2_fit = Human - `FIT Prediction`) %>% 
   select(human_symbol, timepoint, Human, Mouse, `FIT Prediction`, human_2_mouse, human_2_fit)
 
-pairwise_human_fit
+pairwise_human_fit$human_symbol %>% unique() %>% length()
 ```
 
 
@@ -2442,13 +2552,15 @@ pairwise_human_fit_test = pairwise_human_fit_measures %>%
 
 pairwise_human_fit_test_p10 = pairwise_human_fit_test %>% 
   arrange(-p_value_fit_adj) %>% 
-  filter(!p_value_fit_adj < 0.10)
+  filter(p_value_fit_adj > 0.10)
 
-pairwise_human_fit_test_p10
+pairwise_human_fit_test$human_symbol %>% unique() %>% length()
+
+pairwise_human_fit_test_p10$human_symbol %>% unique() %>% length()
   
 ```
 
-
+#### FIT vs Human
 ```{r fig.height=5, fig.width=8}
 fit_example_human_plot = 
   fit_example_human %>% 
@@ -2508,7 +2620,7 @@ fit_example_human_plot =
     plot.margin = margin(0.5, 0.2, 0.2, 0.2, "cm")
   )+
   labs(color = "Measure",
-       x = "Time (h)",
+       x = "Time (days)",
        y = "LogFold-Change",
        title = "Prediction - Influenza, Fluad Vaccine") +
   facet_wrap(~human_symbol, nrow = 1)
@@ -2516,10 +2628,16 @@ fit_example_human_plot =
 fit_example_human_plot
 
 ```
+#### Plot mouse vs fit
+```{r}
+
+```
 
 
+#### Plot mouse vs fit vs human
+Genes that are not DEGs in mouse but are in humans and are predicted in FIT, and the others that are not predicted in FIT (these should be used to improve model performance)
 
-Clustering
+#### Clustering
 ```{r fig.height=15, fig.width=30}
 df =  pairwise_human_fit_test %>% 
   select(human_symbol, timepoint, p_value_fit_adj, effect_size_h2fit) %>% 
@@ -2601,7 +2719,7 @@ dotplot
 
 Complex heatmap
 
-
+By effect size
 ```{r fig.height=6, fig.width=5}
 heatmap_data = df
 file = "df_human_fit"
@@ -2677,6 +2795,79 @@ heatmap_plot_all
 ```
 
 
+```{r fig.height=6, fig.width=5}
+heatmap_data = df
+file = "df_human_fit_pvalue"
+
+heatmap_data_l2fc= heatmap_data %>% 
+  filter(p_adj > 0.10) %>% 
+  dplyr::select(genes = gene, condition, p_adj)
+
+matrix_data <- dcast(heatmap_data_l2fc, 
+                         genes ~ condition, 
+                         value.var = "p_adj", 
+                         fun.aggregate = mean) %>% 
+  column_to_rownames('genes') %>% 
+  mutate_if(is.character, as.numeric) %>% 
+  replace(is.na(.), 0)
+
+matrix_data_ready =  matrix_data %>% 
+  round(2)
+
+col_fun <- colorRamp2(c(0, 1), c("white",
+                                     "#E64B35FF"))
+
+
+mat = matrix_data_ready %>% 
+  as.matrix()
+width = unit(5, "cm")
+height = unit(10, "cm")
+width_image = 10
+height_image = 20
+column_names_gp = gpar(fontsize = 10)
+row_names_gp = gpar(fontsize = 0)
+
+fileimageheatmap_ungrouped= here("Figures", paste0(file, sep ="_", "Ungrouped_Complexheatmap.png"))
+png(file = fileimageheatmap_ungrouped, width=width_image, height=height_image,units="cm",res=300)
+heatmap_plot_all = Heatmap(mat,
+                        # top_annotation = ha,
+                        # show_row_names = TRUE,
+                        show_heatmap_legend = TRUE,
+                        heatmap_legend_param = list(direction = "vertical"),
+                        name = "Adjusted P-Value", #Legend
+                        col = col_fun, #color
+                        column_title = "",
+                        # column_title_gp = gpar(fontsize = 15, fontface = "bold"),
+                        column_names_rot = 45,
+                        column_names_gp = gpar(fontsize = 10),
+                        # rect_gp = gpar(col = "gray90", lwd = 1),
+                        cluster_rows = TRUE,
+                        row_names_gp = row_names_gp,
+                        row_split = 5, #Split row clusters
+                        row_gap = unit(2, "mm"), row_dend_reorder = T,
+                        cluster_columns = T,
+                        column_split = 3, #Split group clusters
+                        #column_km = 2,
+                        column_gap = unit(2, "mm"),
+                        show_column_dend = F,
+                        show_row_dend = T,
+                        row_dend_side = "left",
+                        column_dend_side = "top",
+                        clustering_distance_rows = "euclidean",
+                        border = TRUE,
+                        column_dend_reorder = TRUE,
+                        width = width, 
+                        height = height
+)
+
+draw(heatmap_plot_all, annotation_legend_side = "right", heatmap_legend_side = "right")
+
+dev.off()
+
+heatmap_plot_all
+```
+
+
 
 ```{r}
 df %>% 
@@ -2684,13 +2875,54 @@ df %>%
          effect_size_direction = if_else(effect_size > 0, "+", "-")) %>% 
   ggplot() +
   aes(x = effect_size,
-         y = log_padj,
-         color = effect_size_direction,
-         shape = day,
+         y = p_adj,
+         fill = effect_size_direction,
+         # shape = day,
       # size = log_padj
       ) +
-  geom_jitter() +
-  facet_grid(~day) 
+  geom_jitter(aes(fill = effect_size_direction,
+                  alpha = p_adj),
+              width = 1,
+              pch = 21,
+              color = "black") +
+  gghighlight(p_adj > 0.10) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    plot.caption = element_text(hjust = 0, size = 5),
+    axis.text.x = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    axis.text.y = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    plot.title = element_text(size = 15),
+    axis.title.y = element_text(color = "black"),
+    panel.border = element_blank(),
+    panel.grid.major.y = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    panel.grid.major.x = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    axis.line.x = element_line(size = 0.5,
+                               colour = "black",
+                               linetype = 1),
+    axis.line.y = element_line(size = 0.5 ,
+                               colour = "black",
+                               linetype = 1),
+    axis.ticks.x = element_line(size = 0.5, color = "black"),
+    axis.ticks.y = element_line(size = 0.5, color = "black"),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(0.5, 0.2, 0.2, 0.2, "cm")
+  )+
+  facet_grid(~day %>% fct_relevel(., "1", "3", "7"), scales = "free_x") 
+
+
+
+
 ```
 
 
