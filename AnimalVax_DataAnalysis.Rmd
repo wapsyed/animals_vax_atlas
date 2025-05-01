@@ -2600,17 +2600,24 @@ flu_expression_fc_summary = flu_expression_fc_long_metadata %>%
   distinct()
 
 flu_expression_fc_summary
+
+flu_expression_fc_summary %>% 
+  saveRDS(here("tables", "flu_expression_fc_summary_human.rds"))
 ```
 
 
+
 ```{r}
-fit_fluad_mouse = fit_example_geneA %>% 
+flu_expression_fc_summary = read_rds(here("tables", "flu_expression_fc_summary_human.rds"))
+
+fit_fluad_mouse = fit_example_results %>% 
   inner_join(GSE120661_metadata %>% 
                mutate(timepoint = as.character(timepoint) %>% 
                         as.integer()) %>% 
                select(!geo_sample:subject_id) %>% 
                select(-animal_replicate) %>% 
-               distinct(), by = "condition") 
+               distinct(), by = "condition") %>% 
+  select(condition, everything())
    
 flu_expression_fc_summary_standard = flu_expression_fc_summary %>% 
   rename(human_symbol = genes,
@@ -2621,12 +2628,15 @@ flu_expression_fc_summary_standard = flu_expression_fc_summary %>%
          timepoint = study_time_collected,
          ci_low = lower,
          ci_high = upper) %>% 
-  mutate(timepoint = as.numeric(timepoint))
+  mutate(timepoint = as.numeric(timepoint),
+         ci_size = ci_high - ci_low)
 
 fit_fluad_mouse_human = flu_expression_fc_summary_standard %>% 
   bind_rows(fit_fluad_mouse %>% 
               mutate(timepoint = timepoint/24)) %>% 
-  filter(human_symbol %in% c(fit_fluad_mouse$human_symbol))
+  arrange(human_symbol) %>% 
+  filter(human_symbol %in% c(fit_fluad_mouse$human_symbol)) %>% 
+  select(condition, everything()) 
 
 
 fit_fluad_mouse %>% 
@@ -2638,7 +2648,7 @@ fit_fluad_mouse_human %>%
 ```
 
 
-
+6373 human genes were analyzed
 ```{r fig.height=5, fig.width=5}
 fit_example_human = fit_fluad_mouse_human %>% 
   filter(timepoint %in% c(1, 3, 7),
@@ -2657,12 +2667,13 @@ pairwise_human_fit = fit_example_human %>%
               values_fn = mean) %>% 
   mutate(human_2_mouse = Human - Mouse,
          human_2_fit = Human - `FIT Prediction`) %>% 
-  select(human_symbol, timepoint, Human, Mouse, `FIT Prediction`, human_2_mouse, human_2_fit)
+  select(human_symbol, timepoint, Human, Mouse, `FIT Prediction`, human_2_mouse, human_2_fit) %>% 
+  drop_na(Human)
 
 pairwise_human_fit$human_symbol %>% unique() %>% length()
 ```
 
-
+Filtered 5563 genes with padj > 0.10
 ```{r fig.height=5, fig.width=5}
 #Rank genes by differences
 meta_human = fit_example_human %>% 
@@ -2696,7 +2707,6 @@ meta_mouse = fit_example_human %>%
          ci_low_mouse = ci_low,
          ci_high_mouse = ci_high
          ) 
-
 
 pairwise_human_fit_measures = meta_human %>% 
   inner_join(meta_fit, by = join_by(human_symbol, timepoint)) %>% 
@@ -2741,11 +2751,106 @@ pairwise_human_fit_test_p10$human_symbol %>% unique() %>% length()
   
 ```
 
+
+### Regression metrics
+Compute metrics by gene
+Compute metrics by gene and day
+```{r}
+
+library(yardstick)
+metrics_genes <- pairwise_human_fit_test %>%
+  group_by(human_symbol) %>%
+  summarise(
+    RMSE_human2mouse = rmse_vec(Human, Mouse),
+    MAE_human2mouse = mae_vec(Human, Mouse),
+    R2_human2mouse = rsq_vec(Human, Mouse),
+    Spearman_human2mouse = cor(Human, Mouse, method = "spearman"),
+    Pearson_human2mouse = cor(Human, Mouse, method = "pearson"),
+    
+    
+    RMSE_human2fit = rmse_vec(Human, `FIT Prediction`),
+    MAE_human2fit = mae_vec(Human, `FIT Prediction`),
+    R2_human2fit = rsq_vec(Human, `FIT Prediction`),
+    Spearman_human2fit = cor(Human, `FIT Prediction`, method = "spearman"),
+    Pearson_human2fit = cor(Human, `FIT Prediction`, method = "pearson")
+  ) %>%
+  ungroup()
+
+top10_genes_mouse <- metrics_genes %>%
+  arrange(RMSE_human2mouse) %>%
+  slice_head(n = 10)
+
+top10_genes_fit <- metrics_genes %>%
+  arrange(RMSE_human2fit) %>%
+  slice_head(n = 10)
+```
+
+
+
+
 #### FIT vs Human
+
+```{r fig.height=5, fig.width=10}
+cutoffs <- c(0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10, 0.05)
+
+# 1. Criar um dataframe com todos os filtros aplicados
+filtered_data <- map_dfr(cutoffs, function(cut) {
+  pairwise_human_fit_test %>%
+    filter(p_value_fit_adj > cut) %>%
+    mutate(cutoff_label = paste0("p > ", cut))
+})
+
+
+ggplot(filtered_data, aes(x = Human, 
+                          y = `FIT Prediction`, 
+                          color = cutoff_label)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
+  facet_grid(~timepoint~cutoff_label) +
+  labs(title = "Regression at different p-value thresholds",
+       x = "Human expression", y = "FIT Prediction") +
+  theme_minimal() +
+  scale_color_npg() +
+  theme(
+    legend.position = "right",
+    plot.caption = element_text(hjust = 0, size = 5),
+    axis.text.x = element_text(size = 10,
+                               color = "black",
+                               angle = 90),
+    axis.text.y = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    plot.title = element_text(size = 15),
+    axis.title.y = element_text(color = "black"),
+    panel.border = element_blank(),
+    panel.grid.major.y = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    panel.grid.major.x = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    axis.line.x = element_line(size = 0.5,
+                               colour = "black",
+                               linetype = 1),
+    axis.line.y = element_line(size = 0.5 ,
+                               colour = "black",
+                               linetype = 1),
+    axis.ticks.x = element_line(size = 0.5, color = "black"),
+    axis.ticks.y = element_line(size = 0.5, color = "black"),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(0.5, 0.2, 0.2, 0.2, "cm")
+  )
+
+
+```
+
+
 ```{r fig.height=5, fig.width=8}
 fit_example_human_plot = 
   fit_example_human %>% 
-  filter(human_symbol %in% c(pairwise_human_fit_test_p10 %>% 
+  filter(human_symbol %in% c(top10_genes_fit %>% 
                                slice_head(n = 5) %>% 
                                pull(human_symbol))) %>% 
   ggplot() +
@@ -2810,13 +2915,120 @@ fit_example_human_plot
 
 ```
 #### Plot mouse vs fit
-```{r}
+```{r fig.height=5, fig.width=10}
+cutoffs <- c(0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10, 0.05)
+
+# 1. Criar um dataframe com todos os filtros aplicados
+filtered_data <- map_dfr(cutoffs, function(cut) {
+  pairwise_human_fit_test %>%
+    filter(p_value_mouse_adj > cut) %>%
+    mutate(cutoff_label = paste0("p > ", cut))
+})
+
+
+ggplot(filtered_data, aes(x = `FIT Prediction`, 
+                          y = Mouse, 
+                          color = cutoff_label)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
+  facet_grid(~timepoint~cutoff_label) +
+  labs(title = "Regression at different p-value thresholds",
+       x = "Mouse expression", y = "FIT Prediction") +
+  theme_minimal() +
+  scale_color_npg() +
+  theme(
+    legend.position = "right",
+    plot.caption = element_text(hjust = 0, size = 5),
+    axis.text.x = element_text(size = 10,
+                               color = "black",
+                               angle = 90),
+    axis.text.y = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    plot.title = element_text(size = 15),
+    axis.title.y = element_text(color = "black"),
+    panel.border = element_blank(),
+    panel.grid.major.y = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    panel.grid.major.x = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    axis.line.x = element_line(size = 0.5,
+                               colour = "black",
+                               linetype = 1),
+    axis.line.y = element_line(size = 0.5 ,
+                               colour = "black",
+                               linetype = 1),
+    axis.ticks.x = element_line(size = 0.5, color = "black"),
+    axis.ticks.y = element_line(size = 0.5, color = "black"),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(0.5, 0.2, 0.2, 0.2, "cm")
+  )
+
 
 ```
 
 
 #### Plot mouse vs fit vs human
 Genes that are not DEGs in mouse but are in humans and are predicted in FIT, and the others that are not predicted in FIT (these should be used to improve model performance)
+
+```{r fig.height=5, fig.width=10}
+cutoffs <- c(0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10, 0.05)
+
+# 1. Criar um dataframe com todos os filtros aplicados
+filtered_data <- map_dfr(cutoffs, function(cut) {
+  pairwise_human_fit_test %>%
+    filter(p_value_mouse_adj > cut) %>%
+    mutate(cutoff_label = paste0("p > ", cut))
+})
+
+
+ggplot(filtered_data, aes(x = Human, 
+                          y = Mouse, 
+                          color = cutoff_label)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
+  facet_grid(~timepoint~cutoff_label) +
+  labs(title = "Regression at different p-value thresholds",
+       x = "Human expression", y = "Mouse expression") +
+  theme_minimal() +
+  scale_color_npg() +
+  theme(
+    legend.position = "right",
+    plot.caption = element_text(hjust = 0, size = 5),
+    axis.text.x = element_text(size = 10,
+                               color = "black",
+                               angle = 90),
+    axis.text.y = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    plot.title = element_text(size = 15),
+    axis.title.y = element_text(color = "black"),
+    panel.border = element_blank(),
+    panel.grid.major.y = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    panel.grid.major.x = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    axis.line.x = element_line(size = 0.5,
+                               colour = "black",
+                               linetype = 1),
+    axis.line.y = element_line(size = 0.5 ,
+                               colour = "black",
+                               linetype = 1),
+    axis.ticks.x = element_line(size = 0.5, color = "black"),
+    axis.ticks.y = element_line(size = 0.5, color = "black"),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(0.5, 0.2, 0.2, 0.2, "cm")
+  )
+
+```
 
 #### Clustering
 ```{r fig.height=15, fig.width=30}
