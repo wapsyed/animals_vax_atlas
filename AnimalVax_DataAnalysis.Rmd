@@ -1,4 +1,4 @@
-```{r}
+```{r message=FALSE, warning=FALSE}
 library(tidyverse)
 library(here)
 library(ggsci)
@@ -40,6 +40,7 @@ library(edgeR)
 library(limma)
 library(mogene10sttranscriptcluster.db)
 library(ggh4x)
+library(readxl)
 library(patchwork)
 ```
 # Aesthetics
@@ -2473,7 +2474,6 @@ fit_results_combined %>% saveRDS(here("FIT_Mouse2man", "FIT_FLUAD_alltimes.csv")
 ```
 
 
-## Import files
 ```{r fig.height=5, fig.width=5}
 fit_results_combined = read_rds(here("FIT_Mouse2man", "FIT_FLUAD_alltimes.csv"))
 all_degs_annotated_fit = readRDS(here("tables", "Fluad_all_degs_annotated_FIT.rds"))
@@ -2526,9 +2526,10 @@ fit_example_results %>%
 
 
 ```{r fig.height=5, fig.width=5}
-fit_example_geneA_top5 = fit_example_geneA %>% 
-           filter(measure == "mouse_effect_size") %>% 
-           select(human_symbol, value) %>% 
+fit_example_geneA_top5 = fit_example_results_ready %>% 
+           filter(measure == "mouse_effect_size",
+                  is.na(fit_percentile)) %>% 
+           # select(human_symbol, value) %>% 
            distinct() %>% 
            arrange(-value) %>% 
   select(human_symbol) %>% 
@@ -2539,7 +2540,11 @@ fit_example_geneA_top5
 ```
 
 
-```{r fig.height=5, fig.width=5}
+```{r fig.height=4, fig.width=8}
+
+GSE120661_metadata = readRDS(here("tables", "GSE120661_metadata.rds"))
+
+
 fit_example_topgenes_plot = fit_example_results_ready%>% 
   inner_join(GSE120661_metadata %>% 
                mutate(timepoint = as.character(timepoint) %>% 
@@ -2548,19 +2553,16 @@ fit_example_topgenes_plot = fit_example_results_ready%>%
                select(-animal_replicate) %>% 
                distinct(), by = "condition") %>% 
   filter(human_symbol %in% c(fit_example_geneA_top5)) %>% 
+  mutate(timepoint = timepoint/24) %>% 
   ggplot() +
   aes(x = timepoint,
       y = value) +
-  # geom_ribbon(aes(ymin = ci_low, 
-  #                 ymax = ci_high),
-  #             fill = "red",
-  #             alpha = 0.1) +
   geom_errorbar(aes(ymin = ci_low, 
                   ymax = ci_high,
-                  color = measure)) +
-  geom_line(aes(color = measure)) +
-  geom_point(aes(color = measure)) +
-  scale_x_continuous(breaks = c(0, 4, 8, 24, 48, 72, 168),minor_breaks = F) +
+                  color = measure,
+                  fill = measure)) +
+  geom_line(aes(color = measure), alpha = 1) +
+  geom_point(aes(color = measure), alpha = 0.5) +
   scale_color_manual(
   values = c(
     fit_prediction = "#E64B35FF", 
@@ -2571,7 +2573,8 @@ fit_example_topgenes_plot = fit_example_results_ready%>%
     mouse_effect_size = "Mouse Effect Size"
   )
 )+
-  facet_wrap(~human_symbol, ncol = 1) +
+  scale_x_continuous(breaks = c(1, 3, 7) ) +
+  facet_wrap(~human_symbol, nrow = 1) +
   theme_minimal() +
   theme(
     legend.position = "top",
@@ -2610,6 +2613,15 @@ fit_example_topgenes_plot = fit_example_results_ready%>%
        title = "Prediction - Influenza, Fluad Vaccine")
 
 fit_example_topgenes_plot
+
+
+fit_example_results_ready %>% 
+  filter(measure == "fit_prediction") %>% 
+  mutate(value =  value %>% round(3),
+          check = (ci_high + ci_low) / 2,
+         check_true = check - value,
+         check_true = round(check_true, 3)) %>% 
+  mutate(test = if_else(value == check, "T", "no")) 
 ```
 
 
@@ -2711,23 +2723,42 @@ fit_example_human = fit_fluad_mouse_human %>%
   filter(timepoint %in% c(1, 3, 7),
          treatment %in% c("Fluad", "FLUADD")) %>% 
   select(human_symbol:vaccine_type, condition, measure) %>% 
-  mutate(organism = if_else(measure == "mouse_effect_size", "Mouse", "Human"),
-         organism = if_else(measure == "fit_prediction", "FIT Prediction", organism))
+  mutate(organism = case_when(measure == "mouse_effect_size" ~ "Mouse", 
+                              measure == "fit_prediction" ~ "FIT Prediction", 
+                              measure == "human_effect_size" ~ "Human", 
+                              .default = measure))
 
 
 pairwise_human_fit = fit_example_human %>% 
   drop_na(human_symbol) %>% 
   select(timepoint, organism, value, human_symbol) %>% 
   arrange(human_symbol) %>% 
+  distinct() %>% 
   pivot_wider(names_from = "organism",
               values_from = "value",
-              values_fn = mean) %>% 
+              values_fn = max) %>% 
   mutate(human_2_mouse = Human - Mouse,
          human_2_fit = Human - `FIT Prediction`) %>% 
   select(human_symbol, timepoint, Human, Mouse, `FIT Prediction`, human_2_mouse, human_2_fit) %>% 
   drop_na(Human)
 
 pairwise_human_fit$human_symbol %>% unique() %>% length()
+pairwise_human_fit
+
+
+pairwise_human_fit_long = fit_example_human %>% 
+  drop_na(human_symbol) %>% 
+  mutate(human = if_else(organism == "Human", value, NA)) %>% 
+  group_by(human_symbol, timepoint) %>% 
+  arrange(human_symbol, timepoint) %>% 
+  fill(human, .direction = "downup") %>% 
+  fill(vaccine_type, .direction = "downup") %>% 
+  mutate(diff_2_h = human - value) %>% 
+  filter(!is.na(human)) %>% 
+  select(-human)
+  
+  pairwise_human_fit_long
+
 ```
 
 Filtered:
@@ -2738,7 +2769,6 @@ Filtered:
 ```{r fig.height=5, fig.width=5}
 #Rank genes by differences
 meta_human = fit_example_human %>% 
-  # filter(human_symbol == "AAK1") %>% 
   filter(organism == "Human") %>% 
   select(human_symbol, 
          timepoint, 
@@ -2750,25 +2780,39 @@ meta_human = fit_example_human %>%
 
 
 meta_fit = fit_example_human %>% 
-  # filter(human_symbol == "AAK1") %>% 
   filter(organism == "FIT Prediction") %>% 
   select(human_symbol, timepoint, 
          mean_fit = value, 
          se_fit = se, 
          ci_low_fit = ci_low,
          ci_high_fit = ci_high
-         ) 
+         ) %>% 
+  mutate(mean_fit =  mean_fit %>% round(3),
+           value = (ci_high_fit + ci_low_fit) / 2,
+         value = value %>% round(3)) %>% 
+  mutate(test = if_else(value == mean_fit, "T", "no"))
 
 meta_mouse = fit_example_human %>% 
-  # filter(human_symbol == "AAK1") %>%
   filter(organism == "Mouse") %>% 
   select(human_symbol, timepoint, 
          mean_mouse = value, 
          se_mouse = se, 
          ci_low_mouse = ci_low,
          ci_high_mouse = ci_high
-         ) 
+         )  %>% 
+  
+  #Filter out repeated values
+  arrange(human_symbol, timepoint) %>% 
+  mutate(mean_mouse =  mean_mouse %>% round(3),
+           value = (ci_high_mouse + ci_low_mouse) / 2,
+         value = value %>% round(3)) %>% 
+  mutate(test = if_else(value == mean_mouse, "T", "no")) %>% 
+  filter(test == "T") %>% 
+  select(-c(test, value))
+```
 
+
+```{r fig.height=5, fig.width=5}
 pairwise_human_fit_measures = meta_human %>% 
   inner_join(meta_fit, by = join_by(human_symbol, timepoint)) %>% 
   inner_join(meta_mouse, by = join_by(human_symbol, timepoint)) %>% 
@@ -2776,7 +2820,7 @@ pairwise_human_fit_measures = meta_human %>%
     mutate(ci_width_mouse = ci_high_mouse - ci_low_mouse,
           ci_width_fit = ci_high_fit - ci_low_fit,
           ci_width_human = ci_high_human - ci_low_human) %>% 
-  mutate( # pvalue: Log2fc to zero
+  mutate(
         # Estimate SE from CIs
     se_fit = (ci_high_fit - ci_low_fit) / (2 * 1.96),
     se_mouse = (ci_high_mouse - ci_low_mouse) / (2 * 1.96),
@@ -2790,6 +2834,21 @@ pairwise_human_fit_measures = meta_human %>%
 
 pairwise_human_fit_measures %>% 
   saveRDS(here("FIT_Mouse2man", "pairwise_human_fit_measures.rds"))
+
+
+
+pairwise_human_fit_measures %>% 
+  filter(human_symbol == "TLR8") %>% 
+  ggplot()+
+  aes(x = timepoint,
+      y = mean_mouse) +
+  geom_point() +
+  geom_errorbar(aes(ymax = ci_high_mouse,
+                    ymin = ci_low_mouse)) +
+  geom_errorbar(aes(ymax = ci_high_fit,
+                    ymin = ci_low_fit)) +
+  geom_point(aes(y = mean_fit))
+  
 ```
 
 ## Regression metrics
@@ -2802,6 +2861,7 @@ pairwise_human_fit_test = pairwise_human_fit_measures %>%
     # Estimate SE from CIs
     se_fit = (ci_high_fit - ci_low_fit) / (2 * 1.96),
     se_mouse = (ci_high_mouse - ci_low_mouse) / (2 * 1.96),
+    
     # Combine SE
     se_diff_human_fit = sqrt(se_human^2 + se_fit^2),
     se_diff_human_mouse = sqrt(se_human^2 + se_mouse^2),
@@ -2829,474 +2889,244 @@ pairwise_human_fit_test %>% glimpse()
 pairwise_human_fit_test %>% saveRDS(here("FIT_Mouse2man", "pairwise_human_fit_test.rds"))
 ```
 
-### Compute overall metrics 
+## Get genes
 
-#### No filters
+
+####Top 10 genes
+
 ```{r}
-library(tidymodels)
-library(tidyverse)
 
+pairwise_human_fit_genes_long =  pairwise_human_fit_test %>% 
+  pivot_longer(cols = c(Human, Mouse, `FIT Prediction`),
+               values_to = "l2fc",
+               names_to = "organism") %>% 
+  rename(diff_h2m = human_2_mouse,
+         diff_h2fit = human_2_fit,
+         se_diff_h2fit = se_diff_human_fit,
+         se_diff_h2m = se_diff_human_mouse,
+         z_score_h2fit = z_score_human_fit,
+         z_score_h2m = z_score_human_mouse) %>% 
+  mutate(organism = if_else(organism == "FIT Prediction", "FIT", organism)) %>% 
+  
+  pivot_longer(cols = -c(human_symbol, timepoint, organism),
+               values_to = "value",
+               names_to = "metric") %>% 
+  mutate(
+    organism = case_when(
+      str_detect(metric, "human") ~ "Human",
+      str_detect(metric, "fit") ~ "FIT",
+      str_detect(metric, "mouse") ~ "Mouse",
+      metric == "Human" ~ "Human",
+      metric == "FIT Prediction" ~ "FIT",
+      TRUE ~ organism),
+    metric = str_remove_all(metric, "_?(human|mouse|fit)$"),
+    metric = str_remove_all(metric, "_?(human|mouse|fit)")
+  ) %>% 
+  mutate(organism = case_when(str_detect(metric, "h2m") ~ "Mouse",
+                              str_detect(metric, "h2") ~ "FIT",
+                              T~organism)) 
+
+pairwise_human_fit_genes_wide = pairwise_human_fit_genes_long %>% 
+  pivot_wider(names_from = "metric",
+              values_from = "value", values_fn = mean) %>% 
+  rename(diff_h2fit = diff_h2,
+         effect_size_h2fit = effect_size_h2,
+         se_diff_h2fit = se_diff_h2,
+         z_score_h2fit = z_score_h2,
+         p_value_adj_diff_human = p_value_adj,
+         p_value_diff_human = p_value) 
+ 
+
+top_genes_human = pairwise_human_fit_genes_wide %>% 
+  filter(organism == "Human") %>% 
+  relocate(ci_width,  .after = organism) %>% 
+  group_by(timepoint) %>% 
+  arrange(ci_width) 
+  
+ top_genes_mouse = pairwise_human_fit_genes_wide %>% 
+  filter(organism == "Mouse",
+         human_symbol %in% c(top_genes_human$human_symbol)) %>% 
+  relocate(diff_h2m, p_value_adj_diff_human,ci_width,  .after = organism)  %>% 
+   arrange(ci_width, desc(p_value_adj_diff_human), diff_h2m)
+ 
+ top_genes_fit = pairwise_human_fit_genes_wide %>% 
+  filter(organism == "FIT",
+         human_symbol %in% c(top_genes_human$human_symbol)) %>% 
+  relocate(diff_h2fit, p_value_adj_diff_human, ci_width,  .after = organism)  %>% 
+   arrange(ci_width, desc(p_value_adj_diff_human), diff_h2fit)
+
+top_genes_mouse
+top_genes_fit
+```
+
+```{r fig.height=7, fig.width=8}
+fit_example_human_plot_mouse = 
+  pairwise_human_fit_genes_wide %>% 
+  # rename(l2fc = value) %>% 
+  filter(human_symbol %in% c(top_genes_mouse %>% 
+                               select(human_symbol) %>% 
+                               distinct() %>% 
+                               slice_head(n = 5) %>% 
+                               pull(human_symbol))) %>% 
+  arrange(human_symbol, timepoint) %>% 
+  ggplot() +
+  aes(x = timepoint,
+      y = l2fc,
+      color = organism) +
+  geom_hline(yintercept = 0, color = "gray75", alpha = 1, linetype = 2) +
+  geom_point( position = position_dodge(1)
+             ) +
+  geom_line(aes(group = organism), position = position_dodge2(1)) +
+  facet_wrap(~human_symbol, nrow = 1) +
+  geom_errorbar(aes(ymin = ci_low, 
+                  ymax = ci_high),
+                position =  position_dodge(1)
+                ) +
+  scale_x_continuous(breaks = c(1, 3, 7),minor_breaks = F) +
+    scale_color_manual(
+  values = c(
+    "FIT" = "#CE1800FF", 
+    Mouse = "#263238FF",
+    Human = "#4DBBD5FF"))+
+    theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        strip.text.x = element_text(color = "white"),
+        strip.background = element_rect(fill = "black"), 
+        panel.grid.major.y = element_blank()) +
+  labs(color = "Measure",
+       x = "Time (days)",
+       y = "LogFold-Change",
+       title = "Prediction - Influenza, Fluad Vaccine\nTop 5 MOUSE genes with lowest CI widths and l2fc differences to human l2fc, with highest adjusted p values")
+
+fit_example_human_plot_mouse
+
+
+
+fit_example_human_plot_fit= 
+  pairwise_human_fit_genes_wide %>% 
+  filter(human_symbol %in% c(top_genes_fit %>% 
+                               select(human_symbol) %>% 
+                               distinct() %>% 
+                               slice_head(n = 5) %>% 
+                               pull(human_symbol))) %>% 
+  arrange(human_symbol, timepoint) %>% 
+  ggplot() +
+  aes(x = timepoint,
+      y = l2fc,
+      color = organism) +
+  geom_hline(yintercept = 0, color = "gray75", alpha = 1, linetype = 2) +
+  geom_point( position = position_dodge(1)
+             ) +
+  geom_line(aes(group = organism), position = position_dodge2(1)) +
+  facet_wrap(~human_symbol, nrow = 1) +
+  geom_errorbar(aes(ymin = ci_low, 
+                  ymax = ci_high),
+                position =  position_dodge(1)
+                ) +
+  scale_x_continuous(breaks = c(1, 3, 7),minor_breaks = F) +
+    scale_color_manual(
+  values = c(
+    "FIT" = "#CE1800FF", 
+    Mouse = "#263238FF",
+    Human = "#4DBBD5FF"))+
+    theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        strip.text.x = element_text(color = "white"),
+        strip.background = element_rect(fill = "black"), 
+        panel.grid.major.y = element_blank()) +
+  labs(color = "Measure",
+       x = "Time (days)",
+       y = "LogFold-Change",
+       title = "Top 5 FIT genes with lowest CI widths and l2fc differences to human l2fc, with highest adjusted p values")
+
+
+```
+
+
+
+How many genes are not significantly different from human gene expression? 
+
+```{r fig.height=10, fig.width=8}
+pairwise_human_fit_genes_size_plot = pairwise_human_fit_genes_wide %>% 
+  filter(!is.na(p_value_diff_human)) %>% 
+  mutate(p_value_cutoff = case_when(
+    p_value_diff_human < 0.01 ~ "<0.01",
+    p_value_diff_human < 0.05 ~ "<0.05",
+    p_value_diff_human < 0.10 ~ "<0.10",
+    p_value_diff_human < 0.20 ~ "<0.20",
+    p_value_diff_human < 0.30 ~ "<0.30",
+    p_value_diff_human < 0.40 ~ "<0.40",
+    p_value_diff_human < 0.50 ~ "<0.50",
+    p_value_diff_human < 0.60 ~ "<0.60",
+    p_value_diff_human < 0.70 ~ "<0.70",
+    p_value_diff_human < 0.80 ~ "<0.80",
+    p_value_diff_human < 0.90 ~ "<0.90",
+    p_value_diff_human < 1    ~ "<1",
+    TRUE ~ ">=1")) %>% 
+  group_by(organism, timepoint, p_value_cutoff) %>% 
+  summarize(n = n()) %>% 
+  ungroup() %>% 
+  mutate(timepoint = as.character(timepoint) %>% 
+           fct_relevel(., "1", "3", "7")) %>% 
+  ggplot() + 
+  aes(x = timepoint,
+      y = n, 
+      fill = organism) +
+  geom_col(position = position_dodge2(1)) +
+  geom_point(aes(color = organism),
+             position = position_dodge2(1),
+             size = 0.5) +
+  geom_line(aes(group = organism,
+                color = organism),
+            position = position_dodge2(1)) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  facet_grid(~p_value_cutoff, scales = "free_y") +
+    scale_fill_manual(
+  values = c(
+    "FIT" = "#CE1800FF", 
+    Mouse = "#263238FF",
+    Human = "#4DBBD5FF"))+
+    theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        strip.text.x = element_text(color = "white"),
+        strip.background = element_rect(fill = "black")) +
+  labs(fill = "Organism",
+       x = "Time (days)",
+       y = "Frequency",
+       title = "Frequency of genes by p value cutoff")
+
+
+
+
+fit_example_human_plot_mouse/
+fit_example_human_plot_fit/
+  pairwise_human_fit_genes_size_plot +
+  plot_layout()
+  
+```
+
+
+
+
+## Compute overall metrics 
+Import
+```{r}
 pairwise_human_fit_test = readRDS(here("FIT_Mouse2man", "pairwise_human_fit_test.rds"))
 pairwise_human_fit_test$human_symbol %>% unique() %>% length() #6373
 ```
 
 
+### All genes
+
+#### Calculate metrics
 ```{r}
-metrics_genes_models <- pairwise_human_fit_test %>%
-  dplyr::summarise(
-    RMSE_human2mouse = rmse_vec(Human, Mouse),
-    MAE_human2mouse = mae_vec(Human, Mouse),
-    R2_human2mouse = rsq_vec(Human, Mouse),
-    Spearman_human2mouse = cor(Human, Mouse, method = "spearman"),
-    Pearson_human2mouse = cor(Human, Mouse, method = "pearson"),
-    
-    
-    RMSE_human2fit = rmse_vec(Human, `FIT Prediction`),
-    MAE_human2fit = mae_vec(Human, `FIT Prediction`),
-    R2_human2fit = rsq_vec(Human, `FIT Prediction`),
-    Spearman_human2fit = cor(Human, `FIT Prediction`, method = "spearman"),
-    Pearson_human2fit = cor(Human, `FIT Prediction`, method = "pearson")
-  ) %>%
-  ungroup() %>% 
-  mutate(row = "") %>% 
-  pivot_longer(cols = -row,
-               values_to = "value",
-               names_to = "measure")
 
-metrics_genes_models %>% 
-  arrange(measure, -value)
-```
-
-##### Plots without filters
-```{r fig.height=10, fig.width=10}
-#Effect sizes for mouse and FIT
-effectsizes_h2m_h2fit_plot = pairwise_human_fit_test %>% 
-  ggplot() +
-  aes(x = effect_size_h2m,
-      y = effect_size_h2fit) +
-  geom_point(color = "black") +
-  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
-    theme_vaxgo() +
-  scale_color_npg() +
-  labs(title = "Effect sizes for mouse and FIT")
-  
-#Effect size for FIT vs Human true values
-effectsize_h2fit_human_plot = pairwise_human_fit_test %>% 
-  ggplot() +
-  aes(x = effect_size_h2fit,
-      y = Human) +
-  geom_point(color = "green") +
-  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
-    theme_vaxgo() +
-  scale_color_npg() +
-  labs(title = "Effect size for FIT vs Human true values")
-
-#FIT prediction vs Human true values
-
-fit_human_plot = pairwise_human_fit_test %>% 
-  ggplot() +
-  aes(x = `FIT Prediction`,
-      y = Human) +
-  geom_point(color = "green") +
-  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
-  theme_vaxgo() +
-  scale_color_npg() +
-  labs(title = "FIT prediction vs Human true values")
-
-#Differences Human to FIT vs. True human values
-human2fit_human_plot = pairwise_human_fit_test %>% 
-  ggplot() +
-  aes(x = human_2_fit,
-      y = Human) +
-  geom_point(color = "green") +
-  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
-    theme_vaxgo() +
-  scale_color_npg() +
-  labs(title= "Differences Human to FIT vs. True human values")
-
-#Effect size for Mouse vs Human true values
-effectsize_h2m_human_plot = pairwise_human_fit_test %>% 
-  ggplot() +
-  aes(x = effect_size_h2m,
-      y = Human) +
-  geom_point(color = "blue") +
-  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
-  scale_color_npg() +
-    theme_vaxgo() +
-  scale_color_npg() +
-  labs(title = "Effect size for Mouse vs Human true values")
-
-
-#Mouse vs Human gene expression
-mouse_human_plot = pairwise_human_fit_test %>% 
-  ggplot() +
-  aes(x = Mouse,
-      y = Human) +
-  geom_point(color = "blue") +
-  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
-  scale_color_npg() +
-  theme_vaxgo() +
-  scale_color_npg() +
-  labs(title ="Mouse vs Human gene expression")
-
-#Differences Human to Mouse vs Human true value
-human_2_mouse_human_plot = pairwise_human_fit_test %>% 
-  ggplot() +
-  aes(x = human_2_mouse,
-      y = Human) +
-  geom_point(color = "blue") +
-  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
-  theme_vaxgo() +
-  scale_color_npg() +
-  labs(title ="Differences Human to Mouse vs Human true value")
-
-
-
-effectsizes_h2m_h2fit_plot + effectsize_h2fit_human_plot + fit_human_plot + human2fit_human_plot + effectsize_h2m_human_plot + mouse_human_plot + human_2_mouse_human_plot
- 
-
-```
-#### With filters
-Import
-```{r}
-pairwise_human_fit_test = readRDS(here("FIT_Mouse2man", "pairwise_human_fit_test.rds"))
-```
-
-
-
-##### Compute all (doesn't work)
-```{r message=FALSE, warning=FALSE}
-library(dplyr)
 library(yardstick)
-
-# Data frame de combinações de filtros
-filter_conditions <- expand_grid(
-  padj_mouse = c(0.01, 0.05, 0.1, 0.25),
-  padj_fit = c(0.01, 0.05, 0.1, 0.25),
-  expr_cutoff = c(0, 0.25, 0.5),
-  ci_width_mouse_cutoff = c(1, 1.5, 2),
-  ci_width_fit_cutoff = c(1, 1.5, 2),
-  timepoint = c(1, 3, 7)
-)
-
-# Aplicando os filtros e calculando as métricas
-filter_conditions_results <- filter_conditions %>%
-  rowwise() %>%
-  do({
-    fc <- .
-    filtered_data <- pairwise_human_fit_test %>%
-      filter(
-        p_value_mouse_adj < fc$padj_mouse,
-        p_value_fit_adj < fc$padj_fit,
-        Human > fc$expr_cutoff,
-        Mouse > fc$expr_cutoff,
-        `FIT Prediction` > fc$expr_cutoff,
-        ci_width_mouse <= fc$ci_width_mouse_cutoff,
-        ci_width_fit <= fc$ci_width_fit_cutoff,
-        ci_width_human <= 2,
-        timepoint == fc$timepoint
-      )
-
-    if (nrow(filtered_data) >= 2) {
-      metrics <- filtered_data %>%
-        summarise(
-          n_genes = n(),
-          RMSE_human2mouse = rmse_vec(Human, Mouse),
-          MAE_human2mouse = mae_vec(Human, Mouse),
-          R2_human2mouse = rsq_vec(Human, Mouse),
-          Spearman_human2mouse = cor(Human, Mouse, method = "spearman"),
-          Pearson_human2mouse = cor(Human, Mouse, method = "pearson"),
-          
-          RMSE_human2fit = rmse_vec(Human, `FIT Prediction`),
-          MAE_human2fit = mae_vec(Human, `FIT Prediction`),
-          R2_human2fit = rsq_vec(Human, `FIT Prediction`),
-          Spearman_human2fit = cor(Human, `FIT Prediction`, method = "spearman"),
-          Pearson_human2fit = cor(Human, `FIT Prediction`, method = "pearson")
-        )
-    } else {
-      metrics <- tibble(
-        n_genes = 0,
-        RMSE_human2mouse = NA, MAE_human2mouse = NA, R2_human2mouse = NA,
-        Spearman_human2mouse = NA, Pearson_human2mouse = NA,
-        RMSE_human2fit = NA, MAE_human2fit = NA, R2_human2fit = NA,
-        Spearman_human2fit = NA, Pearson_human2fit = NA
-      )
-    }
-
-    bind_cols(fc, metrics)
-  }) %>%
-  ungroup()
-
-filter_conditions_results
-```
-
-
-```{r}
-filter_conditions_results %>% 
-  mutate(across(padj_mouse:timepoint, as.character)) %>% 
-  select(padj_mouse, expr_cutoff, timepoint, RMSE_human2mouse) %>% 
-  distinct() %>% 
-  drop_na() %>% 
-  ggplot() +
-  aes(x = expr_cutoff,
-      y = RMSE_human2mouse) +
-  geom_point() +
-  facet_grid(~padj_mouse~timepoint~ci_width_mouse_cutoff)
-```
-
-
-##### Vary padj and expr cutoff
-
-Mouse
-```{r}
-library(dplyr)
-library(yardstick)
-
-filter_conditions_mouse <- expand_grid(
-  padj_mouse = c(0.01, 0.05, seq(0.1, 1, by = 0.1)),
-  expr_cutoff = c(0.01, seq(0.05, 0.5, by = 0.05), 0.75, 1),
-  ci_percentile = c(0.1, 0.2, 0.3, 0.5),
-  timepoint = c(1, 3, 7)
-)
-
-filter_conditions_results_mouse <- filter_conditions_mouse %>%
-  rowwise() %>%
-  do({
-    fc <- .
-    
-    # Filtrar apenas dados do timepoint atual
-    data_timepoint <- pairwise_human_fit_test %>%
-      filter(timepoint == fc$timepoint)
-
-    # Calcular o cutoff do percentil escolhido
-    ci_cutoff <- quantile(data_timepoint$ci_width_mouse, probs = fc$ci_percentile, na.rm = TRUE)
-
-    # Aplicar filtros
-    filtered_data <- data_timepoint %>%
-      filter(
-        p_value_mouse_adj < fc$padj_mouse,
-        abs(`Mouse`) > fc$expr_cutoff,
-        ci_width_mouse <= ci_cutoff
-      )
-
-    if (nrow(filtered_data) >= 2) {
-      metrics <- filtered_data %>%
-        summarise(
-          n_genes = n(),
-          RMSE = rmse_vec(Human, Mouse),
-          MAE = mae_vec(Human, Mouse),
-          R2 = rsq_vec(Human, Mouse),
-          Spearman = cor(Human, Mouse, method = "spearman"),
-          Pearson = cor(Human, Mouse, method = "pearson")
-        )
-    } else {
-      metrics <- tibble(
-        n_genes = 0,
-        RMSE = NA, MAE = NA, R2 = NA,
-        Spearman = NA, Pearson = NA
-      )
-    }
-
-    bind_cols(fc, tibble(ci_width_cutoff = ci_cutoff), metrics)
-  }) %>%
-  ungroup() %>%
-  mutate(organism = "Mouse") %>%
-  rename(padj_cutoff = padj_mouse) %>% 
-  mutate(ci_percentile = paste0(ci_percentile * 100, "%"))
-
-filter_conditions_results_mouse  
-  
-```
-
-FIT
-```{r}
-filter_conditions_fit <- expand_grid(
-  padj_fit = c(0.01, 0.05, seq(0.1, 1, by = 0.1)),
-  expr_cutoff = c(0.01, seq(0.05, 0.5, by = 0.05), 0.75, 1),
-  ci_percentile = c(0.1, 0.2, 0.3, 0.5),
-  timepoint = c(1, 3, 7)
-)
-
-filter_conditions_results_fit <- filter_conditions_fit %>%
-  rowwise() %>%
-  do({
-    fc <- .
-    
-    # Filtrar apenas dados do timepoint atual
-    data_timepoint <- pairwise_human_fit_test %>%
-      filter(timepoint == fc$timepoint)
-
-    # Calcular o cutoff do percentil escolhido
-    ci_cutoff <- quantile(data_timepoint$ci_width_fit, probs = fc$ci_percentile, na.rm = TRUE)
-
-    # Aplicar filtros
-    filtered_data <- data_timepoint %>%
-      filter(
-        p_value_fit_adj < fc$padj_fit,
-        abs(`FIT Prediction`) > fc$expr_cutoff,
-        ci_width_fit <= ci_cutoff
-      )
-
-    if (nrow(filtered_data) >= 2) {
-      metrics <- filtered_data %>%
-        summarise(
-          n_genes = n(),
-          RMSE = rmse_vec(Human, `FIT Prediction`),
-          MAE = mae_vec(Human, `FIT Prediction`),
-          R2 = rsq_vec(Human, `FIT Prediction`),
-          Spearman = cor(Human, `FIT Prediction`, method = "spearman"),
-          Pearson = cor(Human, `FIT Prediction`, method = "pearson")
-        )
-    } else {
-      metrics <- tibble(
-        n_genes = 0,
-        RMSE = NA, MAE = NA, R2 = NA,
-        Spearman = NA, Pearson = NA
-      )
-    }
-
-    bind_cols(fc, tibble(ci_width_cutoff = ci_cutoff), metrics)
-  }) %>%
-  ungroup() %>%
-  mutate(organism = "FIT") %>%
-  rename(padj_cutoff = padj_fit) %>% 
-  mutate(ci_percentile = paste0(ci_percentile * 100, "%"))
-
-filter_conditions_results_fit
-  
-```
-
-Merge
-```{r}
-
-metrics_FIT_M_vs_FIT_filtered = filter_conditions_results_mouse %>% 
-  bind_rows(filter_conditions_results_fit) %>% 
-    mutate(filter = if_else(organism == "FIT", paste0("FIT CI ", ci_percentile), NA),
-         filter = if_else(organism == "Mouse", paste0("Mouse CI ", ci_percentile), filter)) %>% 
-  select(organism,filter, everything())
-
-metrics_FIT_M_vs_FIT_filtered$filter %>% unique()
-```
-
-```{r fig.height=8, fig.width=12}
-
-metrics_FIT_M_vs_FIT_filtered_RMSE_plot = metrics_FIT_M_vs_FIT_filtered %>%
-  mutate(across(ci_width_cutoff:timepoint, as.character)) %>%
-  ggplot(aes(x = expr_cutoff, y = RMSE)) +
-  geom_line(aes(group = filter,
-                color = filter)) +
-  geom_point(aes(color = filter),
-             size = 0.5) +
-  ggh4x::facet_grid2(
-    rows = vars(timepoint),
-    cols = vars(padj_cutoff),
-    switch = "both",
-    labeller = labeller(
-      timepoint = as_labeller(c("1" = "Day 1", 
-                                "3" = "Day 3", 
-                                "7" = "Day 7")),
-      padj_cutoff = function(x) paste("padj:", x)  # Personalização aqui
-    )
-  ) +
-  scale_x_continuous(n.breaks = 4) +
-  theme_vaxgo() +
-  theme(
-    strip.text = element_text(size = 10),
-    strip.placement = "outside",
-    strip.background = element_blank(),
-    axis.text.x = element_text(size = 8, angle = 0),
-    axis.text.y = element_text(size = 8)
-  ) +
-  labs(
-    title = "RMSE",
-    x = "L2FC Cutoff",
-    y = "RMSE"
-  ) +
-  scale_color_manual(values = c(
-    "Mouse CI 10%" = "#c6dbef",
-    "Mouse CI 20%" = "#9ecae1",
-    "Mouse CI 30%"   = "#6baed6",
-    "Mouse CI 50%" = "#3182bd",
-    "FIT CI 10%"   = "#fcbba1",
-    "FIT CI 20%"   = "#fc9272",
-    "FIT CI 30%"     = "#fb6a4a",
-    "FIT CI 50%"   = "#de2d26"
-  ))
-
-
-
-
-metrics_FIT_M_vs_FIT_filtered_R2_plot = metrics_FIT_M_vs_FIT_filtered %>%
-  mutate(across(ci_width_cutoff:timepoint, as.character)) %>%
-  ggplot(aes(x = expr_cutoff, y = R2)) +
-  geom_line(aes(group = filter,
-                color = filter)) +
-  geom_point(aes(color = filter),
-             size = 0.5) +
-  ggh4x::facet_grid2(
-    rows = vars(timepoint),
-    cols = vars(padj_cutoff),
-    switch = "both",
-    labeller = labeller(
-      timepoint = as_labeller(c("1" = "Day 1", 
-                                "3" = "Day 3", 
-                                "7" = "Day 7")),
-      padj_cutoff = function(x) paste("padj:", x)  # Personalização aqui
-    )
-  ) +
-  scale_x_continuous(n.breaks = 4) +
-  theme_vaxgo() +
-  theme(
-    strip.text = element_text(size = 10),
-    strip.placement = "outside",
-    strip.background = element_blank(),
-    axis.text.x = element_text(size = 8, angle = 0),
-    axis.text.y = element_text(size = 8)
-  ) +
-  labs(
-    title = "R2",
-    x = "L2FC Cutoff",
-    y = "R2"
-  ) +
-  scale_color_manual(values = c(
-    "Mouse CI 10%" = "#c6dbef",
-    "Mouse CI 20%" = "#9ecae1",
-    "Mouse CI 30%"   = "#6baed6",
-    "Mouse CI 50%" = "#3182bd",
-    "FIT CI 10%"   = "#fcbba1",
-    "FIT CI 20%"   = "#fc9272",
-    "FIT CI 30%"     = "#fb6a4a",
-    "FIT CI 50%"   = "#de2d26"
-  ))
-
-
-
-metrics_FIT_tuning_params_plots = metrics_FIT_M_vs_FIT_filtered_RMSE_plot / 
-  metrics_FIT_M_vs_FIT_filtered_R2_plot +
-  plot_layout(axes = "collect",
-              guides = "collect")
-
-metrics_FIT_tuning_params_plots
-# metrics_FIT_tuning_params_plots %>% 
-#   ggsave(filename = here("Figures", "metrics_FIT_tuning_params_plots.png"), height = 8, width = 12)
-
-```
-
-
-
-
-
-
-### DEGs
-
-```{r}
-
-
 #FIT
 filter_conditions_fit <- expand_grid(
   padj_fit = c(0.01, 0.05, seq(0.1, 1, by = 0.1)),
   expr_cutoff = c(0.01, seq(0.05, 0.5, by = 0.05), 0.75, 1),
-  ci_percentile = c(0.1, 0.2, 0.3, 0.5),
+  ci_percentile = c(0.1, 0.3, 0.5, 1.0),
   timepoint = c(1, 3, 7)
 )
 
@@ -3367,7 +3197,7 @@ filter_conditions_results_fit_degs %>%
 filter_conditions_mouse <- expand_grid(
   padj_mouse = c(0.01, 0.05, seq(0.1, 1, by = 0.1)),
   expr_cutoff = c(0.01, seq(0.05, 0.5, by = 0.05), 0.75, 1),
-  ci_percentile = c(0.1, 0.2, 0.3, 0.5),
+  ci_percentile = c(0.1, 0.3, 0.5, 1.0),
   timepoint = c(1, 3, 7)
 )
 
@@ -3436,31 +3266,56 @@ filter_conditions_results_mouse_degs %>%
 
 Merge
 ```{r}
-
 metrics_FIT_M_vs_FIT_filtered_DEGs = filter_conditions_results_mouse_degs %>% 
   bind_rows(filter_conditions_results_fit_degs) %>% 
   mutate(filter = if_else(organism == "FIT", paste0("FIT CI ", ci_percentile), NA),
          filter = if_else(organism == "Mouse", paste0("Mouse CI ", ci_percentile), filter)) %>% 
-  select(organism,filter, everything())
+  select(organism,filter, everything()) %>% 
+  filter(expr_cutoff <= 0.5)
 
-metrics_FIT_M_vs_FIT_filtered_DEGs
+metrics_FIT_M_vs_FIT_filtered_DEGs %>% 
+  saveRDS(here("FIT_Mouse2man", "metrics_FIT_M_vs_FIT_filtered_DEGs.rds"))
+```
 
+#### Import metrics
+```{r}
+
+metrics_FIT_M_vs_FIT_filtered_DEGs =  readRDS(here("FIT_Mouse2man", "metrics_FIT_M_vs_FIT_filtered_DEGs.rds"))
+
+metrics_FIT_M_vs_FIT_filtered_DEGs$filter %>% unique()
+
+#Get best combinations
+metrics_FIT_M_vs_FIT_filtered_DEGs %>% 
+  group_by(organism) %>% 
+  slice_min(RMSE, n = 1) %>% 
+  slice_min(padj_cutoff, n = 1)
 
 metrics_FIT_M_vs_FIT_filtered_DEGs %>% 
   group_by(organism) %>% 
-  arrange(RMSE) %>% 
-  slice_min(RMSE, n = 10)
+  slice_max(R2, n = 5) %>% 
+  slice_min(padj_cutoff, n = 5) 
 ```
 
-```{r fig.height=8, fig.width=12}
+#### Plot regression metrics
 
+
+#### RMSE
+```{r fig.height=12, fig.width=12}
 metrics_FIT_M_vs_FIT_filtered_RMSE_plot = metrics_FIT_M_vs_FIT_filtered_DEGs %>%
   mutate(across(ci_width_cutoff:timepoint, as.character)) %>%
+  mutate(filter = fct_relevel(filter,  "Mouse CI 10%", "Mouse CI 30%", "Mouse CI 50%","Mouse CI 100%",
+                              "FIT CI 10%","FIT CI 30%", "FIT CI 50%", "FIT CI 100%")) %>% 
   ggplot(aes(x = expr_cutoff, y = RMSE)) +
   geom_line(aes(group = filter,
                 color = filter)) +
-  geom_point(aes(color = filter),
-             size = 0.5) +
+  geom_point(aes(color = filter,
+                 size = n_genes),
+             # alpha = 1,
+             pch = 21,
+             fill = NA,
+             width = 0.1,
+             # size = 0.5
+             ) +
   ggh4x::facet_grid2(
     rows = vars(timepoint),
     cols = vars(padj_cutoff),
@@ -3473,41 +3328,52 @@ metrics_FIT_M_vs_FIT_filtered_RMSE_plot = metrics_FIT_M_vs_FIT_filtered_DEGs %>%
     )
   ) +
   scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
+  scale_size(range = c(0.1, 2), breaks = c(10, 100, 500, 1000)) +
   theme_vaxgo() +
   theme(
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     strip.background = element_blank(),
     axis.text.x = element_text(size = 8, angle = 0),
-    axis.text.y = element_text(size = 8)
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines")
   ) +
   labs(
     title = "RMSE",
     x = "L2FC Cutoff",
     y = "RMSE",
-    color = ""
+    color = "",
+    size = "Number of genes"
   ) +
   scale_color_manual(values = c(
-    "Mouse CI 10%" = "#c6dbef",
-    "Mouse CI 20%" = "#9ecae1",
-    "Mouse CI 30%"   = "#6baed6",
-    "Mouse CI 50%" = "#3182bd",
-    "FIT CI 10%"   = "#fcbba1",
-    "FIT CI 20%"   = "#fc9272",
-    "FIT CI 30%"     = "#fb6a4a",
-    "FIT CI 50%"   = "#de2d26"
+    "Mouse CI 10%" = "#263238FF",
+    "Mouse CI 30%" = "#546E7AFF",
+    "Mouse CI 50%"   = "#90A4AEFF",
+    "Mouse CI 100%" = "#CFD8DCFF",
+    "FIT CI 10%"   = "#7E0500FF",
+    "FIT CI 30%"   = "#CE1800FF",
+    "FIT CI 50%"     = "#FFA726FF",
+    "FIT CI 100%"   = "#FFE0B2FF"
   ))
+```
 
-
-
-
+#### R2
+```{r fig.height=12, fig.width=12}
 metrics_FIT_M_vs_FIT_filtered_R2_plot = metrics_FIT_M_vs_FIT_filtered_DEGs %>%
   mutate(across(ci_width_cutoff:timepoint, as.character)) %>%
+  mutate(filter = fct_relevel(filter,  "Mouse CI 10%", "Mouse CI 30%", "Mouse CI 50%","Mouse CI 100%",
+                              "FIT CI 10%","FIT CI 30%", "FIT CI 50%", "FIT CI 100%")) %>% 
   ggplot(aes(x = expr_cutoff, y = R2)) +
   geom_line(aes(group = filter,
                 color = filter)) +
-  geom_point(aes(color = filter),
-             size = 0.5) +
+  geom_point(aes(color = filter,
+                 size = n_genes),
+             # alpha = 1,
+             pch = 21,
+             fill = NA,
+             # size = 0.5
+             ) +
   ggh4x::facet_grid2(
     rows = vars(timepoint),
     cols = vars(padj_cutoff),
@@ -3519,59 +3385,304 @@ metrics_FIT_M_vs_FIT_filtered_R2_plot = metrics_FIT_M_vs_FIT_filtered_DEGs %>%
       padj_cutoff = function(x) paste("padj:", x)  
     )
   ) +
+scale_size(range = c(0.1, 2), breaks = c(10, 100, 500, 1000)) +
   scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
   theme_vaxgo() +
   theme(
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     strip.background = element_blank(),
     axis.text.x = element_text(size = 8, angle = 0),
-    axis.text.y = element_text(size = 8)
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
   ) +
   labs(
     title = "R2",
     x = "L2FC Cutoff",
     y = "R2",
-    color = ""
+    color = "",
+    size = "Number of genes"
   ) +
   scale_color_manual(values = c(
-    "Mouse CI 10%" = "#c6dbef",
-    "Mouse CI 20%" = "#9ecae1",
-    "Mouse CI 30%"   = "#6baed6",
-    "Mouse CI 50%" = "#3182bd",
-    "FIT CI 10%"   = "#fcbba1",
-    "FIT CI 20%"   = "#fc9272",
-    "FIT CI 30%"     = "#fb6a4a",
-    "FIT CI 50%"   = "#de2d26"
+    "Mouse CI 10%" = "#263238FF",
+    "Mouse CI 30%" = "#546E7AFF",
+    "Mouse CI 50%"   = "#90A4AEFF",
+    "Mouse CI 100%" = "#CFD8DCFF",
+    "FIT CI 10%"   = "#7E0500FF",
+    "FIT CI 30%"   = "#CE1800FF",
+    "FIT CI 50%"     = "#FFA726FF",
+    "FIT CI 100%"   = "#FFE0B2FF"
   ))
+```
 
+#### Pearson correlation
+```{r fig.height=12, fig.width=12}
+metrics_FIT_M_vs_FIT_filtered_Pearson_plot = metrics_FIT_M_vs_FIT_filtered_DEGs %>%
+  mutate(across(ci_width_cutoff:timepoint, as.character)) %>%
+  mutate(filter = fct_relevel(filter,  "Mouse CI 10%", "Mouse CI 30%", "Mouse CI 50%","Mouse CI 100%",
+                              "FIT CI 10%","FIT CI 30%", "FIT CI 50%", "FIT CI 100%")) %>% 
+  ggplot(aes(x = expr_cutoff, y = Pearson)) +
+  geom_line(aes(group = filter,
+                color = filter)) +
+  geom_point(aes(color = filter,
+                 size = n_genes),
+             # alpha = 1,
+             pch = 21,
+             fill = NA,
+             # size = 0.5
+             ) +
+  ggh4x::facet_grid2(
+    rows = vars(timepoint),
+    cols = vars(padj_cutoff),
+    switch = "both", 
+    labeller = labeller(
+      timepoint = as_labeller(c("1" = "Day 1", 
+                                "3" = "Day 3", 
+                                "7" = "Day 7")),
+      padj_cutoff = function(x) paste("padj:", x)  
+    )
+  ) +
+  scale_size(range = c(0.1, 2), breaks = c(10, 100, 500, 1000)) +
+  scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
+  ) +
+  labs(
+    title = "Pearson correlation",
+    x = "L2FC Cutoff",
+    y = "R",
+    color = "",
+    size = "Number of genes"
+  ) +
+  scale_color_manual(values = c(
+    "Mouse CI 10%" = "#263238FF",
+    "Mouse CI 30%" = "#546E7AFF",
+    "Mouse CI 50%"   = "#90A4AEFF",
+    "Mouse CI 100%" = "#CFD8DCFF",
+    "FIT CI 10%"   = "#7E0500FF",
+    "FIT CI 30%"   = "#CE1800FF",
+    "FIT CI 50%"     = "#FFA726FF",
+    "FIT CI 100%"   = "#FFE0B2FF"
+  ))
+```
 
+#### Spearman
+```{r fig.height=12, fig.width=12}
+metrics_FIT_M_vs_FIT_filtered_Spearman_plot = metrics_FIT_M_vs_FIT_filtered_DEGs %>%
+  mutate(across(ci_width_cutoff:timepoint, as.character)) %>%
+  mutate(filter = fct_relevel(filter,  "Mouse CI 10%", "Mouse CI 30%", "Mouse CI 50%","Mouse CI 100%",
+                              "FIT CI 10%","FIT CI 30%", "FIT CI 50%", "FIT CI 100%")) %>% 
+  ggplot(aes(x = expr_cutoff, y = Spearman)) +
+  geom_line(aes(group = filter,
+                color = filter)) +
+  geom_point(aes(color = filter,
+                 size = n_genes),
+             # alpha = 1,
+             pch = 21,
+             fill = NA,
+             # size = 0.5
+             ) +
+  ggh4x::facet_grid2(
+    rows = vars(timepoint),
+    cols = vars(padj_cutoff),
+    switch = "both",
+    labeller = labeller(
+      timepoint = as_labeller(c("1" = "Day 1", 
+                                "3" = "Day 3", 
+                                "7" = "Day 7")),
+      padj_cutoff = function(x) paste("padj:", x)  
+    )
+  ) +
+  scale_size(range = c(0.1, 2), breaks = c(10, 100, 500, 1000)) +
+  scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
+  ) +
+  labs(
+    title = "Spearman correlation",
+    x = "L2FC Cutoff",
+    y = "Rho",
+    color = "",
+    size = "Number of genes"
+  ) +
+  scale_color_manual(values = c(
+    "Mouse CI 10%" = "#263238FF",
+    "Mouse CI 30%" = "#546E7AFF",
+    "Mouse CI 50%"   = "#90A4AEFF",
+    "Mouse CI 100%" = "#CFD8DCFF",
+    "FIT CI 10%"   = "#7E0500FF",
+    "FIT CI 30%"   = "#CE1800FF",
+    "FIT CI 50%"     = "#FFA726FF",
+    "FIT CI 100%"   = "#FFE0B2FF"
+  ))
+```
 
+#### Merge
+```{r fig.height=12, fig.width=12}
 metrics_FIT_tuning_params_plots = metrics_FIT_M_vs_FIT_filtered_RMSE_plot / 
-  metrics_FIT_M_vs_FIT_filtered_R2_plot +
+  metrics_FIT_M_vs_FIT_filtered_R2_plot/
+  metrics_FIT_M_vs_FIT_filtered_Spearman_plot/
+  metrics_FIT_M_vs_FIT_filtered_Pearson_plot +
   plot_layout(axes = "collect",
               guides = "collect")
 
 metrics_FIT_tuning_params_plots
-metrics_FIT_tuning_params_plots %>% 
-  ggsave(filename = here("Figures", "metrics_FIT_tuning_params_DEGs_plots.png"), height = 6, width = 12)
+metrics_FIT_tuning_params_plots %>%
+  ggsave(filename = here("Figures", "metrics_FIT_tuning_params_DEGs_plots.png"), height = 12, width = 12)
 
 ```
 
 
 
 
-### Immune/Not immune
+#### Plot correlation
+```{r fig.height=12, fig.width=6}
+human_vs_mouse_corr = pairwise_human_fit_test %>% 
+mutate(pval_cuts = case_when(
+  pval_mouse_adj <= 0.01 ~ "<0.01",
+  pval_mouse_adj <= 0.05 ~ "<0.05",
+  pval_mouse_adj <= 0.10 ~ "<0.10",
+  pval_mouse_adj <= 0.25 ~ "<0.25",
+  TRUE ~ ">0.25"
+)) %>% 
+  ggplot() +
+  aes(x = Mouse,
+      y = Human) +
+  geom_point(alpha = 0.5,
+             fill = NA,
+             pch = 21,
+             show.legend = F,
+             color = "#90A4AEFF") +
+  geom_smooth(method = 'lm', se = TRUE, color = "black") +
+  facet_grid(~timepoint~pval_cuts, scales = "free_x") +
+    scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
+  theme_vaxgo() +
+  labs(title ="Mouse vs Human gene expression") +
+    theme(
+      legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
+  )
 
 
+fit_vs_human_corr = pairwise_human_fit_test %>% 
+mutate(pval_cuts = case_when(
+  pval_fit_adj <= 0.01 ~ "<0.01",
+  pval_fit_adj <= 0.05 ~ "<0.05",
+  pval_fit_adj <= 0.10 ~ "<0.10",
+  pval_fit_adj <= 0.25 ~ "<0.25",
+  TRUE ~ ">0.25"
+)) %>% 
+  ggplot() +
+  aes(x = `FIT Prediction`,
+      y = Human) +
+  geom_point(alpha = 0.5,
+             fill = NA,
+             pch = 21,
+             show.legend = F,
+             color = "#CE1800FF") +
+  geom_smooth(method = 'lm', se = TRUE, color = "black") +
+    scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
+  scale_color_brewer(direction = -1, palette = "Greys") +
+  scale_fill_brewer(direction = -1, palette = "Greys") +
+  theme_vaxgo() +
+  facet_grid(~timepoint~pval_cuts, scales = "free_x") +
+  labs(title ="FIT prediction vs Human gene expression") +
+    theme(
+      legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
+  )
+
+
+fit_vs_mouse_corr = pairwise_human_fit_test %>% 
+mutate(pval_cuts = case_when(
+  pval_mouse_adj <= 0.01 ~ "<0.01",
+  pval_mouse_adj <= 0.05 ~ "<0.05",
+  pval_mouse_adj <= 0.10 ~ "<0.10",
+  pval_mouse_adj <= 0.25 ~ "<0.25",
+  TRUE ~ ">0.25"
+)) %>% 
+  ggplot() +
+  aes(x = Mouse,
+      y = `FIT Prediction`) +
+  geom_point(alpha = 0.5,
+             fill = NA,
+             pch = 21,
+             show.legend = F,
+             color = "#3182bd") +
+  geom_smooth(method = 'lm', se = TRUE, color = "black") +
+  facet_grid(~timepoint~pval_cuts, scales = "free_x") +
+    scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
+  theme_vaxgo() +
+  labs(title ="FIT prediction vs Mouse") +
+    theme(
+      legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
+  )
+
+pairwise_human_fit_test_corr_plots = human_vs_mouse_corr / 
+  fit_vs_human_corr / 
+  fit_vs_mouse_corr +
+  plot_layout(guides =  "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+
+pairwise_human_fit_test_corr_plots %>% 
+  ggsave(filename = here("Figures", "pairwise_human_fit_test_corr_plots.png"), width = 6, height = 12)
+
+pairwise_human_fit_test_corr_plots
+```
+
+
+
+
+
+
+
+### Immune genes
+
+Import
 ```{r}
 ImmuneGO_Mouse_Manual <- read_excel(here("VaxGO", "ImmuneGO_Mouse.xlsx"))
 
 ImmuneGO_Mouse_Manual_genes = ImmuneGO_Mouse_Manual %>% 
   separate_rows(genes)
+
+library(yardstick)
 ```
-
-
+#### Calculate metrics
 ```{r}
 immune_genes <- unique(ImmuneGO_Mouse_Manual_genes$genes) %>% str_to_upper()
 
@@ -3579,7 +3690,7 @@ immune_genes <- unique(ImmuneGO_Mouse_Manual_genes$genes) %>% str_to_upper()
 filter_conditions_fit <- expand_grid(
   padj_fit = c(0.01, 0.05, seq(0.1, 1, by = 0.1)),
   expr_cutoff = c(0.01, seq(0.05, 0.5, by = 0.05), 0.75, 1),
-  ci_percentile = c(0.1, 0.2, 0.3, 0.5),
+  ci_percentile = c(0.1, 0.3, 0.5, 1.0),
   timepoint = c(1, 3, 7)
 )
 
@@ -3681,18 +3792,12 @@ filter_conditions_results_fit_degs_nonimmune <- filter_conditions_fit %>%
 filter_conditions_results_fit_degs_nonimmune
   
 
-```
-
-
-```{r}
-# Vetor com nomes dos genes imunes em letras maiúsculas
-immune_genes <- unique(ImmuneGO_Mouse_Manual_genes$genes) %>% str_to_upper()
 
 #Mouse
 filter_conditions_mouse <- expand_grid(
   padj_mouse = c(0.01, 0.05, seq(0.1, 1, by = 0.1)),
   expr_cutoff = c(0.01, seq(0.05, 0.5, by = 0.05), 0.75, 1),
-  ci_percentile = c(0.1, 0.2, 0.3, 0.5),
+  ci_percentile = c(0.1, 0.3, 0.5, 1.0),
   timepoint = c(1, 3, 7)
 )
 
@@ -3801,16 +3906,23 @@ filter_conditions_results_mouse_degs_nonimmune
 
 Merge
 ```{r}
-
 metrics_FIT_M_vs_FIT_filtered_DEGs_Immune = filter_conditions_results_mouse_degs_immune %>% 
   bind_rows(filter_conditions_results_mouse_degs_nonimmune,
             filter_conditions_results_fit_degs_nonimmune,
             filter_conditions_results_fit_degs_immune) %>% 
   mutate(filter = if_else(str_detect(organism, "FIT"), paste0(organism, " CI ", ci_percentile), NA),
          filter = if_else(str_detect(organism, "Mouse"), paste0(organism, " CI ", ci_percentile), filter)) %>% 
-  select(organism,filter, everything())
+  select(organism,filter, everything()) %>% 
+  filter(expr_cutoff <= 0.5)
 
 metrics_FIT_M_vs_FIT_filtered_DEGs_Immune
+
+metrics_FIT_M_vs_FIT_filtered_DEGs_Immune %>% 
+  saveRDS(here("FIT_Mouse2man", "metrics_FIT_M_vs_FIT_filtered_DEGs_Immune.rds"))
+
+
+metrics_FIT_M_vs_FIT_filtered_DEGs_Immune = metrics_FIT_M_vs_FIT_filtered_DEGs_Immune %>% 
+  filter(ci_percentile %in% c("30%", "100%"))
 
 
 metrics_FIT_M_vs_FIT_filtered_DEGs_Immune %>% 
@@ -3826,6 +3938,9 @@ metrics_FIT_M_vs_FIT_filtered_DEGs_Immune %>%
 
 ```
 
+
+
+#### RMSE
 ```{r fig.height=8, fig.width=12}
 metrics_FIT_M_vs_FIT_filtered_RMSE_plot_non_immune = metrics_FIT_M_vs_FIT_filtered_DEGs_Immune %>%
   filter(str_detect(organism,"Non_Immune")) %>% 
@@ -3833,8 +3948,13 @@ metrics_FIT_M_vs_FIT_filtered_RMSE_plot_non_immune = metrics_FIT_M_vs_FIT_filter
   ggplot(aes(x = expr_cutoff, y = RMSE)) +
   geom_line(aes(group = filter,
                 color = filter)) +
-  geom_point(aes(color = filter),
-             size = 0.5) +
+  geom_point(aes(color = filter,
+                 size = n_genes),
+             # alpha = 1,
+             pch = 21,
+             fill = NA,
+             # size = 0.5
+             ) +
   ggh4x::facet_grid2(
     rows = vars(timepoint),
     cols = vars(padj_cutoff),
@@ -3846,14 +3966,17 @@ metrics_FIT_M_vs_FIT_filtered_RMSE_plot_non_immune = metrics_FIT_M_vs_FIT_filter
       padj_cutoff = function(x) paste("padj:", x)  
     )
   ) +
+  scale_size(range = c(0.1, 2), breaks = c(10, 100, 500, 1000)) +
   scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
   theme_vaxgo() +
   theme(
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     strip.background = element_blank(),
     axis.text.x = element_text(size = 8, angle = 0),
-    axis.text.y = element_text(size = 8)
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
   ) +
   labs(
     title = "RMSE - Non-immune genes",
@@ -3862,15 +3985,12 @@ metrics_FIT_M_vs_FIT_filtered_RMSE_plot_non_immune = metrics_FIT_M_vs_FIT_filter
     color = ""
   ) +
   scale_color_manual(values = c(
-    "Mouse_Non_Immune CI 10%"  = "#c6dbef",
-    "Mouse_Non_Immune CI 20%" = "#9ecae1",
-    "Mouse_Non_Immune CI 30%"   = "#6baed6",
-    "Mouse_Non_Immune CI 50%" = "#3182bd",
-    "FIT_Non_Immune CI 10%"   = "#fcbba1",
-    "FIT_Non_Immune CI 20%"   = "#fc9272",
-    "FIT_Non_Immune CI 30%"     = "#fb6a4a",
-    "FIT_Non_Immune CI 50%"   = "#de2d26"
+    "Mouse_Non_Immune CI 30%"  = "#263238FF",
+    "Mouse_Non_Immune CI 100%" = "#90A4AEFF",
+    "FIT_Non_Immune CI 30%"   = "#CE1800FF",
+    "FIT_Non_Immune CI 100%"   = "#FFA726FF"
   ))
+
 
 
 metrics_FIT_M_vs_FIT_filtered_RMSE_plot_immune = metrics_FIT_M_vs_FIT_filtered_DEGs_Immune %>%
@@ -3879,8 +3999,13 @@ metrics_FIT_M_vs_FIT_filtered_RMSE_plot_immune = metrics_FIT_M_vs_FIT_filtered_D
   ggplot(aes(x = expr_cutoff, y = RMSE)) +
   geom_line(aes(group = filter,
                 color = filter)) +
-  geom_point(aes(color = filter),
-             size = 0.5) +
+  geom_point(aes(color = filter,
+                 size = n_genes),
+             # alpha = 1,
+             pch = 21,
+             fill = NA,
+             # size = 0.5
+             ) +
   ggh4x::facet_grid2(
     rows = vars(timepoint),
     cols = vars(padj_cutoff),
@@ -3892,14 +4017,17 @@ metrics_FIT_M_vs_FIT_filtered_RMSE_plot_immune = metrics_FIT_M_vs_FIT_filtered_D
       padj_cutoff = function(x) paste("padj:", x)  
     )
   ) +
+  scale_size(range = c(0.1, 2), breaks = c(10, 100, 500, 1000)) +
   scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
   theme_vaxgo() +
   theme(
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     strip.background = element_blank(),
     axis.text.x = element_text(size = 8, angle = 0),
-    axis.text.y = element_text(size = 8)
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
   ) +
   labs(
     title = "RMSE - Immune genes",
@@ -3908,14 +4036,10 @@ metrics_FIT_M_vs_FIT_filtered_RMSE_plot_immune = metrics_FIT_M_vs_FIT_filtered_D
     color = ""
   ) +
   scale_color_manual(values = c(
-    "Mouse_Immune CI 10%"  = "#c6dbef",
-    "Mouse_Immune CI 20%" = "#9ecae1",
-    "Mouse_Immune CI 30%"   = "#6baed6",
-    "Mouse_Immune CI 50%" = "#3182bd",
-    "FIT_Immune CI 10%"   = "#fcbba1",
-    "FIT_Immune CI 20%"   = "#fc9272",
-    "FIT_Immune CI 30%"     = "#fb6a4a",
-    "FIT_Immune CI 50%"   = "#de2d26"
+    "Mouse_Immune CI 30%"  = "#263238FF",
+    "Mouse_Immune CI 100%" = "#90A4AEFF",
+    "FIT_Immune CI 30%"   = "#CE1800FF",
+    "FIT_Immune CI 100%"   = "#FFA726FF"
   ))
 
 
@@ -3925,16 +4049,21 @@ metrics_FIT_M_vs_FIT_filtered_RMSE_plot_non_immune +
               guides = "collect")
 ```
 
-
+#### R2
 ```{r fig.height=8, fig.width=12}
-metrics_FIT_M_vs_FIT_filtered_R2_plot_nonimmune = metrics_FIT_M_vs_FIT_filtered_DEGs_Immune %>%
+metrics_FIT_M_vs_FIT_filtered_R2_plot_non_immune = metrics_FIT_M_vs_FIT_filtered_DEGs_Immune %>%
   filter(str_detect(organism,"Non_Immune")) %>% 
   mutate(across(ci_width_cutoff:timepoint, as.character)) %>%
   ggplot(aes(x = expr_cutoff, y = R2)) +
   geom_line(aes(group = filter,
                 color = filter)) +
-  geom_point(aes(color = filter),
-             size = 0.5) +
+  geom_point(aes(color = filter,
+                 size = n_genes),
+             # alpha = 1,
+             pch = 21,
+             fill = NA,
+             # size = 0.5
+             ) +
   ggh4x::facet_grid2(
     rows = vars(timepoint),
     cols = vars(padj_cutoff),
@@ -3946,14 +4075,17 @@ metrics_FIT_M_vs_FIT_filtered_R2_plot_nonimmune = metrics_FIT_M_vs_FIT_filtered_
       padj_cutoff = function(x) paste("padj:", x)  
     )
   ) +
+  scale_size(range = c(0.1, 2), breaks = c(10, 100, 500, 1000)) +
   scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
   theme_vaxgo() +
   theme(
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     strip.background = element_blank(),
     axis.text.x = element_text(size = 8, angle = 0),
-    axis.text.y = element_text(size = 8)
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
   ) +
   labs(
     title = "R2 - Non-immune genes",
@@ -3962,15 +4094,12 @@ metrics_FIT_M_vs_FIT_filtered_R2_plot_nonimmune = metrics_FIT_M_vs_FIT_filtered_
     color = ""
   ) +
   scale_color_manual(values = c(
-    "Mouse_Non_Immune CI 10%"  = "#c6dbef",
-    "Mouse_Non_Immune CI 20%" = "#9ecae1",
-    "Mouse_Non_Immune CI 30%"   = "#6baed6",
-    "Mouse_Non_Immune CI 50%" = "#3182bd",
-    "FIT_Non_Immune CI 10%"   = "#fcbba1",
-    "FIT_Non_Immune CI 20%"   = "#fc9272",
-    "FIT_Non_Immune CI 30%"     = "#fb6a4a",
-    "FIT_Non_Immune CI 50%"   = "#de2d26"
+    "Mouse_Non_Immune CI 30%"  = "#263238FF",
+    "Mouse_Non_Immune CI 100%" = "#90A4AEFF",
+    "FIT_Non_Immune CI 30%"   = "#CE1800FF",
+    "FIT_Non_Immune CI 100%"   = "#FFA726FF"
   ))
+
 
 
 metrics_FIT_M_vs_FIT_filtered_R2_plot_immune = metrics_FIT_M_vs_FIT_filtered_DEGs_Immune %>%
@@ -3979,8 +4108,13 @@ metrics_FIT_M_vs_FIT_filtered_R2_plot_immune = metrics_FIT_M_vs_FIT_filtered_DEG
   ggplot(aes(x = expr_cutoff, y = R2)) +
   geom_line(aes(group = filter,
                 color = filter)) +
-  geom_point(aes(color = filter),
-             size = 0.5) +
+  geom_point(aes(color = filter,
+                 size = n_genes),
+             # alpha = 1,
+             pch = 21,
+             fill = NA,
+             # size = 0.5
+             ) +
   ggh4x::facet_grid2(
     rows = vars(timepoint),
     cols = vars(padj_cutoff),
@@ -3992,14 +4126,17 @@ metrics_FIT_M_vs_FIT_filtered_R2_plot_immune = metrics_FIT_M_vs_FIT_filtered_DEG
       padj_cutoff = function(x) paste("padj:", x)  
     )
   ) +
+  scale_size(range = c(0.1, 2), breaks = c(10, 100, 500, 1000)) +
   scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
   theme_vaxgo() +
   theme(
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     strip.background = element_blank(),
     axis.text.x = element_text(size = 8, angle = 0),
-    axis.text.y = element_text(size = 8)
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
   ) +
   labs(
     title = "R2 - Immune genes",
@@ -4008,24 +4145,20 @@ metrics_FIT_M_vs_FIT_filtered_R2_plot_immune = metrics_FIT_M_vs_FIT_filtered_DEG
     color = ""
   ) +
   scale_color_manual(values = c(
-    "Mouse_Immune CI 10%"  = "#c6dbef",
-    "Mouse_Immune CI 20%" = "#9ecae1",
-    "Mouse_Immune CI 30%"   = "#6baed6",
-    "Mouse_Immune CI 50%" = "#3182bd",
-    "FIT_Immune CI 10%"   = "#fcbba1",
-    "FIT_Immune CI 20%"   = "#fc9272",
-    "FIT_Immune CI 30%"     = "#fb6a4a",
-    "FIT_Immune CI 50%"   = "#de2d26"
+    "Mouse_Immune CI 30%"  = "#263238FF",
+    "Mouse_Immune CI 100%" = "#90A4AEFF",
+    "FIT_Immune CI 30%"   = "#CE1800FF",
+    "FIT_Immune CI 100%"   = "#FFA726FF"
   ))
 
 
 metrics_FIT_M_vs_FIT_filtered_R2_plot_immune/
-metrics_FIT_M_vs_FIT_filtered_R2_plot_nonimmune +
+metrics_FIT_M_vs_FIT_filtered_R2_plot_non_immune +
   plot_layout(axes = "collect",
               guides = "collect")
 ```
 
-Pearson
+####Pearson
 ```{r fig.height=8, fig.width=15}
 
 
@@ -4035,8 +4168,13 @@ metrics_FIT_M_vs_FIT_filtered_Pearson_plot_nonimmune = metrics_FIT_M_vs_FIT_filt
   ggplot(aes(x = expr_cutoff, y = Pearson)) +
   geom_line(aes(group = filter,
                 color = filter)) +
-  geom_point(aes(color = filter),
-             size = 0.5) +
+  geom_point(aes(color = filter,
+                 size = n_genes),
+             # alpha = 1,
+             pch = 21,
+             fill = NA,
+             # size = 0.5
+             ) +
   ggh4x::facet_grid2(
     rows = vars(timepoint),
     cols = vars(padj_cutoff),
@@ -4048,14 +4186,17 @@ metrics_FIT_M_vs_FIT_filtered_Pearson_plot_nonimmune = metrics_FIT_M_vs_FIT_filt
       padj_cutoff = function(x) paste("padj:", x)  
     )
   ) +
+  scale_size(range = c(0.1, 2), breaks = c(10, 100, 500, 1000)) +
   scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
   theme_vaxgo() +
   theme(
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     strip.background = element_blank(),
     axis.text.x = element_text(size = 8, angle = 0),
-    axis.text.y = element_text(size = 8)
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
   ) +
   labs(
     title = "Pearson - Non-immune genes",
@@ -4064,14 +4205,10 @@ metrics_FIT_M_vs_FIT_filtered_Pearson_plot_nonimmune = metrics_FIT_M_vs_FIT_filt
     color = ""
   ) +
   scale_color_manual(values = c(
-    "Mouse_Non_Immune CI 10%"  = "#c6dbef",
-    "Mouse_Non_Immune CI 20%" = "#9ecae1",
-    "Mouse_Non_Immune CI 30%"   = "#6baed6",
-    "Mouse_Non_Immune CI 50%" = "#3182bd",
-    "FIT_Non_Immune CI 10%"   = "#fcbba1",
-    "FIT_Non_Immune CI 20%"   = "#fc9272",
-    "FIT_Non_Immune CI 30%"     = "#fb6a4a",
-    "FIT_Non_Immune CI 50%"   = "#de2d26"
+    "Mouse_Non_Immune CI 30%"  = "#263238FF",
+    "Mouse_Non_Immune CI 100%" = "#90A4AEFF",
+    "FIT_Non_Immune CI 30%"   = "#CE1800FF",
+    "FIT_Non_Immune CI 100%"   = "#FFA726FF"
   ))
 
 
@@ -4081,8 +4218,13 @@ metrics_FIT_M_vs_FIT_filtered_Pearson_plot_immune = metrics_FIT_M_vs_FIT_filtere
   ggplot(aes(x = expr_cutoff, y = Pearson)) +
   geom_line(aes(group = filter,
                 color = filter)) +
-  geom_point(aes(color = filter),
-             size = 0.5) +
+  geom_point(aes(color = filter,
+                 size = n_genes),
+             # alpha = 1,
+             pch = 21,
+             fill = NA,
+             # size = 0.5
+             ) +
   ggh4x::facet_grid2(
     rows = vars(timepoint),
     cols = vars(padj_cutoff),
@@ -4094,14 +4236,17 @@ metrics_FIT_M_vs_FIT_filtered_Pearson_plot_immune = metrics_FIT_M_vs_FIT_filtere
       padj_cutoff = function(x) paste("padj:", x)  
     )
   ) +
+  scale_size(range = c(0.1, 2), breaks = c(10, 100, 500, 1000)) +
   scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
   theme_vaxgo() +
   theme(
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     strip.background = element_blank(),
     axis.text.x = element_text(size = 8, angle = 0),
-    axis.text.y = element_text(size = 8)
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
   ) +
   labs(
     title = "Pearson - Immune genes",
@@ -4110,14 +4255,10 @@ metrics_FIT_M_vs_FIT_filtered_Pearson_plot_immune = metrics_FIT_M_vs_FIT_filtere
     color = ""
   ) +
   scale_color_manual(values = c(
-    "Mouse_Immune CI 10%"  = "#c6dbef",
-    "Mouse_Immune CI 20%" = "#9ecae1",
-    "Mouse_Immune CI 30%"   = "#6baed6",
-    "Mouse_Immune CI 50%" = "#3182bd",
-    "FIT_Immune CI 10%"   = "#fcbba1",
-    "FIT_Immune CI 20%"   = "#fc9272",
-    "FIT_Immune CI 30%"     = "#fb6a4a",
-    "FIT_Immune CI 50%"   = "#de2d26"
+    "Mouse_Immune CI 30%"  = "#263238FF",
+    "Mouse_Immune CI 100%" = "#90A4AEFF",
+    "FIT_Immune CI 30%"   = "#CE1800FF",
+    "FIT_Immune CI 100%"   = "#FFA726FF"
   ))
 
 
@@ -4127,7 +4268,7 @@ metrics_FIT_M_vs_FIT_filtered_Pearson_plot_nonimmune +
               guides = "collect")
 ```
 
-Spearman
+#### Spearman
 ```{r fig.height=8, fig.width=15}
 
 
@@ -4137,8 +4278,13 @@ metrics_FIT_M_vs_FIT_filtered_Spearman_plot_nonimmune = metrics_FIT_M_vs_FIT_fil
   ggplot(aes(x = expr_cutoff, y = Spearman)) +
   geom_line(aes(group = filter,
                 color = filter)) +
-  geom_point(aes(color = filter),
-             size = 0.5) +
+  geom_point(aes(color = filter,
+                 size = n_genes),
+             # alpha = 1,
+             pch = 21,
+             fill = NA,
+             # size = 0.5
+             ) +
   ggh4x::facet_grid2(
     rows = vars(timepoint),
     cols = vars(padj_cutoff),
@@ -4150,14 +4296,17 @@ metrics_FIT_M_vs_FIT_filtered_Spearman_plot_nonimmune = metrics_FIT_M_vs_FIT_fil
       padj_cutoff = function(x) paste("padj:", x)  
     )
   ) +
+  scale_size(range = c(0.1, 2), breaks = c(10, 100, 500, 1000)) +
   scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
   theme_vaxgo() +
   theme(
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     strip.background = element_blank(),
     axis.text.x = element_text(size = 8, angle = 0),
-    axis.text.y = element_text(size = 8)
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
   ) +
   labs(
     title = "Spearman - Non-immune genes",
@@ -4166,14 +4315,10 @@ metrics_FIT_M_vs_FIT_filtered_Spearman_plot_nonimmune = metrics_FIT_M_vs_FIT_fil
     color = ""
   ) +
   scale_color_manual(values = c(
-    "Mouse_Non_Immune CI 10%"  = "#c6dbef",
-    "Mouse_Non_Immune CI 20%" = "#9ecae1",
-    "Mouse_Non_Immune CI 30%"   = "#6baed6",
-    "Mouse_Non_Immune CI 50%" = "#3182bd",
-    "FIT_Non_Immune CI 10%"   = "#fcbba1",
-    "FIT_Non_Immune CI 20%"   = "#fc9272",
-    "FIT_Non_Immune CI 30%"     = "#fb6a4a",
-    "FIT_Non_Immune CI 50%"   = "#de2d26"
+    "Mouse_Non_Immune CI 30%"  = "#263238FF",
+    "Mouse_Non_Immune CI 100%" = "#90A4AEFF",
+    "FIT_Non_Immune CI 30%"   = "#CE1800FF",
+    "FIT_Non_Immune CI 100%"   = "#FFA726FF"
   ))
 
 
@@ -4183,8 +4328,13 @@ metrics_FIT_M_vs_FIT_filtered_Spearman_plot_immune = metrics_FIT_M_vs_FIT_filter
   ggplot(aes(x = expr_cutoff, y = Spearman)) +
   geom_line(aes(group = filter,
                 color = filter)) +
-  geom_point(aes(color = filter),
-             size = 0.5) +
+  geom_point(aes(color = filter,
+                 size = n_genes),
+             # alpha = 1,
+             pch = 21,
+             fill = NA,
+             # size = 0.5
+             ) +
   ggh4x::facet_grid2(
     rows = vars(timepoint),
     cols = vars(padj_cutoff),
@@ -4196,14 +4346,17 @@ metrics_FIT_M_vs_FIT_filtered_Spearman_plot_immune = metrics_FIT_M_vs_FIT_filter
       padj_cutoff = function(x) paste("padj:", x)  
     )
   ) +
+  scale_size(range = c(0.1, 2), breaks = c(10, 100, 500, 1000)) +
   scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
   theme_vaxgo() +
   theme(
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     strip.background = element_blank(),
     axis.text.x = element_text(size = 8, angle = 0),
-    axis.text.y = element_text(size = 8)
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
   ) +
   labs(
     title = "Spearman - Immune genes",
@@ -4212,14 +4365,10 @@ metrics_FIT_M_vs_FIT_filtered_Spearman_plot_immune = metrics_FIT_M_vs_FIT_filter
     color = ""
   ) +
   scale_color_manual(values = c(
-    "Mouse_Immune CI 10%"  = "#c6dbef",
-    "Mouse_Immune CI 20%" = "#9ecae1",
-    "Mouse_Immune CI 30%"   = "#6baed6",
-    "Mouse_Immune CI 50%" = "#3182bd",
-    "FIT_Immune CI 10%"   = "#fcbba1",
-    "FIT_Immune CI 20%"   = "#fc9272",
-    "FIT_Immune CI 30%"     = "#fb6a4a",
-    "FIT_Immune CI 50%"   = "#de2d26"
+    "Mouse_Immune CI 30%"  = "#263238FF",
+    "Mouse_Immune CI 100%" = "#90A4AEFF",
+    "FIT_Immune CI 30%"   = "#CE1800FF",
+    "FIT_Immune CI 100%"   = "#FFA726FF"
   ))
 
 
@@ -4228,6 +4377,62 @@ metrics_FIT_M_vs_FIT_filtered_Spearman_plot_nonimmune +
   plot_layout(axes = "collect",
               guides = "collect")
 ```
+
+
+####Merge all
+
+```{r fig.height=6, fig.width=14}
+
+#Immune
+immune_R2_RMSE_Plots = (metrics_FIT_M_vs_FIT_filtered_RMSE_plot_immune/
+  metrics_FIT_M_vs_FIT_filtered_R2_plot_immune) +
+  plot_layout(axes = "collect",
+              guides = "collect")
+
+immune_Pearson_Spearman_Plots = (metrics_FIT_M_vs_FIT_filtered_Pearson_plot_immune/
+     metrics_FIT_M_vs_FIT_filtered_Spearman_plot_immune) +
+  plot_layout(axes = "collect",
+              guides = "collect")
+
+
+#Non immune
+Non_immune_R2_RMSE_Plots = (metrics_FIT_M_vs_FIT_filtered_RMSE_plot_non_immune/
+  metrics_FIT_M_vs_FIT_filtered_R2_plot_non_immune) +
+  plot_layout(axes = "collect",
+              guides = "collect")
+
+Non_immune_Pearson_Spearman_Plots = (metrics_FIT_M_vs_FIT_filtered_Pearson_plot_nonimmune/
+     metrics_FIT_M_vs_FIT_filtered_Spearman_plot_nonimmune) +
+  plot_layout(axes = "collect",
+              guides = "collect")
+
+
+#Save
+
+immune_R2_RMSE_Plots %>% 
+   ggsave(filename = here("Figures",  "metrics_FIT_M_vs_FIT_filtered_RMSE_R2_plot_immune.png"), 
+         width = 15, height = 6)
+
+immune_Pearson_Spearman_Plots %>% 
+   ggsave(filename = here("Figures",  "metrics_FIT_M_vs_FIT_filtered_Spearman_Pearson_plot_immune.png"), 
+         width = 15, height = 6)
+
+
+Non_immune_R2_RMSE_Plots %>% 
+   ggsave(filename = here("Figures",  "metrics_FIT_M_vs_FIT_filtered_RMSE_R2_plot_non_immune.png"), 
+         width = 14, height = 6)
+
+Non_immune_Pearson_Spearman_Plots %>% 
+   ggsave(filename = here("Figures",  "metrics_FIT_M_vs_FIT_filtered_Spearman_Pearson_plot_non_immune.png"), 
+         width = 14, height = 6)
+```
+
+
+
+
+
+
+
 
 
 
@@ -4281,6 +4486,20 @@ plot_data_lfc <- expand.grid(
     df_filtered
   }) %>%
   bind_rows()
+```
+
+
+```{r fig.height=8, fig.width=6}
+#Get best combinations
+metrics_FIT_M_vs_FIT_filtered_DEGs_Immune %>% 
+  group_by(organism) %>% 
+  slice_min(RMSE, n = 1) %>% 
+  slice_min(padj_cutoff, n = 1)
+
+metrics_FIT_M_vs_FIT_filtered_DEGs_Immune %>% 
+  group_by(organism) %>% 
+  slice_max(R2, n = 1) %>% 
+  slice_min(padj_cutoff, n = 1)
 ```
 
 
@@ -4373,675 +4592,6 @@ filter_conditions_results_mouse %>%
   scale_color_npg()
   
 ```
-
-###### FIT
-```{r}
-# Data frame de combinações de filtros
-filter_conditions <- expand_grid(
-  # padj_mouse = c(0.01, 0.05, 0.1, 0.25),
-  padj_fit = c(0.01, 0.05, 0.25, 0.50, 0.90),
-  expr_cutoff = c(0, 0.25, 0.5, 1),
-  # ci_width_mouse_cutoff = c(1, 1.5, 2),
-  ci_width_fit_cutoff = c(0.2, 0.5, 1, 2),
-  timepoint = c(1, 3, 7)
-)
-
-# Aplicando os filtros e calculando as métricas
-filter_conditions_results_fit <- filter_conditions %>%
-  rowwise() %>%
-  do({
-    fc <- .
-    filtered_data <- pairwise_human_fit_test %>%
-      filter(
-        # p_value_mouse_adj < fc$padj_mouse,
-        p_value_fit_adj < fc$padj_fit,
-        # Human > fc$expr_cutoff,
-        # Mouse > fc$expr_cutoff,
-        abs(`FIT Prediction`) > fc$expr_cutoff,
-        # ci_width_mouse <= fc$ci_width_mouse_cutoff,
-        ci_width_fit <= fc$ci_width_fit_cutoff,
-        # ci_width_human <= 2,
-        timepoint == fc$timepoint
-      )
-
-    if (nrow(filtered_data) >= 2) {
-      metrics <- filtered_data %>%
-        summarise(
-          n_genes = n(),
-          # RMSE_human2mouse = rmse_vec(Human, Mouse),
-          # MAE_human2mouse = mae_vec(Human, Mouse),
-          # R2_human2mouse = rsq_vec(Human, Mouse),
-          # Spearman_human2mouse = cor(Human, Mouse, method = "spearman"),
-          # Pearson_human2mouse = cor(Human, Mouse, method = "pearson"),
-          
-          RMSE_human2fit = rmse_vec(Human, `FIT Prediction`),
-          MAE_human2fit = mae_vec(Human, `FIT Prediction`),
-          R2_human2fit = rsq_vec(Human, `FIT Prediction`),
-          Spearman_human2fit = cor(Human, `FIT Prediction`, method = "spearman"),
-          Pearson_human2fit = cor(Human, `FIT Prediction`, method = "pearson")
-        )
-    } else {
-      metrics <- tibble(
-        n_genes = 0,
-        # RMSE_human2mouse = NA, MAE_human2mouse = NA, R2_human2mouse = NA,
-        # Spearman_human2mouse = NA, Pearson_human2mouse = NA,
-        RMSE_human2fit = NA, MAE_human2fit = NA, R2_human2fit = NA,
-        Spearman_human2fit = NA, Pearson_human2fit = NA
-      )
-    }
-
-    bind_cols(fc, metrics)
-  }) %>%
-  ungroup()
-
-filter_conditions_results_fit
-```
-
-
-```{r fig.height=10, fig.width=8}
-filter_conditions_results_fit %>% 
-  mutate(across(padj_fit:timepoint, as.character)) %>% 
-  ggplot() +
-  aes(x = expr_cutoff,
-      y = RMSE_human2fit,
-      color = ci_width_fit_cutoff,
-      group = ci_width_fit_cutoff) +
-    geom_line() +
-  geom_point(
-    aes(size = n_genes)
-             ) +
-  facet_grid(~padj_fit~timepoint) +
-  theme_vaxgo() +
-  labs(subtitle = "Top (Time (days)), side (padj_fit)",
-       x = "L2FC Cutoff)",
-       y = "RMSE") +
-  scale_color_npg()
-
-filter_conditions_results_fit %>% 
-  mutate(across(padj_fit:timepoint, as.character)) %>% 
-  ggplot() +
-  aes(x = expr_cutoff,
-      y = R2_human2fit,
-      color = ci_width_fit_cutoff,
-      group = ci_width_fit_cutoff) +
-    geom_line() +
-  geom_point(
-    aes(size = n_genes)
-             ) +
-  facet_grid(~padj_fit~timepoint) +
-  theme_vaxgo() +
-  labs(subtitle = "Top (Time (days)), side (padj_fit)",
-       x = "L2FC Cutoff)",
-       y = "R2_human2fit") +
-  scale_color_npg()
-
-filter_conditions_results_fit %>% 
-  mutate(across(padj_fit:timepoint, as.character)) %>% 
-  ggplot() +
-  aes(x = expr_cutoff,
-      y = Spearman_human2fit,
-      color = ci_width_fit_cutoff,
-      group = ci_width_fit_cutoff) +
-    geom_line() +
-  geom_point(
-    aes(size = n_genes)
-             ) +
-  facet_grid(~padj_fit~timepoint) +
-  theme_vaxgo() +
-  labs(subtitle = "Top (Time (days)), side (padj_fit)",
-       x = "L2FC Cutoff)",
-       y = "Spearman_human2fit") +
-  scale_color_npg()
-
-
-filter_conditions_results_fit %>% 
-  mutate(across(padj_fit:timepoint, as.character)) %>% 
-  ggplot() +
-  aes(x = expr_cutoff,
-      y = Pearson_human2fit,
-      color = ci_width_fit_cutoff,
-      group = ci_width_fit_cutoff) +
-    geom_line() +
-  geom_point(
-    aes(size = n_genes)
-             ) +
-  facet_grid(~padj_fit~timepoint) +
-  theme_vaxgo() +
-  labs(subtitle = "Top (Time (days)), side (padj_fit)",
-       x = "L2FC Cutoff)",
-       y = "Pearson_human2fit") +
-  scale_color_npg()
-
-
-
-```
-
-
-### Compute metrics by day
-```{r}
-metrics_days_models <- pairwise_human_fit_test %>%
-  group_by(timepoint) %>% 
-  summarise(
-    RMSE_human2mouse = rmse_vec(Human, Mouse),
-    MAE_human2mouse = mae_vec(Human, Mouse),
-    R2_human2mouse = rsq_vec(Human, Mouse),
-    Spearman_human2mouse = cor(Human, Mouse, method = "spearman"),
-    Pearson_human2mouse = cor(Human, Mouse, method = "pearson"),
-    
-    
-    RMSE_human2fit = rmse_vec(Human, `FIT Prediction`),
-    MAE_human2fit = mae_vec(Human, `FIT Prediction`),
-    R2_human2fit = rsq_vec(Human, `FIT Prediction`),
-    Spearman_human2fit = cor(Human, `FIT Prediction`, method = "spearman"),
-    Pearson_human2fit = cor(Human, `FIT Prediction`, method = "pearson")
-  ) %>%
-  ungroup() %>% 
-  pivot_longer(cols = -timepoint,
-               values_to = "value",
-               names_to = "measure")
-
-metrics_days_models %>% 
-  arrange(timepoint, measure, -value)
-```
-
-### Mouse vs Human
-```{r}
-
-# 1. Classificar os genes por faixa de padj (já feito anteriormente)
-mouse_degs_classified <- fit_example_results_ready_pvalues %>%
-  mutate(pvalue_class = case_when(
-    adj_p_val < 0.01 ~ "<0.01",
-    adj_p_val < 0.05 ~ "<0.05",
-    adj_p_val < 0.10 ~ "<0.10",
-    TRUE             ~ ">0.10"
-  )) %>%
-  mutate(pvalue_class = factor(pvalue_class, levels = c("<0.01", "<0.05", "<0.10", ">0.10")))
-
-# 2. Calcular métricas por timepoint e faixa de padj
-metrics_days_by_padj <- pairwise_human_fit_test %>%
-  inner_join(mouse_degs_classified %>% select(human_symbol, pvalue_class), by = "human_symbol") %>%
-  group_by(timepoint, pvalue_class) %>%
-  summarise(
-    RMSE_human2mouse = rmse_vec(Human, Mouse),
-    MAE_human2mouse = mae_vec(Human, Mouse),
-    R2_human2mouse = rsq_vec(Human, Mouse),
-    Spearman_human2mouse = cor(Human, Mouse, method = "spearman"),
-    Pearson_human2mouse = cor(Human, Mouse, method = "pearson"),
-    
-    RMSE_human2fit = rmse_vec(Human, `FIT Prediction`),
-    MAE_human2fit = mae_vec(Human, `FIT Prediction`),
-    R2_human2fit = rsq_vec(Human, `FIT Prediction`),
-    Spearman_human2fit = cor(Human, `FIT Prediction`, method = "spearman"),
-    Pearson_human2fit = cor(Human, `FIT Prediction`, method = "pearson"),
-    
-    .groups = "drop"
-  ) %>%
-  pivot_longer(cols = -c(timepoint, pvalue_class),
-               names_to = "measure", values_to = "value") %>%
-  mutate(value = round(value, 3)) %>%
-  arrange(pvalue_class, timepoint, measure, desc(value))
-
-# Visualizar
-metrics_days_by_padj
-
-
-```
-
-####p-value cutoffs
-```{r fig.height=5, fig.width=10}
-cutoffs <- c(0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10, 0.05)
-
-# 1. Criar um dataframe com todos os filtros aplicados
-filtered_data <- map_dfr(cutoffs, function(cut) {
-  pairwise_human_fit_test %>%
-    filter(p_value_mouse_adj > cut) %>%
-    mutate(cutoff_label = paste0("p > ", cut))
-})
-
-
-ggplot(filtered_data, aes(x = Human, 
-                          y = Mouse, 
-                          color = cutoff_label)) +
-  geom_point(alpha = 0.2) +
-  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
-  facet_grid(~cutoff_label) +
-  labs(title = "Regression at different p-value thresholds",
-       subtitle = "Mouse vs Human",
-       x = "Human expression", y = "Mouse") +
-    theme_vaxgo() +
-  scale_color_npg()
-
-
-```
-
-
-
-####Top 10 genes
-```{r}
-fit_example_human_plot_mouse = 
-  fit_example_human %>% 
-  filter(human_symbol %in% c(top10_genes_mouse %>% 
-                               slice_head(n = 5) %>% 
-                               pull(human_symbol))) %>% 
-  ggplot() +
-  aes(x = timepoint,
-      y = value,
-      color = measure) +
-  geom_errorbar(aes(ymin = ci_low, 
-                  ymax = ci_high),
-                position =  "dodge2") +
-  scale_x_continuous(breaks = c(0,1, 3, 7),minor_breaks = F) +
-    scale_color_manual(
-  values = c(
-    fit_prediction = "#E64B35FF", 
-    mouse_effect_size = "#4DBBD5FF",
-    human_effect_size = "black"
-  ),
-  labels = c(
-    fit_prediction = "FIT",
-    mouse_effect_size = "Mouse",
-    human_effect_size = "Human"
-  )
-)+
-    theme_vaxgo() +
-  labs(color = "Measure",
-       x = "Time (days)",
-       y = "LogFold-Change",
-       title = "Prediction - Influenza, Fluad Vaccine") +
-  facet_wrap(~human_symbol, nrow = 1)
-
-fit_example_human_plot_mouse
-```
-
-
-
-### Mouse DEGs
-```{r}
-
-pairwise_human_fit_test %>%
-  filter(human_symbol %in% mouse_degs_classified$human_symbol) %>%
-  inner_join(mouse_degs_classified %>% select(human_symbol, pvalue_class), by = "human_symbol") %>%
-  mutate(timepoint = as.character(timepoint)) %>%
-  ggplot(aes(x = Human, y = `FIT Prediction`, color = timepoint)) +
-  geom_point(alpha = 0.2, size = 0.2) +
-  geom_smooth(method = 'lm', se = TRUE, fill = "black") +
-  facet_grid(~pvalue_class) +
-  labs(title = "Regression with DEGs by padj class and timepoint",
-       subtitle = "FIT vs Human expression",
-       x = "Human expression", y = "FIT Prediction") +
-  theme_minimal() +
-  scale_color_npg() +
-  theme_vaxgo()
-
-```
-
-
-#### log pvalue
-```{r}
-df %>% 
-  mutate(log_padj = log10(p_adj),
-         effect_size_direction = if_else(effect_size > 0, "+", "-")) %>% 
-  ggplot() +
-  aes(x = effect_size,
-         y = p_adj,
-         fill = effect_size_direction,
-         # shape = day,
-      # size = log_padj
-      ) +
-  geom_point(aes(fill = effect_size_direction,
-                  alpha = p_adj),
-              # width = 1,
-              pch = 21,
-              color = "black") +
-  gghighlight(p_adj > 0.10) +
-  theme_vaxgo()+
-  facet_grid(~day %>% fct_relevel(., "1", "3", "7"), scales = "free_x") 
-
-
-```
-
-### FIT vs Human
-
-#### By pvalue (FIT vs human)
-```{r}
-# Define your p-value cutoffs
-cutoffs <- c(0.90, 0.80, 0.70, 0.60)
-
-# Loop over cutoffs and calculate metrics
-metrics_by_cutoff <- map_dfr(cutoffs, function(cut) {
-  filtered <- pairwise_human_fit_test %>%
-    filter(p_value_fit_adj > cut)
-  
-  tibble(
-    cutoff = paste0("p > ", cut),
-    RMSE_human2mouse = rmse_vec(filtered$Human, filtered$Mouse),
-    MAE_human2mouse = mae_vec(filtered$Human, filtered$Mouse),
-    R2_human2mouse = rsq_vec(filtered$Human, filtered$Mouse),
-    Spearman_human2mouse = cor(filtered$Human, filtered$Mouse, method = "spearman"),
-    Pearson_human2mouse = cor(filtered$Human, filtered$Mouse, method = "pearson"),
-    
-    RMSE_human2fit = rmse_vec(filtered$Human, filtered$`FIT Prediction`),
-    MAE_human2fit = mae_vec(filtered$Human, filtered$`FIT Prediction`),
-    R2_human2fit = rsq_vec(filtered$Human, filtered$`FIT Prediction`),
-    Spearman_human2fit = cor(filtered$Human, filtered$`FIT Prediction`, method = "spearman"),
-    Pearson_human2fit = cor(filtered$Human, filtered$`FIT Prediction`, method = "pearson"),
-    
-    n_genes = nrow(filtered)
-  )
-})
-
-# Optional: transform to long format for plotting
-metrics_long <- metrics_by_cutoff %>%
-  pivot_longer(cols = -c(cutoff, n_genes), names_to = "measure", values_to = "value")
-
-# View
-metrics_by_cutoff %>% 
-  pivot_longer(cols = -cutoff,
-               values_to = "value",
-               names_to = "measure") %>% 
-  arrange(measure, value) %>% 
-  mutate(value = round(value, 3))
-
-
-#R2 maior para mouse foi  p > 0.9 = 0.104
-#R2 maior para fit foi p > 0.9 0.977
-#RMSE menor para fit foi p > 0.9 = 0.031
-#RMSE menor para fit foi p > 0.9 = 0.495
-  
-```
-
-
-
-```{r fig.height=5, fig.width=10}
-cutoffs <- c(0.90, 0.80, 0.70, 0.60, 0.50)
-
-# 1. Criar um dataframe com todos os filtros aplicados
-filtered_data <- map_dfr(cutoffs, function(cut) {
-  pairwise_human_fit_test %>%
-    filter(p_value_fit_adj > cut) %>%
-    mutate(cutoff_label = paste0("p > ", cut))
-})
-
-
-ggplot(filtered_data, aes(x = Human, 
-                          y = `FIT Prediction`, 
-                          color = cutoff_label)) +
-  geom_point(alpha = 0.2) +
-  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
-  facet_grid(~cutoff_label) +
-  labs(title = "Regression at different p-value thresholds",
-       subtitle = "FIT Prediction vs Human",
-       x = "Human expression", y = "FIT Prediction") +
-  theme_minimal() +
-  scale_color_npg() +
-  theme_vaxgo()
-
-```
-
-
-
-
-
-### Compute metrics by gene
-```{r}
-library(yardstick)
-metrics_genes <- pairwise_human_fit_test %>%
-  group_by(human_symbol) %>%
-  summarise(
-    RMSE_human2mouse = rmse_vec(Human, Mouse),
-    MAE_human2mouse = mae_vec(Human, Mouse),
-    R2_human2mouse = rsq_vec(Human, Mouse),
-    Spearman_human2mouse = cor(Human, Mouse, method = "spearman"),
-    Pearson_human2mouse = cor(Human, Mouse, method = "pearson"),
-    
-    
-    RMSE_human2fit = rmse_vec(Human, `FIT Prediction`),
-    MAE_human2fit = mae_vec(Human, `FIT Prediction`),
-    R2_human2fit = rsq_vec(Human, `FIT Prediction`),
-    Spearman_human2fit = cor(Human, `FIT Prediction`, method = "spearman"),
-    Pearson_human2fit = cor(Human, `FIT Prediction`, method = "pearson")
-  ) %>%
-  ungroup()
-
-top10_genes_mouse <- metrics_genes %>%
-  arrange(RMSE_human2mouse) %>%
-  slice_head(n = 10)
-
-top10_genes_fit <- metrics_genes %>%
-  arrange(RMSE_human2fit) %>%
-  slice_head(n = 10)
-
-top10_genes_mouse
-top10_genes_fit
-```
-
-
-
-
-
-#### FIT vs Human
-By log2fc
-```{r fig.height=5, fig.width=10}
-cutoffs <- c(0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10, 0.05)
-
-# 1. Criar um dataframe com todos os filtros aplicados
-filtered_data <- map_dfr(cutoffs, function(cut) {
-  pairwise_human_fit_test %>%
-    filter(p_value_fit_adj > cut) %>%
-    mutate(cutoff_label = paste0("p > ", cut))
-})
-
-
-ggplot(filtered_data, aes(x = Human, 
-                          y = `FIT Prediction`, 
-                          color = cutoff_label)) +
-  geom_point(alpha = 0.2) +
-  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
-  facet_grid(~timepoint~cutoff_label) +
-  labs(title = "Regression at different p-value thresholds",
-       subtitle = "FIT Prediction vs Human",
-       x = "Human expression", y = "FIT Prediction") +
-  theme_minimal() +
-  scale_color_npg() +
-  theme_vaxgo()
-
-
-```
-
-
-By day
-```{r fig.height=5, fig.width=10}
-
-
-ggplot(pairwise_human_fit_test %>% 
-         mutate(timepoint = timepoint %>% as.character()), 
-       aes(x = Human, 
-                          y = `FIT Prediction`, 
-                          color = timepoint)) +
-  geom_point(alpha = 0.2) +
-  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
-  facet_grid(~timepoint) +
-  labs(title = "Regression at different p-value thresholds",
-       subtitle = "FIT Prediction vs Human",
-       x = "Human expression", y = "FIT Prediction") +
-  theme_minimal() +
-  scale_color_npg() +
-  theme_vaxgo() 
-
-
-```
-
-
-By effect size
-```{r fig.height=5, fig.width=10}
-cutoffs <- c(0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10, 0.05)
-
-# 1. Criar um dataframe com todos os filtros aplicados
-filtered_data <- map_dfr(cutoffs, function(cut) {
-  pairwise_human_fit_test %>%
-    filter(p_value_fit_adj > cut) %>%
-    mutate(cutoff_label = paste0("p > ", cut))
-})
-
-
-ggplot(filtered_data, aes(x = effect_size_h2m, 
-                          y = effect_size_h2fit, 
-                          color = cutoff_label)) +
-  geom_point(alpha = 0.5) +
-  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
-  facet_grid(~timepoint~cutoff_label) +
-  labs(title = "Regression at different p-value thresholds",
-       x = "Effect size (mouse)", y = "Effect size (FIT)") +
-  theme_minimal() +
-  scale_color_npg() +
-  theme_vaxgo() 
-
-
-```
-
-
-
-```{r fig.height=5, fig.width=8}
-fit_example_human_plot = 
-  fit_example_human %>% 
-  filter(human_symbol %in% c(top10_genes_fit %>% 
-                               slice_head(n = 5) %>% 
-                               pull(human_symbol))) %>% 
-  ggplot() +
-  aes(x = timepoint,
-      y = value,
-      color = measure) +
-  geom_errorbar(aes(ymin = ci_low, 
-                  ymax = ci_high),
-                position =  "dodge2") +
-  scale_x_continuous(breaks = c(0,1, 3, 7),minor_breaks = F) +
-    scale_color_manual(
-  values = c(
-    fit_prediction = "#E64B35FF", 
-    mouse_effect_size = "#4DBBD5FF",
-    human_effect_size = "black"
-  ),
-  labels = c(
-    fit_prediction = "FIT",
-    mouse_effect_size = "Mouse",
-    human_effect_size = "Human"
-  )
-)+
-  theme_vaxgo() +
-  labs(color = "Measure",
-       x = "Time (days)",
-       y = "LogFold-Change",
-       title = "Prediction - Influenza, Fluad Vaccine",
-       subtitle = "Top 5 genes, FIT prediction lowest RMSE") +
-  facet_wrap(~human_symbol, nrow = 1)
-
-fit_example_human_plot
-
-```
-#### Plot mouse vs fit
-
-
-
-#### Plot mouse vs human
-Genes that are not DEGs in mouse but are in humans and are predicted in FIT, and the others that are not predicted in FIT (these should be used to improve model performance)
-
-```{r fig.height=5, fig.width=10}
-cutoffs <- c(0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10, 0.05)
-
-# 1. Criar um dataframe com todos os filtros aplicados
-filtered_data <- map_dfr(cutoffs, function(cut) {
-  pairwise_human_fit_test %>%
-    filter(p_value_mouse_adj > cut) %>%
-    mutate(cutoff_label = paste0("p > ", cut))
-})
-
-
-ggplot(filtered_data, aes(x = Human, 
-                          y = Mouse, 
-                          color = cutoff_label)) +
-  geom_point(alpha = 0.5) +
-  geom_smooth(method = 'lm', se = TRUE, color = "black", fill = "black") +
-  facet_grid(~timepoint~cutoff_label) +
-  labs(title = "Regression at different p-value thresholds",
-       subtitle = "Mouse expression vs Human",
-       x = "Human expression", y = "Mouse expression") +
-  theme_minimal() +
-  scale_color_npg() +
-  theme_vaxgo() 
-
-```
-
-
-
-```{r fig.height=5, fig.width=8}
-fit_example_human_plot = 
-  fit_example_human %>% 
-  filter(human_symbol %in% c(top10_genes_mouse %>% 
-                               slice_head(n = 5) %>% 
-                               pull(human_symbol))) %>% 
-  ggplot() +
-  aes(x = timepoint,
-      y = value,
-      color = measure) +
-  geom_errorbar(aes(ymin = ci_low, 
-                  ymax = ci_high),
-                position =  "dodge2") +
-  scale_x_continuous(breaks = c(0,1, 3, 7),minor_breaks = F) +
-    scale_color_manual(
-  values = c(
-    fit_prediction = "#E64B35FF", 
-    mouse_effect_size = "#4DBBD5FF",
-    human_effect_size = "black"
-  ),
-  labels = c(
-    fit_prediction = "FIT",
-    mouse_effect_size = "Mouse",
-    human_effect_size = "Human"
-  )
-)+
-  theme_vaxgo() +
-  labs(color = "Measure",
-       x = "Time (days)",
-       y = "LogFold-Change",
-       title = "Prediction - Influenza, Fluad Vaccine",
-       subtitle = "Top 5 genes, Mouse prediction lowest RMSE") +
-  facet_wrap(~human_symbol, nrow = 1)
-
-fit_example_human_plot
-
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
