@@ -3177,6 +3177,11 @@ plot_patchwork_1 = d + (a/b/c) +
   plot_layout(widths = c(0.2, 1), 
               axis_titles = "collect")
 
+plot_patchwork_1 %>% 
+  ggsave(filename = here("Figures", "Prediction_gene_expression_distribution_FIT_HUMAN_MOUSE_top5FITandMOUSE.png"),
+         width = 12,
+         height = 8)
+
 plot_patchwork_1
 
 ```
@@ -3433,6 +3438,8 @@ metrics_FIT_M_vs_FIT_filtered_RMSE_plot = metrics_FIT_M_vs_FIT_filtered_DEGs %>%
     "FIT CI 50%"     = "#FFA726FF",
     "FIT CI 100%"   = "#FFE0B2FF"
   ))
+
+metrics_FIT_M_vs_FIT_filtered_RMSE_plot
 ```
 
 #### R2
@@ -4507,15 +4514,7 @@ Non_immune_Pearson_Spearman_Plots %>%
 
 
 
-
-
-
-
-
-
-
-
-#### Correlation
+#### Plot correlation
 
 ```{r fig.height=10, fig.width=10}
 library(dplyr)
@@ -4530,39 +4529,48 @@ immune_genes <- unique(ImmuneGO_Mouse_Manual_genes$genes) %>% str_to_upper()
 padj_values <- c(0.01, 0.05, seq(0.1, 1, 0.1))
 ci_percentiles <- c(0.1, 0.2, 0.3, 0.5)
 logfc_cutoffs <- c(0.1, 0.2, 0.5, 1)
-timepoint <- 1  # ou altere conforme necessário
+timepoints <- c(1, 3, 7)
 
-# Expandir filtros e aplicar
+# Expandir e aplicar filtros com tipo seguro
 plot_data_lfc <- expand.grid(
   padj_fit = padj_values,
   ci_percentile = ci_percentiles,
-  expr_cutoff = logfc_cutoffs
+  expr_cutoff = logfc_cutoffs,
+  timepoint = timepoints
 ) %>%
-  rowwise() %>%
-  do({
-    fc <- as.list(.)
+  pmap_dfr(function(padj_fit, ci_percentile, expr_cutoff, timepoint) {
     
     df <- pairwise_human_fit_test %>%
-      filter(timepoint == timepoint)
+      filter(timepoint == !!timepoint)
     
-    ci_cutoff <- quantile(df$ci_width_mouse, probs = fc$ci_percentile, na.rm = TRUE)
+    ci_cutoff <- quantile(df$ci_width_mouse, probs = ci_percentile, na.rm = TRUE)
     
     df_filtered <- df %>%
       filter(
-        pval_mouse_adj < fc$padj_fit,
-        abs(Mouse) > fc$expr_cutoff,
+        pval_mouse_adj < padj_fit,
+        abs(Mouse) > expr_cutoff,
         ci_width_mouse <= ci_cutoff
       ) %>%
       mutate(
-        padj_fit = paste0("padj < ", fc$padj_fit),
-        ci_percentile = paste0("CI ", fc$ci_percentile * 100, "%"),
-        expr_cutoff = paste0("log2FC > ", fc$expr_cutoff),
-        immune_status = ifelse(str_to_upper(human_symbol) %in% immune_genes, "Immune", "Non-Immune")
+        padj_fit = paste0("padj < ", padj_fit),
+        ci_percentile = paste0("CI ", ci_percentile * 100, "%"),
+        expr_cutoff = paste0("log2FC > ", expr_cutoff),
+        immune_status = ifelse(str_to_upper(human_symbol) %in% immune_genes, "Immune", "Non-Immune"),
+        timepoint = timepoint
       )
     
-    df_filtered
-  }) %>%
-  bind_rows()
+    if (nrow(df_filtered) == 0) {
+      return(tibble(
+        padj_fit = character(),
+        ci_percentile = character(),
+        expr_cutoff = character(),
+        immune_status = character(),
+        timepoint = numeric()
+      ))
+    } else {
+      return(df_filtered)
+    }
+  })
 ```
 
 
@@ -4581,29 +4589,158 @@ metrics_FIT_M_vs_FIT_filtered_DEGs_Immune %>%
 
 
 ```{r fig.height=8, fig.width=6}
-plot_data_lfc %>% 
-  filter(padj_fit == "padj < 0.05",
-         ci_percentile == "CI 10%") %>% 
-  ggplot( 
-  aes(x = Human, 
-      y = Mouse, 
-      color = immune_status, 
-      fill = immune_status)
-  ) +
-  geom_point(alpha = 0.5, show.legend = T, fill = NA, pch = 21) +
-  geom_smooth(method = "lm", se = T, show.legend = F) +
-  facet_grid(expr_cutoff ~ timepoint, scales = "free") +
-  scale_color_manual(values = c("Immune" = "#E41A1C", "Non-Immune" = "#377EB8")) +
-  scale_fill_manual(values = c("Immune" = "#E41A1C", "Non-Immune" = "#377EB8")) +
+human_vs_mouse_immune = pairwise_human_fit_test %>% 
+  mutate(immune_status = ifelse(str_to_upper(human_symbol) %in% immune_genes, "Immune", "Non-Immune")) %>% 
+mutate(pval_cuts = case_when(
+  pval_mouse_adj <= 0.01 ~ "<0.01",
+  pval_mouse_adj <= 0.05 ~ "<0.05",
+  pval_mouse_adj <= 0.10 ~ "<0.10",
+  pval_mouse_adj <= 0.25 ~ "<0.25",
+  TRUE ~ ">0.25"
+)) %>% 
+  ggplot() +
+  aes(x = Mouse,
+      y = Human,
+      color = immune_status,
+      fill = immune_status) +
+  geom_point(alpha = 0.2,
+             size = 0.2,
+             # fill = NA,
+             pch = 21,
+             show.legend = F,
+             # color = "#90A4AEFF"
+             ) +
+  geom_smooth(method = 'lm', se = TRUE) +
+    scale_color_manual(values = c(
+    "Immune"  = "#CE1800FF",
+    "Non-Immune" = "#90A4AEFF"
+  )) +
+    scale_fill_manual(values = c(
+    "Immune"  = "#CE1800FF",
+    "Non-Immune" = "#90A4AEFF"
+  )) +
+
+  facet_grid(~timepoint~pval_cuts, scales = "free_x") +
+    scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
   theme_vaxgo() +
-  labs(
-    title = "Scatterplot: log2FC Human vs Mouse",
-    x = "Log2FC Human",
-    y = "Log2FC Mouse",
-    color = "Immune status"
-  ) +
-  theme(strip.text.y = element_text(angle =0),
-        legend.position = "top", legend.direction = "vertical")
+  labs(title ="Mouse vs Human gene expression") +
+    theme(
+      legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
+  )
+
+fit_vs_human_immune = pairwise_human_fit_test %>% 
+  mutate(immune_status = ifelse(str_to_upper(human_symbol) %in% immune_genes, "Immune", "Non-Immune")) %>% 
+mutate(pval_cuts = case_when(
+  pval_fit_adj <= 0.01 ~ "<0.01",
+  pval_fit_adj <= 0.05 ~ "<0.05",
+  pval_fit_adj <= 0.10 ~ "<0.10",
+  pval_fit_adj <= 0.25 ~ "<0.25",
+  TRUE ~ ">0.25"
+)) %>% 
+  ggplot() +
+  aes(x = `FIT Prediction`,
+      y = Human,
+      color = immune_status,
+      fill = immune_status) +
+  geom_point(alpha = 0.2,
+             size = 0.2,
+             # fill = NA,
+             pch = 21,
+             show.legend = F,
+             # color = "#90A4AEFF"
+             ) +
+  geom_smooth(method = 'lm', se = TRUE) +
+    scale_color_manual(values = c(
+    "Immune"  = "#CE1800FF",
+    "Non-Immune" = "#90A4AEFF"
+  )) +
+    scale_fill_manual(values = c(
+    "Immune"  = "#CE1800FF",
+    "Non-Immune" = "#90A4AEFF"
+  )) +
+
+  facet_grid(~timepoint~pval_cuts, scales = "free_x") +
+    scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
+  theme_vaxgo() +
+  labs(title ="FIT vs Human gene expression") +
+    theme(
+      legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
+  )
+```
+
+
+```{r fig.height=12, fig.width=6}
+fit_vs_mouse_corr_immune = pairwise_human_fit_test %>% 
+  mutate(immune_status = ifelse(str_to_upper(human_symbol) %in% immune_genes, "Immune", "Non-Immune")) %>% 
+mutate(pval_cuts = case_when(
+  pval_fit_adj <= 0.01 ~ "<0.01",
+  pval_fit_adj <= 0.05 ~ "<0.05",
+  pval_fit_adj <= 0.10 ~ "<0.10",
+  pval_fit_adj <= 0.25 ~ "<0.25",
+  TRUE ~ ">0.25"
+)) %>% 
+  ggplot() +
+  aes(x = `FIT Prediction`,
+      y = Mouse,
+      color = immune_status,
+      fill = immune_status) +
+  geom_point(alpha = 0.2,
+             size = 0.2,
+             # fill = NA,
+             pch = 21,
+             show.legend = F,
+             # color = "#90A4AEFF"
+             ) +
+  geom_smooth(method = 'lm', se = TRUE) +
+    scale_color_manual(values = c(
+    "Immune"  = "#CE1800FF",
+    "Non-Immune" = "#90A4AEFF"
+  )) +
+    scale_fill_manual(values = c(
+    "Immune"  = "#CE1800FF",
+    "Non-Immune" = "#90A4AEFF"
+  )) +
+
+  facet_grid(~timepoint~pval_cuts, scales = "free_x") +
+    scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
+  theme_vaxgo() +
+  labs(title ="FIT vs Mouse gene expression") +
+    theme(
+      legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
+  )
+
+
+pairwise_human_fit_test_corr_plots_immune = human_vs_mouse_immune / 
+  fit_vs_human_immune/
+  fit_vs_mouse_corr_immune +
+  plot_layout(guides =  "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+pairwise_human_fit_test_corr_plots_immune %>% 
+  ggsave(filename = here("Figures", "pairwise_human_fit_test_corr_plots_IMMUNE.png"), width = 6, height = 12)
+
+pairwise_human_fit_test_corr_plots_immune
 
 ```
 
@@ -4613,18 +4750,18 @@ plot_data_lfc %>%
 
 
 ```{r fig.height=10, fig.width=15}
-filter_conditions_results_mouse %>% 
-  mutate(across(padj_mouse:timepoint, as.character)) %>% 
+plot_data_lfc %>% 
+  mutate(across(padj_:timepoint, as.character)) %>% 
   ggplot() +
   aes(x = expr_cutoff,
       y = R2_human2mouse,
-      color = ci_width_mouse_cutoff,
-      group = ci_width_mouse_cutoff) +
+      color = ci_width_cutoff,
+      group = ci_width_cutoff) +
     geom_line() +
   geom_point(
     aes(size = n_genes)
              ) +
-  facet_grid(~padj_mouse~timepoint) +
+  facet_grid(~padj~timepoint) +
   theme_vaxgo() +
   labs(subtitle = "Top (Time (days)), side (padj_fit)",
        x = "L2FC Cutoff)",
