@@ -2851,7 +2851,7 @@ pairwise_human_fit_measures %>%
   
 ```
 
-## Regression metrics
+# Regression model: Regression metrics
 
 ```{r fig.height=5, fig.width=5}
 pairwise_human_fit_measures = readRDS(here("FIT_Mouse2man", "pairwise_human_fit_measures.rds"))
@@ -2889,7 +2889,7 @@ pairwise_human_fit_test %>% glimpse()
 pairwise_human_fit_test %>% saveRDS(here("FIT_Mouse2man", "pairwise_human_fit_test.rds"))
 ```
 
-## Get genes
+### Get genes
 
 
 ####Top 10 genes
@@ -4509,6 +4509,15 @@ Non_immune_R2_RMSE_Plots %>%
 Non_immune_Pearson_Spearman_Plots %>% 
    ggsave(filename = here("Figures",  "metrics_FIT_M_vs_FIT_filtered_Spearman_Pearson_plot_non_immune.png"), 
          width = 14, height = 6)
+
+#Plot all
+immune_R2_RMSE_Plots
+immune_Pearson_Spearman_Plots
+Non_immune_R2_RMSE_Plots
+Non_immune_Pearson_Spearman_Plots
+
+
+
 ```
 
 
@@ -4742,69 +4751,6 @@ pairwise_human_fit_test_corr_plots_immune %>%
 
 pairwise_human_fit_test_corr_plots_immune
 
-```
-
-
-
-
-
-
-```{r fig.height=10, fig.width=15}
-plot_data_lfc %>% 
-  mutate(across(padj_:timepoint, as.character)) %>% 
-  ggplot() +
-  aes(x = expr_cutoff,
-      y = R2_human2mouse,
-      color = ci_width_cutoff,
-      group = ci_width_cutoff) +
-    geom_line() +
-  geom_point(
-    aes(size = n_genes)
-             ) +
-  facet_grid(~padj~timepoint) +
-  theme_vaxgo() +
-  labs(subtitle = "Top (Time (days)), side (padj_fit)",
-       x = "L2FC Cutoff)",
-       y = "R2_human2mouse") +
-  scale_color_npg()
-
-filter_conditions_results_mouse %>% 
-  mutate(across(padj_mouse:timepoint, as.character)) %>% 
-  ggplot() +
-  aes(x = expr_cutoff,
-      y = Spearman_human2mouse,
-      color = ci_width_mouse_cutoff,
-      group = ci_width_mouse_cutoff) +
-    geom_line() +
-  geom_point(
-    aes(size = n_genes)
-             ) +
-  facet_grid(~padj_mouse~timepoint) +
-  theme_vaxgo() +
-  labs(subtitle = "Top (Time (days)), side (padj_mouse)",
-       x = "L2FC Cutoff)",
-       y = "Spearman_human2mouse") +
-  scale_color_npg()
-
-
-filter_conditions_results_mouse %>% 
-  mutate(across(padj_mouse:timepoint, as.character)) %>% 
-  ggplot() +
-  aes(x = expr_cutoff,
-      y = Pearson_human2mouse,
-      color = ci_width_mouse_cutoff,
-      group = ci_width_mouse_cutoff) +
-    geom_line() +
-  geom_point(
-    aes(size = n_genes)
-             ) +
-  facet_grid(~padj_mouse~timepoint) +
-  theme_vaxgo() +
-  labs(subtitle = "Top (Time (days)), side (padj_mouse)",
-       x = "L2FC Cutoff)",
-       y = "Pearson_human2mouse") +
-  scale_color_npg()
-  
 ```
 
 
@@ -5045,10 +4991,385 @@ heatmap_plot_all
 
 
 
+# Classification model
+
+```{r}
+#Define cutoffs
+padj_cutoffs <- c(0.05, 0.10, 0.20, 0.30, 0.40, 0.50)
+l2fc_cutoffs <- c(0, 0.1, 0.5, 1)
+
+# Grid 
+cutoff_grid <- expand_grid(padj_cutoff = padj_cutoffs, l2fc_cutoff = l2fc_cutoffs)
+
+# Get DEGs
+base_df <- pairwise_human_fit_genes_wide %>%
+  select(human_symbol:ci_high, ci_width) %>%
+  distinct() %>%
+  mutate(
+    z_deg = mean / se,
+    p_deg = 2 * pnorm(-abs(z_deg)),
+    padj_deg = p.adjust(p_deg, method = "BH")
+  )
+
+# Apply function
+classified_df <- pmap_dfr(
+  cutoff_grid,
+  function(padj_cutoff, l2fc_cutoff) {
+    base_df %>%
+      mutate(
+        padj_cutoff = padj_cutoff,
+        l2fc_cutoff = l2fc_cutoff,
+        classification = case_when(
+          padj_deg < padj_cutoff & mean > l2fc_cutoff  ~ "up",
+          padj_deg < padj_cutoff & mean < -l2fc_cutoff ~ "down",
+          TRUE                                          ~ "neutral"
+        )
+      )
+  })
+
+
+
+#Summarize genes
+classified_df_countgenes_degs_direction = classified_df %>% 
+  group_by(organism, timepoint, padj_cutoff, l2fc_cutoff, classification) %>% 
+  summarize(n_genes = n()) %>% 
+  ungroup()  %>% 
+  mutate(across(c(timepoint, padj_cutoff, l2fc_cutoff), as.character))
+
+```
+
+
+Lineplot
+```{r fig.width=10, fig.height=4}
+classification_degs_ngenes_plot = classified_df_countgenes_degs_direction %>%
+  filter(classification != "neutral") %>%
+  mutate(row_labels = paste0("padj: ", padj_cutoff),
+         timepoint = paste0("Day ", timepoint)) %>%   # cria label combinada
+  ggplot() +
+  aes(x = l2fc_cutoff,
+      y = n_genes) +
+    geom_point(aes(color = organism,
+                 shape = classification,
+                 fill = organism),
+             size = 2,
+             alpha = 0.5
+             ) +
+  geom_line(aes(group = interaction(classification, organism),
+                color = organism)) +
+    scale_shape_manual(values=c("up" = 24, 
+                                "down" = 25, 
+                                "neutral" = 1))+
+  facet_grid(~timepoint~row_labels)+ 
+  scale_y_continuous(n.breaks = 4,
+                     # limits = c(0, 3000),
+                     # oob = scales::squish
+                     ) +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.text.y = element_text(angle = 0),
+    strip.placement = "outside",
+     strip.background.x = element_rect(fill = "gray95", color = NA), 
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
+  ) +
+  labs(
+    title = "Number of genes",
+    x = "L2FC Cutoff",
+    y = "#Genes",
+    color = "Organism",
+    fill = "Organism",
+    shape = "Classification"
+  ) +
+  scale_color_manual(values = c(
+    "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+  scale_fill_manual(values = c(
+    "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) 
+classification_degs_ngenes_plot
+
+```
+
+
+```{r}
+classified_wide <- classified_df %>%
+  select(human_symbol, timepoint, padj_cutoff, l2fc_cutoff, organism, classification) %>%
+  pivot_wider(names_from = organism, values_from = classification) %>%
+  filter(!is.na(Human) & !is.na(FIT) & !is.na(Mouse)) %>% 
+  mutate(
+    fit_correct = FIT == Human,
+    mouse_correct = Mouse == Human
+  )
+
+classified_eval = classified_wide
+
+# Define o conjunto de métricas corretamente
+my_metrics <- metric_set(accuracy, precision, recall, f_meas, spec, sens)
+
+### FIT
+fit_classification_degs = classified_eval %>%
+  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+  mutate(
+    truth = factor(Human, levels = c("up", "down", "neutral")),
+    estimate = factor(FIT, levels = c("up", "down", "neutral"))
+  ) %>%
+  my_metrics(truth = truth, estimate = estimate, estimator = "macro") %>% 
+  mutate(model = "FIT")
+
+fit_classification_degs_ngenes = classified_eval %>% 
+  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+  mutate(
+    truth = factor(Human, levels = c("up", "down", "neutral")),
+    estimate = factor(FIT, levels = c("up", "down", "neutral"))
+  ) %>% 
+  mutate(
+    correct = truth == estimate,  # genes corretos
+    incorrect = truth != estimate  # genes incorretos
+  ) %>% 
+  summarise(
+    num_correct = sum(correct),
+    num_incorrect = sum(incorrect),
+    .groups = 'drop'
+  )
+
+fit_classification_degs = fit_classification_degs %>% 
+  inner_join(fit_classification_degs_ngenes,
+             by = join_by("timepoint", "padj_cutoff", "l2fc_cutoff"))
+
+
+### MOUSE
+mouse_classification_degs = classified_eval %>%
+  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+  mutate(
+    truth = factor(Human, levels = c("up", "down", "neutral")),
+    estimate = factor(Mouse, levels = c("up", "down", "neutral"))
+  ) %>%
+  my_metrics(truth = truth, estimate = estimate, estimator = "macro") %>% 
+  mutate(model = "Mouse") 
+
+
+mouse_classification_degs_ngenes = classified_eval %>% 
+  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+  mutate(
+    truth = factor(Human, levels = c("up", "down", "neutral")),
+    estimate = factor(Mouse, levels = c("up", "down", "neutral"))
+  ) %>% 
+  mutate(
+    correct = truth == estimate,  # genes corretos
+    incorrect = truth != estimate  # genes incorretos
+  ) %>% 
+  summarise(
+    num_correct = sum(correct),
+    num_incorrect = sum(incorrect),
+    .groups = 'drop'
+  )
+
+mouse_classification_degs = mouse_classification_degs %>% 
+  inner_join(mouse_classification_degs_ngenes,
+             by = join_by("timepoint", "padj_cutoff", "l2fc_cutoff"))
+
+
+classification_degs_comparison = fit_classification_degs %>% 
+  bind_rows(mouse_classification_degs) %>% 
+  mutate(total_genes = (num_correct+num_incorrect))
+
+classification_degs_comparison %>% 
+  write_csv(file = here("FIT_Mouse2man", "classification_degs_comparison.csv"))
+
+
+classification_degs_comparison %>% 
+  filter(timepoint == 1,
+         padj_cutoff == 0.05,
+         l2fc_cutoff == 0.0,
+         .metric == "accuracy")
+
+
+classification_degs_comparison %>% 
+  glimpse()
+
+```
+
+
+```{r fig.height=12, fig.width=10}
+classification_degs_comparison = read_csv(file = here("FIT_Mouse2man", "classification_degs_comparison.csv"))
 
 
 
 
+classification_degs_accuracy_plot =classification_degs_comparison %>% 
+  mutate(l2fc_cutoff = as.character(l2fc_cutoff),
+         timepoint = paste0("Day ", timepoint),
+         padj_cutoff = paste0("padj: ", padj_cutoff)) %>% 
+  filter(.metric %in% c("accuracy")) %>%
+  ggplot() +
+  aes(x = l2fc_cutoff,
+      y = .estimate,
+      color = model,
+      fill = model) +
+  geom_line(aes(group = model)) +
+    geom_point(aes(fill = model,
+                   size = num_correct),
+             pch = 21,
+             color = "black",
+             alpha = 0.5
+             ) +
+    scale_size(range = c(0.1, 4)) +
+  facet_grid(~timepoint~padj_cutoff, scales = "free_y")+
+  scale_y_continuous(n.breaks = 4, expand = c(0.05, 0.05)) +
+  scale_color_manual(values = c(
+    # "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+    scale_fill_manual(values = c(
+    # "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(0.5, "lines"),
+  ) +
+  labs(
+    title = "Accuracy",
+    x = "L2FC Cutoff",
+    y = "Accuracy",
+    color = "Model",
+    fill = "Model",
+    size = "Correct"
+  ) 
+
+
+classification_degs_recall_plot = classification_degs_comparison %>% 
+  mutate(l2fc_cutoff = as.character(l2fc_cutoff),
+         timepoint = paste0("Day ", timepoint),
+         padj_cutoff = paste0("padj: ", padj_cutoff)) %>% 
+  filter(.metric %in% c("recall")) %>%
+  ggplot() +
+  aes(x = l2fc_cutoff,
+      y = .estimate,
+      color = model,
+      fill = model) +
+  geom_line(aes(group = model)) +
+    geom_point(aes(fill = model,
+                   size = num_correct),
+             pch = 21,
+             color = "black",
+             alpha = 0.5
+             ) +
+    scale_size(range = c(0.1, 4),
+               # breaks = c(10, 100, 500, 1000)
+               ) +
+  facet_grid(~timepoint~padj_cutoff, scales = "free_y")+
+  scale_y_continuous(n.breaks = 4, expand = c(0.05, 0.05)) +
+  scale_color_manual(values = c(
+    # "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+    scale_fill_manual(values = c(
+    # "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(0.5, "lines"),
+  ) +
+  labs(
+    title = "Recall",
+    x = "L2FC Cutoff",
+    y = "Recall",
+    color = "Model",
+    fill = "Model",
+    size = "Correct"
+  ) 
+
+classification_degs_precision_plot = classification_degs_comparison %>% 
+  mutate(l2fc_cutoff = as.character(l2fc_cutoff),
+         timepoint = paste0("Day ", timepoint),
+         padj_cutoff = paste0("padj: ", padj_cutoff)) %>% 
+  filter(.metric %in% c("precision")) %>%
+  ggplot() +
+  aes(x = l2fc_cutoff,
+      y = .estimate,
+      color = model,
+      fill = model) +
+  geom_line(aes(group = model)) +
+    geom_point(aes(fill = model,
+                   size = num_correct),
+               alpha = 0.5,
+             pch = 21,
+             color = "black"
+             ) +
+    scale_size(range = c(0.1, 4),
+               # breaks = c(10, 100, 500, 1000)
+               ) +
+  facet_grid(~timepoint~padj_cutoff, scales = "free_y")+
+  scale_y_continuous(n.breaks = 4, expand = c(0.05, 0.05)) +
+  scale_color_manual(values = c(
+    # "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+    scale_fill_manual(values = c(
+    # "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(0.5, "lines"),
+  ) +
+  labs(
+    title = "Precision",
+    x = "L2FC Cutoff",
+    y = "Precision",
+    color = "Model",
+    fill = "Model",
+    size = "Correct"
+  )
+```
+
+
+```{r fig.height=8, fig.width=15}
+classification_degs_ngenes_plot +
+classification_degs_accuracy_plot+
+classification_degs_recall_plot+
+  classification_degs_precision_plot +
+  plot_layout(axes = "collect", ncol = 2,
+              guides = "collect", axis_titles = "collect")
+  
+```
+
+# GSEA
+```{r}
+
+```
 
 
 
