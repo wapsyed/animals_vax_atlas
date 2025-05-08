@@ -2625,7 +2625,7 @@ fit_example_results_ready %>%
 ```
 
 
-Compare with human log2fc
+## Compare with human log2fc
 ```{r}
 cleandata_nonorm_flu <- readRDS(here("HumanFluData", "cleandata_nonorm_flu.rds")) 
 
@@ -2666,6 +2666,22 @@ flu_expression_fc_summary
 
 flu_expression_fc_summary %>% 
   saveRDS(here("tables", "flu_expression_fc_summary_human.rds"))
+
+library(skimr)
+
+skim(flu_metadata)
+
+
+flu_metadata %>%
+  filter(str_detect(exposure_material_reported, "FLUAD")) %>% 
+  select(exposure_material_reported) %>% 
+  distinct()
+
+
+flu_metadata %>%
+  # filter(str_detect(exposure_material_reported, "FLUAD")) %>% 
+  select(exposure_material_reported, cell_type, vaccine_type:pathogen) %>% 
+  distinct()
 ```
 
 
@@ -5003,6 +5019,7 @@ cutoff_grid <- expand_grid(padj_cutoff = padj_cutoffs, l2fc_cutoff = l2fc_cutoff
 
 # Get DEGs
 base_df <- pairwise_human_fit_genes_wide %>%
+  filter()
   select(human_symbol:ci_high, ci_width) %>%
   distinct() %>%
   mutate(
@@ -5028,9 +5045,19 @@ classified_df <- pmap_dfr(
   })
 
 
+#Get only DEGs in humans
+
+degs_human = classified_df %>% 
+  filter(organism == "Human",
+         padj_deg < 0.10) %>% 
+  pull(human_symbol) %>% 
+  unique()
+
+length(degs_human)
 
 #Summarize genes
 classified_df_countgenes_degs_direction = classified_df %>% 
+  filter(human_symbol %in% c(degs_human)) %>% 
   group_by(organism, timepoint, padj_cutoff, l2fc_cutoff, classification) %>% 
   summarize(n_genes = n()) %>% 
   ungroup()  %>% 
@@ -5050,9 +5077,11 @@ classification_degs_ngenes_plot = classified_df_countgenes_degs_direction %>%
       y = n_genes) +
     geom_point(aes(color = organism,
                  shape = classification,
-                 fill = organism),
+                 # fill = organism
+                 ),
              size = 2,
-             alpha = 0.5
+             fill = NA,
+             alpha = 1
              ) +
   geom_line(aes(group = interaction(classification, organism),
                 color = organism)) +
@@ -5098,7 +5127,25 @@ classification_degs_ngenes_plot
 
 
 ```{r}
+genes_ci_30 <- classified_df %>%
+    filter(organism != "Human",
+           ci_width > 0) %>% 
+  group_by(organism, human_symbol) %>% 
+  summarise(mean_ci_width = mean(ci_width, na.rm = TRUE)) %>%
+  arrange(mean_ci_width) %>%
+  slice_head(prop = 0.30)  # pega os 10% menores
+
+# Agora filtra o dataframe original com base nesses genes
+genes_ci_30 <- classified_df %>%
+  filter(organism != "Human",
+         human_symbol %in% genes_ci_30$human_symbol) %>% 
+  mutate(organism = paste0(organism, " (CI 30%)"))
+```
+
+
+```{r}
 classified_wide <- classified_df %>%
+  bind_rows(genes_ci_30) %>% 
   select(human_symbol, timepoint, padj_cutoff, l2fc_cutoff, organism, classification) %>%
   pivot_wider(names_from = organism, values_from = classification) %>%
   filter(!is.na(Human) & !is.na(FIT) & !is.na(Mouse)) %>% 
@@ -5106,88 +5153,188 @@ classified_wide <- classified_df %>%
     fit_correct = FIT == Human,
     mouse_correct = Mouse == Human
   )
-
+classified_wide %>% 
+  glimpse()
 classified_eval = classified_wide
+```
 
+
+```{r}
 # Define o conjunto de métricas corretamente
 my_metrics <- metric_set(accuracy, precision, recall, f_meas, spec, sens)
 
 ### FIT
-fit_classification_degs = classified_eval %>%
+# "up" vs all
+acc_up_vs_all_fit <- classified_eval %>%
+  mutate(
+    truth = factor(ifelse(Human == "up", "up", "not_up"), levels = c("up", "not_up")),
+    estimate = factor(ifelse(FIT == "up", "up", "not_up"), levels = c("up", "not_up"))
+  ) %>%
   group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+  my_metrics(truth = truth, estimate = estimate) %>%
+  mutate(model = "FIT", target = "up")
+
+acc_up_vs_all_fit30 <- classified_eval %>%
+  drop_na() %>% 
+  mutate(
+    truth = factor(ifelse(Human == "up", "up", "not_up"), levels = c("up", "not_up")),
+    estimate = factor(ifelse(`FIT (CI 30%)` == "up", "up", "not_up"), levels = c("up", "not_up"))
+  ) %>%
+  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+  my_metrics(truth = truth, estimate = estimate) %>%
+  mutate(model = "FIT 30%", target = "up")
+
+# "down" vs all
+acc_down_vs_all_fit <- classified_eval %>%
+  mutate(
+    truth = factor(ifelse(Human == "down", "down", "not_down"), levels = c("down", "not_down")),
+    estimate = factor(ifelse(FIT == "down", "down", "not_down"), levels = c("down", "not_down"))
+  ) %>%
+  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+  my_metrics(truth = truth, estimate = estimate) %>%
+  mutate(model = "FIT", target = "down")
+
+acc_down_vs_all_fit30 <- classified_eval %>%
+  mutate(
+    truth = factor(ifelse(Human == "down", "down", "not_down"), levels = c("down", "not_down")),
+    estimate = factor(ifelse(`FIT (CI 30%)` == "down", "down", "not_down"), levels = c("down", "not_down"))
+  ) %>%
+  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+  my_metrics(truth = truth, estimate = estimate) %>%
+  mutate(model = "FIT 30%", target = "down")
+
+acc_fit_results <- bind_rows(acc_up_vs_all_fit, acc_up_vs_all_fit30, acc_down_vs_all_fit, acc_down_vs_all_fit30)
+
+fit_classification_degs_ngenes <- classified_eval %>%
   mutate(
     truth = factor(Human, levels = c("up", "down", "neutral")),
-    estimate = factor(FIT, levels = c("up", "down", "neutral"))
-  ) %>%
-  my_metrics(truth = truth, estimate = estimate, estimator = "macro") %>% 
+    estimate = factor(FIT, levels = c("up", "down", "neutral")),
+    correct = truth == estimate,
+    incorrect = truth != estimate
+  ) %>% 
+  group_by(timepoint, padj_cutoff, l2fc_cutoff, truth) %>%
+  summarise(
+    num_correct_tp = sum(correct, na.rm = T),
+    num_incorrect_fp = sum(incorrect, na.rm = T),
+    .groups = "drop"
+  ) %>% 
   mutate(model = "FIT")
 
-fit_classification_degs_ngenes = classified_eval %>% 
-  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+fit_classification_degs_ngenes_ci30 <- classified_eval %>%
   mutate(
     truth = factor(Human, levels = c("up", "down", "neutral")),
-    estimate = factor(FIT, levels = c("up", "down", "neutral"))
+    estimate = factor(`FIT (CI 30%)`, levels = c("up", "down", "neutral")),
+    correct = truth == estimate,
+    incorrect = truth != estimate
   ) %>% 
-  mutate(
-    correct = truth == estimate,  # genes corretos
-    incorrect = truth != estimate  # genes incorretos
-  ) %>% 
+  group_by(timepoint, padj_cutoff, l2fc_cutoff, truth) %>%
   summarise(
-    num_correct = sum(correct),
-    num_incorrect = sum(incorrect),
-    .groups = 'drop'
-  )
+    num_correct_tp = sum(correct, na.rm = T),
+    num_incorrect_fp = sum(incorrect, na.rm = T),
+    .groups = "drop"
+  ) %>% 
+  mutate(model = "FIT 30%")
 
-fit_classification_degs = fit_classification_degs %>% 
+fit_classification_degs_ngenes = bind_rows(fit_classification_degs_ngenes, fit_classification_degs_ngenes_ci30)
+
+fit_classification_degs = acc_fit_results %>% 
+  rename(truth = target) %>% 
   inner_join(fit_classification_degs_ngenes,
-             by = join_by("timepoint", "padj_cutoff", "l2fc_cutoff"))
+             by = join_by("model", "timepoint", "padj_cutoff", "l2fc_cutoff", "truth"))
+
+fit_classification_degs %>% 
+  arrange(-.estimate) %>% 
+  filter(num_correct_tp > 0)
+```
 
 
+```{r}
 ### MOUSE
-mouse_classification_degs = classified_eval %>%
-  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+# "up" vs all
+acc_up_vs_all_mouse <- classified_eval %>%
   mutate(
-    truth = factor(Human, levels = c("up", "down", "neutral")),
-    estimate = factor(Mouse, levels = c("up", "down", "neutral"))
+    truth = factor(ifelse(Human == "up", "up", "not_up"), levels = c("up", "not_up")),
+    estimate = factor(ifelse(Mouse == "up", "up", "not_up"), levels = c("up", "not_up"))
   ) %>%
-  my_metrics(truth = truth, estimate = estimate, estimator = "macro") %>% 
-  mutate(model = "Mouse") 
-
-
-mouse_classification_degs_ngenes = classified_eval %>% 
   group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+  my_metrics(truth = truth, estimate = estimate) %>%
+  mutate(model = "Mouse", target = "up")
+
+acc_up_vs_all_mouse_30 <- classified_eval %>%
+  mutate(
+    truth = factor(ifelse(Human == "up", "up", "not_up"), levels = c("up", "not_up")),
+    estimate = factor(ifelse(`Mouse (CI 30%)` == "up", "up", "not_up"), levels = c("up", "not_up"))
+  ) %>%
+  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+  my_metrics(truth = truth, estimate = estimate) %>%
+  mutate(model = "Mouse 30%", target = "up")
+
+# "down" vs all
+acc_down_vs_all_mouse <- classified_eval %>%
+  mutate(
+    truth = factor(ifelse(Human == "down", "down", "not_down"), levels = c("down", "not_down")),
+    estimate = factor(ifelse(Mouse == "down", "down", "not_down"), levels = c("down", "not_down"))
+  ) %>%
+  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+  my_metrics(truth = truth, estimate = estimate) %>%
+  mutate(model = "Mouse", target = "down")
+
+acc_down_vs_all_mouse_30 <- classified_eval %>%
+  mutate(
+    truth = factor(ifelse(Human == "down", "down", "not_down"), levels = c("down", "not_down")),
+    estimate = factor(ifelse(`Mouse (CI 30%)` == "down", "down", "not_down"), levels = c("down", "not_down"))
+  ) %>%
+  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
+  my_metrics(truth = truth, estimate = estimate) %>%
+  mutate(model = "Mouse 30%", target = "down")
+
+acc_mouse_results <- bind_rows(acc_down_vs_all_mouse, acc_up_vs_all_mouse, acc_down_vs_all_mouse_30, acc_up_vs_all_mouse_30)
+
+mouse_classification_degs_ngenes <- classified_eval %>%
   mutate(
     truth = factor(Human, levels = c("up", "down", "neutral")),
-    estimate = factor(Mouse, levels = c("up", "down", "neutral"))
+    estimate = factor(FIT, levels = c("up", "down", "neutral")),
+    correct = truth == estimate,
+    incorrect = truth != estimate
   ) %>% 
-  mutate(
-    correct = truth == estimate,  # genes corretos
-    incorrect = truth != estimate  # genes incorretos
-  ) %>% 
+  group_by(timepoint, padj_cutoff, l2fc_cutoff, truth) %>%
   summarise(
-    num_correct = sum(correct),
-    num_incorrect = sum(incorrect),
-    .groups = 'drop'
-  )
+    num_correct_tp = sum(correct, na.rm = T),
+    num_incorrect_fp = sum(incorrect, na.rm = T),
+    .groups = "drop"
+  ) %>% 
+  mutate(model = "Mouse")
 
-mouse_classification_degs = mouse_classification_degs %>% 
+mouse_classification_degs_ngenes_ci30 <- classified_eval %>%
+  mutate(
+    truth = factor(Human, levels = c("up", "down", "neutral")),
+    estimate = factor(`Mouse (CI 30%)`, levels = c("up", "down", "neutral")),
+    correct = truth == estimate,
+    incorrect = truth != estimate
+  ) %>% 
+  group_by(timepoint, padj_cutoff, l2fc_cutoff, truth) %>%
+  summarise(
+    num_correct_tp = sum(correct, na.rm = T),
+    num_incorrect_fp = sum(incorrect, na.rm = T),
+    .groups = "drop"
+  ) %>% 
+  mutate(model = "Mouse 30%")
+
+mouse_classification_degs_ngenes = bind_rows(mouse_classification_degs_ngenes, mouse_classification_degs_ngenes_ci30)
+
+
+mouse_classification_degs = acc_mouse_results %>% 
+  rename(truth = target) %>% 
   inner_join(mouse_classification_degs_ngenes,
-             by = join_by("timepoint", "padj_cutoff", "l2fc_cutoff"))
+             by = join_by("model", "timepoint", "padj_cutoff", "l2fc_cutoff", "truth"))
 
+mouse_classification_degs
 
 classification_degs_comparison = fit_classification_degs %>% 
-  bind_rows(mouse_classification_degs) %>% 
-  mutate(total_genes = (num_correct+num_incorrect))
+  bind_rows(mouse_classification_degs)
 
 classification_degs_comparison %>% 
   write_csv(file = here("FIT_Mouse2man", "classification_degs_comparison.csv"))
-
-
-classification_degs_comparison %>% 
-  filter(timepoint == 1,
-         padj_cutoff == 0.05,
-         l2fc_cutoff == 0.0,
-         .metric == "accuracy")
 
 
 classification_degs_comparison %>% 
@@ -5195,14 +5342,51 @@ classification_degs_comparison %>%
 
 ```
 
+Table
+```{r}
 
-```{r fig.height=12, fig.width=10}
+library(gtable)
+library(gtExtras)
+
+classification_degs_comparison %>% 
+  filter(
+    # padj_cutoff == 0.05,
+    # l2fc_cutoff < 1,
+    .metric == "accuracy")  %>% 
+  arrange(timepoint, -.estimate, -num_correct_tp) %>% 
+  select(timepoint:l2fc_cutoff, .estimate,truth, model:num_correct_tn) 
+
+
+summary_table_accuracy = 
+  classification_degs_comparison %>% 
+  filter(
+    .metric == "accuracy")  %>% 
+  arrange(timepoint, -.estimate, -num_correct_tp) %>% 
+  select(timepoint:l2fc_cutoff, .estimate,truth, model:num_incorrect_fp) %>% 
+  gt() %>% 
+  gt_theme_pff() %>% 
+  tab_style(
+    style = list(
+      cell_fill(color = "lightblue"),
+      cell_text(weight = "bold", color = "black")
+    ),
+    locations = cells_row_groups(groups = everything())
+  ) %>% 
+  tab_header(title = md("**Accuracy**"))
+
+# summary_table_accuracy %>% 
+#   gtsave(filename = here("Tables" , "summary_table_accuracy.docx"))
+  
+summary_table_accuracy
+  
+
+```
+
+Plot 
+```{r fig.height=8, fig.width=15, message=FALSE, warning=FALSE}
 classification_degs_comparison = read_csv(file = here("FIT_Mouse2man", "classification_degs_comparison.csv"))
 
-
-
-
-classification_degs_accuracy_plot =classification_degs_comparison %>% 
+classification_degs_accuracy_plot = classification_degs_comparison %>% 
   mutate(l2fc_cutoff = as.character(l2fc_cutoff),
          timepoint = paste0("Day ", timepoint),
          padj_cutoff = paste0("padj: ", padj_cutoff)) %>% 
@@ -5210,27 +5394,34 @@ classification_degs_accuracy_plot =classification_degs_comparison %>%
   ggplot() +
   aes(x = l2fc_cutoff,
       y = .estimate,
-      color = model,
-      fill = model) +
-  geom_line(aes(group = model)) +
-    geom_point(aes(fill = model,
-                   size = num_correct),
-             pch = 21,
-             color = "black",
-             alpha = 0.5
+      color = model) +
+  geom_point(aes(shape = truth,
+                  # fill = model,
+                   size = num_correct_tp),
+             alpha = 1,
+             fill = NA
              ) +
-    scale_size(range = c(0.1, 4)) +
+    scale_size(range = c(0.1, 4),
+               # breaks = c(10, 100, 500, 1000)
+               ) +
+      scale_shape_manual(values=c("up" = 24, 
+                                "down" = 25, 
+                                "neutral" = 1))+
+  scale_shape(solid = FALSE) +
+  geom_line(aes(group = interaction(model, truth))) +
   facet_grid(~timepoint~padj_cutoff, scales = "free_y")+
-  scale_y_continuous(n.breaks = 4, expand = c(0.05, 0.05)) +
+  scale_y_continuous(n.breaks = 6, expand = c(0.05, 0.05)) +
   scale_color_manual(values = c(
-    # "Human"  = "#4DBBD5FF",
+   "Mouse 30%" = "#263238FF",
     "Mouse" = "#90A4AEFF",
-    "FIT"   = "#CE1800FF"
+    "FIT"   = "#FFA726FF",
+    "FIT 30%"="#CE1800FF"
   )) +
     scale_fill_manual(values = c(
-    # "Human"  = "#4DBBD5FF",
+   "Mouse 30%" = "#263238FF",
     "Mouse" = "#90A4AEFF",
-    "FIT"   = "#CE1800FF"
+    "FIT"   = "#FFA726FF",
+    "FIT 30%"="#CE1800FF"
   )) +
   theme_vaxgo() +
   theme(
@@ -5249,7 +5440,7 @@ classification_degs_accuracy_plot =classification_degs_comparison %>%
     color = "Model",
     fill = "Model",
     size = "Correct"
-  ) 
+  )
 
 
 classification_degs_recall_plot = classification_degs_comparison %>% 
@@ -5262,27 +5453,31 @@ classification_degs_recall_plot = classification_degs_comparison %>%
       y = .estimate,
       color = model,
       fill = model) +
-  geom_line(aes(group = model)) +
-    geom_point(aes(fill = model,
-                   size = num_correct),
-             pch = 21,
-             color = "black",
-             alpha = 0.5
+  geom_line(aes(group = interaction(model, truth))) +
+   geom_point(aes(shape = truth,
+                  # fill = model,
+                   size = num_correct_tp),
+             alpha = 1,
+             fill = NA
              ) +
-    scale_size(range = c(0.1, 4),
-               # breaks = c(10, 100, 500, 1000)
-               ) +
+    scale_size(range = c(0.1, 4)) +
+      scale_shape_manual(values=c("up" = 24, 
+                                "down" = 25, 
+                                "neutral" = 1))+
+  scale_shape(solid = FALSE) +
   facet_grid(~timepoint~padj_cutoff, scales = "free_y")+
   scale_y_continuous(n.breaks = 4, expand = c(0.05, 0.05)) +
   scale_color_manual(values = c(
-    # "Human"  = "#4DBBD5FF",
+   "Mouse 30%" = "#263238FF",
     "Mouse" = "#90A4AEFF",
-    "FIT"   = "#CE1800FF"
+    "FIT"   = "#FFA726FF",
+    "FIT 30%"="#CE1800FF"
   )) +
     scale_fill_manual(values = c(
-    # "Human"  = "#4DBBD5FF",
+   "Mouse 30%" = "#263238FF",
     "Mouse" = "#90A4AEFF",
-    "FIT"   = "#CE1800FF"
+    "FIT"   = "#FFA726FF",
+    "FIT 30%"="#CE1800FF"
   )) +
   theme_vaxgo() +
   theme(
@@ -5311,29 +5506,34 @@ classification_degs_precision_plot = classification_degs_comparison %>%
   ggplot() +
   aes(x = l2fc_cutoff,
       y = .estimate,
-      color = model,
-      fill = model) +
-  geom_line(aes(group = model)) +
-    geom_point(aes(fill = model,
-                   size = num_correct),
-               alpha = 0.5,
-             pch = 21,
-             color = "black"
+      color = model) +
+ geom_line(aes(group = interaction(model, truth))) +
+   geom_point(aes(shape = truth,
+                  fill = model,
+                   size = num_correct_tp),
+              fill = NA,
+             alpha = 1, 
              ) +
     scale_size(range = c(0.1, 4),
                # breaks = c(10, 100, 500, 1000)
                ) +
+      scale_shape_manual(values=c("up" = 24, 
+                                "down" = 25, 
+                                "neutral" = 1))+
+  # scale_shape(solid = FALSE) +
   facet_grid(~timepoint~padj_cutoff, scales = "free_y")+
   scale_y_continuous(n.breaks = 4, expand = c(0.05, 0.05)) +
   scale_color_manual(values = c(
-    # "Human"  = "#4DBBD5FF",
+   "Mouse 30%" = "#263238FF",
     "Mouse" = "#90A4AEFF",
-    "FIT"   = "#CE1800FF"
+    "FIT"   = "#FFA726FF",
+    "FIT 30%"="#CE1800FF"
   )) +
     scale_fill_manual(values = c(
-    # "Human"  = "#4DBBD5FF",
+   "Mouse 30%" = "#263238FF",
     "Mouse" = "#90A4AEFF",
-    "FIT"   = "#CE1800FF"
+    "FIT"   = "#FFA726FF",
+    "FIT 30%"="#CE1800FF"
   )) +
   theme_vaxgo() +
   theme(
@@ -5353,23 +5553,189 @@ classification_degs_precision_plot = classification_degs_comparison %>%
     fill = "Model",
     size = "Correct"
   )
+
+classification_degs_ngenes_plot +
+classification_degs_accuracy_plot +
+classification_degs_recall_plot+
+  classification_degs_precision_plot +
+  plot_layout(axes = "collect", ncol = 2,
+              guides = "collect", 
+              axis_titles = "collect")
 ```
 
 
 ```{r fig.height=8, fig.width=15}
-classification_degs_ngenes_plot +
-classification_degs_accuracy_plot+
-classification_degs_recall_plot+
-  classification_degs_precision_plot +
+classification_degs_ngenes_plot + classification_degs_recall_plot +
   plot_layout(axes = "collect", ncol = 2,
-              guides = "collect", axis_titles = "collect")
-  
+              guides = "collect", 
+              axis_titles = "collect") +
+  plot_annotation(theme = theme(plot.margin = unit(c(5, 0, 5, 0), "cm")))
 ```
+
+
+
+```{r fig.height=4, fig.width=15}
+precision_recall_plot = classification_degs_comparison %>%
+  filter(.metric %in% c("recall", "precision")) %>%
+  mutate(timepoint = paste0("Day ", timepoint)) %>% 
+  pivot_wider(names_from = .metric,
+              values_from = .estimate) %>% 
+  ggplot(aes(x = recall, y = precision, shape = truth, color = model, size = num_correct_tp)) +
+  geom_point(aes(shape = truth)) +
+  scale_size(range = c(0.1, 4),
+               # breaks = c(10, 100, 500, 1000)
+               ) +
+  scale_shape_manual(values=c("up" = 24, 
+                              "down" = 25))+
+  scale_y_continuous(n.breaks = 4, expand = c(0.05, 0.05)) +
+  scale_color_manual(values = c(
+   "Mouse 30%" = "#263238FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#FFA726FF",
+    "FIT 30%"="#CE1800FF"
+  )) +
+    scale_fill_manual(values = c(
+   "Mouse 30%" = "#263238FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#FFA726FF",
+    "FIT 30%"="#CE1800FF"
+  )) +
+  facet_wrap(~timepoint) +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(0.5, "lines"),
+  ) +
+  labs(
+    title = "Precision-Recall",
+    x = "Recall",
+    y = "Precision",
+    shape = "Direction",
+    color = "Model",
+    fill = "Model",
+    size = "Correct"
+  )
+
+
+sens_spec_plot = classification_degs_comparison %>%
+  mutate(timepoint = paste0("Day ", timepoint)) %>% 
+  filter(.metric %in% c("sens", "spec")) %>%
+  pivot_wider(names_from = .metric,
+              values_from = .estimate) %>% 
+  ggplot(aes(x = spec, y = sens, shape = truth, color = model, size = num_correct_tp)) +
+  geom_point(aes(shape = truth)) +
+  scale_size(range = c(0.1, 4),
+               # breaks = c(10, 100, 500, 1000)
+               ) +
+  scale_shape_manual(values=c("up" = 24, 
+                              "down" = 25))+
+  scale_y_continuous(n.breaks = 4, expand = c(0.05, 0.05)) +
+  scale_color_manual(values = c(
+   "Mouse 30%" = "#263238FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#FFA726FF",
+    "FIT 30%"="#CE1800FF"
+  )) +
+    scale_fill_manual(values = c(
+   "Mouse 30%" = "#263238FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#FFA726FF",
+    "FIT 30%"="#CE1800FF"
+  )) +
+  facet_wrap(~timepoint) +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(0.5, "lines"),
+  ) +
+  labs(
+    title = "Sensitivity-Specificity",
+    x = "Specificity",
+    y = "Sensitivity",
+    shape = "Direction",
+    color = "Model",
+    fill = "Model",
+    size = "Correct"
+  )
+
+
+precision_recall_plot + sens_spec_plot +
+  plot_layout(axes = "collect", ncol = 2,
+              guides = "collect", 
+              axis_titles = "collect") 
+```
+
 
 # GSEA
+### Gene set enrichment analysis (GSEA)
+
+Function
+
 ```{r}
+autoGSEA <- function(df, TERM2GENE, geneset_name) {
+  results <- list()
+
+  conditions <- df$condition %>% 
+    unique() %>% 
+    as.character()
+
+  for (condition in conditions) {
+    
+    degs_condition <- df %>% 
+      filter(condition == condition) %>%
+      dplyr::select(genes, log2fold_change) %>%
+      distinct() %>%
+      mutate(rank = rank(log2fold_change, ties.method = "random")) %>%
+      arrange(desc(rank))
+
+    gene_list_lf2c <- as.vector(degs_condition$log2fold_change)
+    names(gene_list_lf2c) <- degs_condition$genes
+    gene_list_lf2c <- na.omit(gene_list_lf2c)
+    gene_list_lf2c <- sort(gene_list_lf2c, decreasing = TRUE)
+
+    auto_gsea <- tryCatch({
+      GSEA(geneList = gene_list_lf2c,
+           TERM2GENE = TERM2GENE,
+           minGSSize = 1,
+           maxGSSize = 1000,
+           pvalueCutoff = 1,
+           pAdjustMethod = "BH") %>%
+        as.data.frame() %>%
+        arrange(qvalue) %>%
+        mutate(condition = condition,
+               gsea_enrichment = geneset_name)
+    }, error = function(e) {
+      return(NULL)
+    })
+
+    if (!is.null(auto_gsea)) {
+      results[[paste(condition, geneset_name, sep = "_")]] <- auto_gsea
+    }
+  }
+    final_result <- bind_rows(results)
+
+  return(final_result)
+}
 
 ```
+
+
+
+
+```{r}
+autoGSEA()
+```
+
 
 
 
