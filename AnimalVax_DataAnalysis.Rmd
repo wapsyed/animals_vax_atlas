@@ -6548,7 +6548,10 @@ AllData_V2.0_blood = AllData_V2.0 %>%
 
 AllData_V2.0_blood %>% 
   saveRDS(here("new_models", "AllData_FIT_training_blood.rds"))
+```
 
+Import
+```{r}
 AllData_V2.0_blood = read_rds(here("new_models", "AllData_FIT_training_blood.rds"))
 ```
 
@@ -6659,7 +6662,7 @@ AllData_V2.0_distributions_plot + AllData_V2.0_blood_distributions_plot +
 
 ```
 
-## Machine learning
+## Univariate
 
 ```{r}
 df_mouse = AllData_V2.0_blood %>% 
@@ -6675,7 +6678,37 @@ df_human = AllData_V2.0_blood %>%
   select(csp_id, hs_entrez, fc_hs)
 ```
 
+
+
+
+
+
 ### Single gene
+
+
+```{r}
+X_all <- df_mouse %>%
+  pivot_wider(names_from = mm_entrez, values_from = fc_mm) %>%
+  arrange(csp_id) %>% 
+  select(-csp_id) 
+
+y_target_all <- df_human %>%
+  arrange(csp_id) %>% 
+  select(csp_id, hs_entrez, fc_hs) %>%
+  distinct() %>% 
+  pivot_wider(names_from = hs_entrez, values_from = fc_hs) %>% 
+  select(-csp_id) 
+
+cor_matrix <- cor(X_all, y_target_all, use = "pairwise.complete.obs")
+
+cor_values = as.data.frame(cor_matrix) %>% 
+  rownames_to_column("mm_entrez")
+
+
+```
+
+
+
 ```{r}
 target_gene <- "26119"
 
@@ -6695,38 +6728,32 @@ full_df <- inner_join(X, y_target, by = "csp_id")  %>%
 
 train_df = full_df
 
+# Correlation
+top_genes <- cor_values %>% 
+  select(mm_entrez, target_gene = target_gene) %>%
+  slice_max(abs(target_gene), n = 100) %>% 
+  pull(mm_entrez)
 
-# 4. Calcular correlação
-cor_values <- full_df %>%
-  select(-csp_id) %>%
-  summarise(across(-fc_hs, ~cor(.x, full_df$fc_hs, use = "complete.obs"))) %>%
-  pivot_longer(everything(), names_to = "gene", values_to = "cor") %>%
-  arrange(desc(abs(cor)))
-
-
-# 5. Selecionar top 100 genes mais correlacionados
-top_genes <- cor_values %>%
-  slice_max(abs(cor), n = 100) %>%
-  pull(gene)
-
-# 6. Criar novo dataset com só os top genes
 train_df <- full_df %>%
   select(all_of(c("csp_id", "fc_hs", top_genes))) %>%
   mutate(across(where(is.numeric), ~replace_na(., 0)))
 
-
-
-# 1. Split
+# Split into train and test
 set.seed(123)
 data_split <- initial_split(train_df, prop = 0.8)
 train_data <- training(data_split)
 test_data <- testing(data_split)
+train_folds <- vfold_cv(train_data, repeats = 5)
 
-# 2. Receita (todos os genes de camundongo como input)
+# Recipe
 rec <- recipe(fc_hs ~ ., data = train_data) %>%
   update_role(csp_id, new_role = "id") %>%
   step_normalize(all_predictors())
+```
 
+
+
+```{r}
 rf_model <- rand_forest(mtry = tune(), trees = 500) %>%
   set_engine("ranger", importance = "permutation") %>%
   set_mode("regression")
@@ -6791,7 +6818,308 @@ vip_df <- vi(final_model) %>%
 head(vip_df, 10)
 
 ```
+
+
+
+##### Lasso regression
+```{r}
+# Modelo LASSO
+lasso_model <- linear_reg(penalty = tune(), mixture = 1) %>%  # mixture = 1 → LASSO
+  set_engine("glmnet") %>%
+  set_mode("regression")
+
+# Workflow
+wf <- workflow() %>%
+  add_recipe(rec) %>%
+  add_model(lasso_model)
+
+# Cross-validation
+set.seed(234)
+lasso_folds <- vfold_cv(train_data, v = 5)
+
+# Grid de valores de lambda
+lambda_grid <- grid_regular(penalty(range = c(-4, 0)), levels = 20)  # log10 scale
+
+# Métricas
+mer_metrics <- metric_set(rmse, rsq)
+
+# Tuning
+lasso_tuned <- tune_grid(
+  wf,
+  resamples = lasso_folds,
+  metrics = mer_metrics,
+  grid = lambda_grid
+)
+
+# Selecionar melhor modelo
+best_model <- select_best(lasso_tuned, metric = "rmse")
+
+
+# Check
+lasso_tuned %>%
+  collect_metrics() %>%
+  ggplot()+
+  aes(x = penalty, y = mean, colour = .metric, label = penalty) +
+  geom_line() +
+  geom_label() +
+  scale_color_npg()+
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(color = "black", size = 12)) +
+  facet_wrap(vars(.metric), scales = "free")
+
+
+# Extrair métricas
+best_metrics <- lasso_tuned %>%
+  collect_metrics() %>%
+  filter(penalty == best_model$penalty)
+
+rmse_val <- best_metrics %>% filter(.metric == "rmse") %>% pull(mean)
+rsq_val  <- best_metrics %>% filter(.metric == "rsq")  %>% pull(mean)
+
+# Finalizar e ajustar o modelo
+final_wf <- finalize_workflow(wf, best_model)
+final_fit <- fit(final_wf, train_data)
+final_model <- extract_fit_parsnip(final_fit)$fit
+
+
+# Gere o gráfico de importância
+library(vip)
+vip(final_model, num_features = 20)
+
+vip_df <- vi(final_model) %>%
+  arrange(desc(Importance)) %>% 
+  mutate(hs_entrez = target_gene)
+
+vip_df %>% 
+inner_join(HS_MM_Symbol_Entrez %>% 
+               clean_names() %>% 
+               select(hs_entrez = human_entrez,
+                      hgnc_symbol) %>% 
+               mutate(hs_entrez = as.character(hs_entrez)), 
+             by = "hs_entrez") %>% 
+  rename(mm_entrez = Variable) %>% 
+  inner_join(HS_MM_Symbol_Entrez %>% 
+               clean_names() %>% 
+               select(mm_entrez = mouse_ortholog,
+                      mm_symbol = mgi_symbol) %>% 
+               mutate(mm_entrez = as.character(mm_entrez)), 
+             by = "mm_entrez") %>% 
+  select(hgnc_symbol, hs_entrez, Importance, mm_symbol, mm_entrez) %>% 
+  filter(Importance > 0.01)
+
+
+```
+#### Worflowset
+
+```{r}
+# install.packages("rules")
+# install.packages("baguette")
+library(rules)
+library(baguette)
+install.packages("kernlab")
+
+linear_reg_spec <- 
+   linear_reg(penalty = tune(), mixture = tune()) %>% 
+   set_engine("glmnet")
+
+lasso_spec <- linear_reg(penalty = tune(), mixture = 1) %>%  # mixture = 1 → LASSO
+  set_engine("glmnet") %>%
+  set_mode("regression")
+
+rf_spec <- 
+   rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
+   set_engine("ranger") %>% 
+   set_mode("regression")
+
+# nnet_spec <- 
+#    mlp(hidden_units = tune(), penalty = tune(), epochs = tune()) %>% 
+#    set_engine("nnet", MaxNWts = 2600) %>% 
+#    set_mode("regression")
+# 
+# nnet_param <- 
+#    nnet_spec %>% 
+#    extract_parameter_set_dials() %>% 
+#    update(hidden_units = hidden_units(c(1, 27)))
+
+# mars_spec <- 
+#    mars(prod_degree = tune()) %>%  #<- use GCV to choose terms
+#    set_engine("earth") %>% 
+#    set_mode("regression")
+# 
+# svm_r_spec <- 
+#    svm_rbf(cost = tune(), rbf_sigma = tune()) %>% 
+#    set_engine("kernlab") %>% 
+#    set_mode("regression")
+# 
+# svm_p_spec <- 
+#    svm_poly(cost = tune(), degree = tune()) %>% 
+#    set_engine("kernlab") %>% 
+#    set_mode("regression")
+# 
+# knn_spec <- 
+#    nearest_neighbor(neighbors = tune(), dist_power = tune(), weight_func = tune()) %>% 
+#    set_engine("kknn") %>% 
+#    set_mode("regression")
+
+# cart_spec <- 
+#    decision_tree(cost_complexity = tune(), min_n = tune()) %>% 
+#    set_engine("rpart") %>% 
+#    set_mode("regression")
+
+# bag_cart_spec <- 
+#    bag_tree() %>% 
+#    set_engine("rpart", times = 50L) %>% 
+#    set_mode("regression")
+
+# xgb_spec <- 
+#    boost_tree(tree_depth = tune(), learn_rate = tune(), loss_reduction = tune(), 
+#               min_n = tune(), sample_size = tune(), trees = tune()) %>% 
+#    set_engine("xgboost") %>% 
+#    set_mode("regression")
+# 
+# cubist_spec <- 
+#    cubist_rules(committees = tune(), neighbors = tune()) %>% 
+#    set_engine("Cubist") 
+
+#### Create workflowset
+workflow.set1 <- 
+   workflow_set(
+      preproc = list(rec = rec), 
+      models = list(
+        # linear = linear_reg_spec,
+                    RForest = rf_spec,
+                    Lasso = lasso_spec
+                    # KNN = knn_spec, 
+                    # neural_network = nnet_spec
+                    )
+   ) 
+
+   # option_add(param_info = nnet_param, 
+   #            id = "normalized_neural_network")
+
+workflow.set1
+
+
+#Tune hyperparameters
+grid_ctrl <-
+   control_grid(
+      save_pred = TRUE,
+      parallel_over = "everything",
+      save_workflow = TRUE
+   )
+
+grid_results <-
+   workflow.set1 %>%
+   workflow_map(
+      seed = 1503,
+      resamples = train_folds,
+      grid = 5,
+      control = grid_ctrl
+   )
+
+grid_results
+
+#Get metrics
+grid_results %>% 
+   rank_results() %>% 
+   filter(.metric == "rmse") %>% 
+   select(model, .config, rmse = mean, rank)
+
+autoplot(
+   grid_results,
+   rank_metric = "rmse",  # <- how to order models
+   metric = "rmse",       # <- which metric to visualize
+   select_best = TRUE     # <- one point per workflow
+) +
+   theme(legend.position = "right")
+
+#Get results for specific model
+autoplot(grid_results, id = "rec_Lasso", metric = "rmse")
+
+
+#Fine tune
+library(finetune)
+
+race_ctrl <-
+   control_race(
+      save_pred = TRUE,
+      parallel_over = "everything",
+      save_workflow = TRUE
+   )
+
+#Analyze
+race_results <-
+   workflow.set1 %>%
+   workflow_map(
+      "tune_race_anova",
+      seed = 1503,
+      resamples = train_folds,
+      grid = 5,
+      control = race_ctrl
+   )
+
+autoplot(
+   race_results,
+   rank_metric = "rmse",  
+   metric = "rmse",       
+   select_best = TRUE    
+) +
+   theme(legend.position = "right")
+
+matched_results <- 
+   rank_results(race_results, select_best = TRUE) %>% 
+   select(wflow_id, .metric, race = mean, config_race = .config) %>% 
+   inner_join(
+      rank_results(grid_results, select_best = TRUE) %>% 
+         select(wflow_id, .metric, complete = mean, 
+                config_complete = .config, model),
+      by = c("wflow_id", ".metric"),
+   ) %>%  
+   filter(.metric == "rmse")
+
+library(ggrepel)
+
+matched_results %>% 
+   ggplot(aes(x = complete, y = race)) + 
+   geom_abline(lty = 3) + 
+   geom_point() + 
+   geom_text_repel(aes(label = model)) +
+   coord_obs_pred() + 
+   labs(x = "Complete Grid RMSE", y = "Racing RMSE")
+
+
+
+#Finalize model
+best_results <- 
+   race_results %>% 
+   extract_workflow_set_result("rec_RForest") %>% 
+   select_best(metric = "rmse")
+best_results
+
+boosting_test_results <- 
+   race_results %>% 
+   extract_workflow("rec_RForest") %>% 
+   finalize_workflow(best_results) %>% 
+   last_fit(split = data_split)
+
+collect_metrics(boosting_test_results)
+
+boosting_test_results %>% 
+   collect_predictions() %>% 
+   ggplot(aes(x = fc_hs, y = .pred)) + 
+   geom_abline(color = "gray50", lty = 2) + 
+   geom_point(alpha = 0.5) + 
+   coord_obs_pred() + 
+   labs(x = "observed", y = "predicted")
+```
+
+
+
+
 ### Multiple genes
+
+
+#### Random forest
 ```{r}
 library(tidymodels)
 library(vip)
@@ -6799,48 +7127,7 @@ library(dplyr)
 library(tidyr)
 library(purrr)
 
-model_one_gene <- function(target_gene, df_mouse, df_human, top_n = 50) {
-  # Preparar X e y
-  X <- df_mouse %>%
-    pivot_wider(names_from = mm_entrez, values_from = fc_mm) %>%
-    arrange(csp_id)
-  
-  y_target <- df_human %>%
-    filter(hs_entrez == target_gene) %>%
-    select(csp_id, fc_hs) %>%
-    distinct() %>%
-    arrange(csp_id)
-  
-  full_df <- inner_join(X, y_target, by = "csp_id") %>%
-    select(csp_id, fc_hs, everything()) %>%
-    mutate(across(where(is.numeric), ~replace_na(., 0)))
-  
-  if (nrow(full_df) < 10) return(NULL)  # ignora se poucos dados
-  
-  # Correlação
-  cor_values <- full_df %>%
-    select(-csp_id) %>%
-    summarise(across(-fc_hs, ~cor(.x, full_df$fc_hs, use = "complete.obs"))) %>%
-    pivot_longer(everything(), names_to = "gene", values_to = "cor") %>%
-    arrange(desc(abs(cor)))
-  
-  top_genes <- cor_values %>%
-    slice_max(abs(cor), n = top_n) %>%
-    pull(gene)
-  
-  train_df <- full_df %>%
-    select(all_of(c("csp_id", "fc_hs", top_genes))) %>%
-    mutate(across(where(is.numeric), ~replace_na(., 0)))
-  
-  # Split
-  set.seed(123)
-  data_split <- initial_split(train_df, prop = 0.8)
-  train_data <- training(data_split)
-  test_data  <- testing(data_split)
-  
-  rec <- recipe(fc_hs ~ ., data = train_data) %>%
-    update_role(csp_id, new_role = "id") %>%
-    step_normalize(all_predictors())
+model_rf_by_gene <- function(target_gene, df_mouse, df_human, top_n = 50) {
   
   rf_model <- rand_forest(mtry = tune(), trees = 500) %>%
     set_engine("ranger", importance = "permutation") %>%
@@ -6888,22 +7175,27 @@ model_one_gene <- function(target_gene, df_mouse, df_human, top_n = 50) {
 ```{r}
 # Lista de genes-alvo
 # target_genes <- unique(df_human$hs_entrez)[1:3]  # ou outra seleção
+HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez
+
 target_genes = HS_MM_Symbol_Entrez %>% 
                clean_names() %>% 
                rename(hs_entrez = human_entrez) %>% 
                mutate(hs_entrez = as.character(hs_entrez)) %>% 
-  # filter(hgnc_symbol %in% c("TLR8")) %>% 
+  filter(hgnc_symbol %in% c("TLR8")) %>%
   pull(hs_entrez) %>% 
   unique()
 
 # Rodar para vários genes
-vip_all <- map_df(target_genes, model_one_gene, 
+vip_all_rf <- map_df(target_genes, 
+                  model_rf_by_gene, 
                   df_mouse = df_mouse, 
                   df_human = df_human, 
                   top_n = 5)
 
+vip_all_rf$rmse %>% unique()
+vip_all_rf$rsq %>% unique()
 
-vip_all %>% 
+vip_all_rf %>% 
   inner_join(HS_MM_Symbol_Entrez %>% 
                clean_names() %>% 
                select(hs_entrez = human_entrez,
@@ -6920,4 +7212,332 @@ vip_all %>%
   select(hgnc_symbol, hs_entrez, Importance, mm_symbol, mm_entrez)
 
 ```
+
+#### Lasso
+```{r}
+library(tidymodels)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(tibble)
+
+model_lasso_by_gene <- function(target_gene, df_mouse, df_human, top_n = 50) {
+  # Preparar X e y
+  X <- df_mouse %>%
+    pivot_wider(names_from = mm_entrez, values_from = fc_mm) %>%
+    arrange(csp_id)
+
+  y_target <- df_human %>%
+    filter(hs_entrez == target_gene) %>%
+    select(csp_id, fc_hs) %>%
+    distinct() %>%
+    arrange(csp_id)
+
+  full_df <- inner_join(X, y_target, by = "csp_id") %>%
+    select(csp_id, fc_hs, everything()) %>%
+    mutate(across(where(is.numeric), ~replace_na(., 0)))
+
+  if (nrow(full_df) < 10) return(NULL)  # ignora se poucos dados
+
+  # Correlação
+  cor_values <- full_df %>%
+    select(-csp_id) %>%
+    summarise(across(-fc_hs, ~cor(.x, full_df$fc_hs, use = "complete.obs"))) %>%
+    pivot_longer(everything(), names_to = "gene", values_to = "cor") %>%
+    arrange(desc(abs(cor)))
+
+  top_genes <- cor_values %>%
+    slice_max(abs(cor), n = top_n) %>%
+    pull(gene)
+
+  train_df <- full_df %>%
+    select(all_of(c("csp_id", "fc_hs", top_genes))) %>%
+    mutate(across(where(is.numeric), ~replace_na(., 0)))
+
+  # Split
+  set.seed(123)
+  data_split <- initial_split(train_df, prop = 0.8)
+  train_data <- training(data_split)
+  test_data  <- testing(data_split)
+
+  rec <- recipe(fc_hs ~ ., data = train_data) %>%
+    update_role(csp_id, new_role = "id") %>%
+    step_normalize(all_predictors())
+
+  # Modelo LASSO
+  lasso_model <- linear_reg(penalty = tune(), mixture = 1) %>%
+    set_engine("glmnet") %>%
+    set_mode("regression")
+
+  wf <- workflow() %>%
+    add_recipe(rec) %>%
+    add_model(lasso_model)
+
+  set.seed(234)
+  lasso_folds <- vfold_cv(train_data, v = 5)
+
+  lambda_grid <- grid_regular(penalty(range = c(-4, 0)), levels = 20)
+
+  mer_metrics <- metric_set(rmse, rsq)
+
+  lasso_tuned <- tune_grid(
+    wf,
+    resamples = lasso_folds,
+    metrics = mer_metrics,
+    grid = lambda_grid
+  )
+
+  best_model <- select_best(lasso_tuned, metric = "rmse")
+
+  best_metrics <- lasso_tuned %>%
+    collect_metrics() %>%
+    filter(penalty == best_model$penalty)
+
+  rmse_val <- best_metrics %>% filter(.metric == "rmse") %>% pull(mean)
+  rsq_val  <- best_metrics %>% filter(.metric == "rsq")  %>% pull(mean)
+
+  final_wf <- finalize_workflow(wf, best_model)
+  final_fit <- fit(final_wf, train_data)
+  final_model <- extract_fit_parsnip(final_fit)$fit
+
+  coef_df <- as.data.frame(as.matrix(coef(final_model$fit, s = best_model$penalty)))
+  coef_df <- tibble::rownames_to_column(coef_df, "gene")
+  names(coef_df)[2] <- "coefficient"
+
+  coef_df %>%
+    filter(gene != "(Intercept)", coefficient != 0) %>%
+    arrange(desc(abs(coefficient))) %>%
+    mutate(
+      hs_entrez = target_gene,
+      rmse = rmse_val,
+      rsq = rsq_val
+    )
+}
+
+```
+
+
+
+
+
+
+
+
+
+
+## Multivariate
+
+
+```{r}
+library(tidymodels)
+library(doParallel)
+
+# Simular dados multivariados (substitua com seus dados reais)
+ami_data <- read.table("http://static.lib.virginia.edu/statlab/materials/data/ami_data.DAT")
+names(ami_data) <- c("TOT","AMI","GEN","AMT","PR","DIAP","QRS")
+
+pairs(ami_data)
+
+mlm1 <- lm(cbind(TOT, AMI) ~ GEN + AMT + PR + DIAP + QRS, data = ami_data)
+summary(mlm1)
+
+```
+
+
+```{r}
+library(glmnet)
+library(tidyverse)
+# Simular dados ----------------------------
+set.seed(123)
+
+n <- 100  # número de amostras
+p <- 20   # número de preditores
+k <- 3    # número de respostas
+
+# Matriz X de preditores
+X <- matrix(rnorm(n * p), nrow = n, ncol = p)
+colnames(X) <- paste0("GeneM", 1:p)
+
+# Gerar matriz Y com relação linear
+B <- matrix(c(1.5, -2, 0.5, rep(0, p - 3)), nrow = p, ncol = k)
+Y <- X %*% B + matrix(rnorm(n * k), nrow = n)
+
+colnames(Y) <- paste0("GeneH", 1:k)
+
+X
+Y
+```
+
+
+```{r}
+# Ajuste Lasso multivariado ----------------------------
+
+# Ajuste com validação cruzada para escolher lambda ideal
+cv_fit <- cv.glmnet(X, Y, family = "mgaussian", alpha = 1)
+
+# Lambda ideal
+best_lambda <- cv_fit$lambda.min
+cat("Melhor lambda:", best_lambda, "\n")
+
+# Previsões
+preds <- predict(cv_fit, newx = X, s = "lambda.min")
+
+# Converter para tibble
+preds_df <- as_tibble(preds[,,1])  # 3D array -> 2D matrix
+colnames(preds_df) <- paste0("Pred_", colnames(Y))
+
+# Coeficientes
+coefs <- coef(cv_fit, s = "lambda.min")  # Lista com 1 por resposta
+
+# Combinar todos os coeficientes em uma tabela
+coef_df <- map2_dfr(coefs, names(coefs), ~ {
+  as.matrix(.x) %>%
+    as.data.frame() %>%
+    rownames_to_column("Feature") %>%
+    rename(Coefficient = 1) %>%
+    mutate(Target = .y)
+})
+
+
+# Salvar objetos ----------------------------
+
+write_csv(as_tibble(Y), "Y_true.csv")
+write_csv(preds_df, "Y_pred.csv")
+write_csv(coef_df, "lasso_coefficients.csv")
+
+saveRDS(cv_fit, "lasso_multivariate_model.rds")
+
+```
+
+
+
+
+
+
+
+### Genes
+```{r}
+library(matrixStats)
+
+df_mouse = AllData_V2.0_blood %>% 
+  clean_names() %>% 
+  select(csp_id, mm_entrez, hs_entrez, fc_hs, fc_mm) %>% 
+  rownames_to_column("del") %>% 
+  select(csp_id, hs_entrez, fc_mm) %>% 
+  pivot_wider(names_from = "hs_entrez",
+              values_from = "fc_mm") %>% 
+  mutate(across(where(is.numeric), ~replace_na(.x, 0))) %>% 
+  as.tibble() %>% 
+  column_to_rownames("csp_id")  
+  
+  
+df_human = AllData_V2.0_blood %>% 
+  clean_names() %>% 
+  select(csp_id, mm_entrez, hs_entrez, fc_hs, fc_mm) %>% 
+  rownames_to_column("del") %>% 
+  select(csp_id, hs_entrez, fc_hs) %>% 
+  pivot_wider(names_from = "hs_entrez",
+              values_from = "fc_hs") %>% 
+  mutate(across(where(is.numeric), ~replace_na(.x, 0))) %>% 
+  as.tibble() %>% 
+  column_to_rownames("csp_id")
+
+
+#Reduce number of genes
+variancias_m <- colVars(as.matrix(df_mouse))
+variancias_h <- colVars(as.matrix(df_human))
+
+ggplot(data.frame(variancia = variancias_h), aes(x = variancia)) +
+  geom_histogram(bins = 100, fill = "skyblue", alpha = 0.7) +
+  geom_vline(xintercept = 0.05, color = "darkred", linetype = "dashed") +
+  labs(title = "Distribuição da Variância dos Genes",
+       x = "Variância", y = "Número de Genes") +
+  theme_minimal()
+
+
+ggplot(data.frame(variancia = variancias_m), aes(x = variancia)) +
+  geom_histogram(bins = 100, fill = "skyblue", alpha = 0.7) +
+  geom_vline(xintercept = 0.01, color = "darkred", linetype = "dashed") +
+  labs(title = "Distribuição da Variância dos Genes",
+       x = "Variância", y = "Número de Genes") +
+  theme_minimal()
+
+mean(variancias_m > 0.01) 
+mean(variancias_h > 0.01) 
+
+
+# Filtrar apenas df_mouse
+variancias_mouse <- apply(df_mouse, 2, var, na.rm = TRUE)
+# cutoff_mouse <- quantile(variancias_mouse, probs = 0.30)  # manter 63%
+# top_genes <- names(variancias_mouse[variancias_mouse > cutoff_mouse])
+#Keep only the 3000 most variable genes
+top_genes <- names(sort(variancias_mouse, decreasing = TRUE))[1:3000]
+
+# Aplicar o mesmo subconjunto aos humanos
+df_mouse_final <- df_mouse[, top_genes]
+df_human_final <- df_human[, top_genes]
+
+
+# Filter by correlation
+cor_genes <- map_dbl(colnames(df_mouse), function(gene) {
+  cor(df_mouse[[gene]], df_human[[gene]], use = "complete.obs")
+})
+names(cor_genes) <- colnames(df_mouse)
+genes_filtered_corr <- names(cor_genes)[abs(cor_genes) > 0.75]
+
+# Filtrar os dataframes mantendo somente os genes selecionados
+df_mouse_filtered <- df_mouse[, genes_filtered_corr]
+df_human_filtered <- df_human[, genes_filtered_corr]
+
+# Conferir dimensões
+dim(df_mouse_filtered)
+dim(df_human_filtered)
+length(genes_filtered_corr)
+dim(df_mouse)
+dim(df_mouse_filtered)
+dim(df_mouse_final)
+dim(df_human)
+dim(df_human_filtered)
+dim(df_human_final)
+
+#As matrix
+df_human.matrix = as.matrix(df_human_filtered)
+df_mouse.matrix = as.matrix(df_mouse_filtered)
+
+fit <- glmnet(
+  x = df_mouse.matrix,
+  y = df_human.matrix,
+  family = "mgaussian",
+  alpha = 1  # alpha=1 para LASSO, alpha=0 para ridge, 0<alpha<1 para elastic net 
+)
+
+# Para visualizar os coeficientes de diferentes valores de lambda
+print(fit)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
