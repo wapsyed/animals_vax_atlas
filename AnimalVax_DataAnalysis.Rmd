@@ -3505,18 +3505,192 @@ pairwise_human_fit_genes_wide %>%
 ```
 
 
+Ranks
+```{r}
+
+ranks_mouse = z_scores_best_worst_models %>%
+  filter(organism == "Mouse") %>%
+  select(human_symbol, timepoint, z_score_h2m, model = organism) %>%
+  group_by(timepoint) %>% 
+  arrange(timepoint, abs(z_score_h2m)) %>%
+  mutate(percent_rank = percent_rank(abs(z_score_h2m)),
+         percentile = round(percent_rank * 100, 2)) %>% 
+  distinct() %>% 
+  rename(zscore_h2model = z_score_h2m)
+```
+
+
+```{r}
+ranks_fit = z_scores_best_worst_models %>%
+  filter(organism == "FIT") %>%
+  select(human_symbol, timepoint, z_score_h2fit, model = organism) %>%
+  group_by(timepoint) %>% 
+  arrange(timepoint, abs(z_score_h2fit)) %>%
+  mutate(percent_rank = percent_rank(abs(z_score_h2fit)),
+         percentile = round(percent_rank * 100, 2)) %>% 
+  distinct() %>% 
+  rename(zscore_h2model = z_score_h2fit)
+
+
+ranks_fit_vs_mouse = ranks_fit %>% 
+  select(human_symbol, fit = percentile, timepoint_ref = timepoint) %>% 
+  inner_join(ranks_mouse %>% 
+               select(human_symbol, mouse = percentile,
+                      timepoint_other = timepoint),
+             by = "human_symbol") %>% 
+  mutate(timepoint_ref = as.character(timepoint_ref),
+         timepoint_other = as.character(timepoint_other),
+         condition = "Top FIT vs Mouse")
+
+ranks_mouse_vs_fit = ranks_mouse %>% 
+  select(human_symbol, mouse = percentile, timepoint_ref = timepoint) %>% 
+  inner_join(ranks_fit %>% 
+               select(human_symbol, fit = percentile,
+                      timepoint_other = timepoint),
+             by = "human_symbol") %>% 
+  mutate(timepoint_ref = as.character(timepoint_ref),
+         timepoint_other = as.character(timepoint_other),
+         condition = "Top Mouse vs FIT")
+
+
+ranks_best_fit_and_mouse = ranks_fit_vs_mouse %>%
+  filter(fit < 1) %>%
+  bind_rows(ranks_mouse_vs_fit %>%
+              filter(mouse < 1)) %>%
+  select(condition,
+         human_symbol,
+         timepoint_ref,
+         timepoint_other, 
+         fit,
+         mouse)
+```
+
+
+```{r fig.height=10, fig.width=10}
+library(GGally)
+
+
+ranks_best_fit_and_mouse_long <- ranks_best_fit_and_mouse %>%
+  pivot_longer(
+    cols = c(fit, mouse),
+    names_to = "model",
+    values_to = "percentile"
+  )
+
+
+
+selected_genes = ranks_best_fit_and_mouse %>% 
+  group_by(condition, timepoint_ref, timepoint_other) %>% 
+  # filter(condition == "Top FIT vs Mouse") %>% 
+  filter(fit < 0.01 | mouse <0.01) %>% 
+  pivot_longer(
+    cols = c(fit, mouse),
+    names_to = "model",
+    values_to = "percentile"
+  )
+
+
+ranks_best_fit_and_mouse_long %>% 
+  ggplot() +
+  aes(x = model, y = percentile, group = interaction(condition, human_symbol), color = condition) +
+  geom_line(alpha = 0.1) +
+  labs(x = "Variáveis", y = "Valor", title = "Coordenadas paralelas") +
+  facet_grid(~timepoint_ref~timepoint_other)  +
+  labs(x = "Model",
+       y = "Percentile") +
+    scale_color_manual(values = c(
+    "Top FIT vs Mouse" = "#CE1800FF", 
+    "Top Mouse vs FIT" = "#546E7AFF")) +
+  # scale_x_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", angle = 0), 
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  geom_text_repel(data = selected_genes,
+             mapping = aes(label = human_symbol,
+                           x = model,
+                           y = percentile), size = 5)
+  
+  
+```
+
+
+```{r}
+pairwise_human_fit_genes_wide %>% 
+  ggplot() +
+  aes(x = mean,
+      fill = organism) +
+  geom_histogram(position = position_identity(), alpha = 0.3) +
+  geom_point(data = best_fit %>% 
+              select(human_symbol, timepoint, l2fc) %>%
+              mutate(day = paste0("Day ", timepoint)) %>% 
+              distinct() %>% 
+              slice_head(n = 100),
+             mapping = aes(x = l2fc, y = -100),
+             fill = "#CE1800FF",
+             pch = 21,
+             color = "#CE1800FF"
+             ) +
+  geom_point(data = best_mouse %>% 
+              select(human_symbol, timepoint, l2fc) %>%
+              mutate(day = paste0("Day ", timepoint)) %>% 
+              distinct() %>% 
+              slice_head(n = 100),
+             mapping = aes(x = l2fc, y = -300),
+             fill = "#546E7AFF",
+             pch = 21,
+             color = "#546E7AFF"
+             ) +
+  geom_point(data = worst_fit %>% 
+              select(human_symbol, timepoint, l2fc) %>%
+              mutate(day = paste0("Day ", timepoint)) %>% 
+              distinct() %>% 
+              slice_head(n = 100),
+             mapping = aes(x = l2fc, y = -500, 
+                           label = human_symbol),
+             fill = NA,
+             pch = 21,
+             color = "black"
+             ) +
+  geom_hline(yintercept = 0, color ="black") +
+  scale_y_continuous(expand = c(0.05, 0.05), n.breaks = 3) +
+    scale_fill_manual(
+  values = c(
+    FIT = "#CE1800FF", 
+    Mouse = "#546E7AFF",
+    Human = "#4DBBD5FF"))+
+    scale_color_manual(
+  values = c(
+    FIT = "#CE1800FF", 
+    Mouse = "#546E7AFF",
+    Human = "#4DBBD5FF"))+
+    theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", angle = 0), 
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "Organism",
+       x = "Log2-fold change",
+       y = "Frequency",
+       title = "Frequency of genes by p value cutoff")
+```
+
+
+
 #### ORA: Which processes are better or worse predicted?
 ```{r fig.width=10, fig.height= 8}
-
-
-
-
 #FIT
 df_resultados_fit_worst <- enrichGO(gene = worst_fit %>%
                                 filter(organism == "FIT") %>%
-                                select(human_symbol, z_score_h2m) %>%
-                                arrange(z_score_h2m) %>%
-                                mutate(percent_rank = percent_rank(z_score_h2m),
+                                select(human_symbol, diff_z_fit_mouse) %>%
+                                arrange(diff_z_fit_mouse) %>%
+                                mutate(percent_rank = percent_rank(diff_z_fit_mouse),
                                        percentile = round(percent_rank * 100, 2)) %>%
                                 filter(percentile < 10) %>%
                                 pull(human_symbol),
@@ -3536,9 +3710,9 @@ df_resultados_fit_worst <- enrichGO(gene = worst_fit %>%
 #FIT BEST
 df_resultados_fit_best <- enrichGO(gene = best_fit %>%
                                      filter(organism == "FIT") %>%
-                                     select(human_symbol, z_score_h2m) %>%
-                                     arrange(z_score_h2m) %>%
-                                     mutate(percent_rank = percent_rank(z_score_h2m),
+                                     select(human_symbol, z_score_h2fit) %>%
+                                     arrange(z_score_h2fit) %>%
+                                     mutate(percent_rank = percent_rank(z_score_h2fit),
                                             percentile = round(percent_rank * 100, 2)) %>%
                                      filter(percentile < 10) %>%
                                      pull(human_symbol),
@@ -3574,8 +3748,10 @@ df_resultados_mouse_best <- enrichGO(gene = best_mouse %>%
   clean_names() %>%
   mutate(log_q = -log10(qvalue)) %>%
   arrange(-log_q)
+```
 
 
+```{r fig.width=10, fig.height= 8}
 #Plots
 
 df_resultados_mouse_best_plot = df_resultados_mouse_best %>% 
@@ -3619,11 +3795,11 @@ df_resultados_fit_best_10 = df_resultados_fit_best %>%
         strip.text.y = element_text(color = "black", angle = 0), 
         panel.spacing.y = unit(0.8, "lines"),
         strip.background.y = element_rect(fill = NA, color = NA)) +
-  labs(title = "Top 1000 genes in FIT prediction. Difference in Z-score to human.\nORA with all BPs")
+  labs(title = "10th percentile of genes in FIT prediction. Difference in Z-score to human.\nORA with all BPs")
 
 
 
-df_resultados_fit_worst_plot = df_resultados_fit %>% 
+df_resultados_fit_worst_plot = df_resultados_fit_worst %>% 
   mutate(description = fct_reorder(description, log_q)) %>% 
     arrange(-log_q) %>% 
   slice_head(n = 10) %>% 
@@ -3642,7 +3818,7 @@ df_resultados_fit_worst_plot = df_resultados_fit %>%
         strip.text.y = element_text(color = "black", angle = 0), 
         panel.spacing.y = unit(0.8, "lines"),
         strip.background.y = element_rect(fill = NA, color = NA))  +
-  labs(title = "Top 1000 that were most different in FIT prediction from mouse and human.\nDifference in Z-score. ORA with all BPs")
+  labs(title = "10th percentile of genes that were most different in FIT prediction from mouse and human.\nDifference in Z-score. ORA with all BPs")
 
 
 df_resultados_fit_best_10 / df_resultados_mouse_best_plot / df_resultados_fit_worst_plot +
