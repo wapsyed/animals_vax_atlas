@@ -3574,7 +3574,7 @@ worst_mouse_fit_plot = pairwise_human_fit_genes_wide %>%
   labs(color = "Organism",
        x = "",
        y = "LogFold-Change",
-       title = "Genes that were most different in FIT prediction from mouse and human. Difference in Z-score")
+       title = "Genes that were most different in Mouse prediction from FIT and human. Difference in Z-score")
 
 ```
 
@@ -3600,7 +3600,7 @@ pairwise_human_fit_genes_wide_distribution
 ```
 
 
-Where are the best and worst predicted genes in human distribution?
+#### Where are the best and worst predicted genes in human distribution?
 ```{r}
 pairwise_human_fit_genes_wide %>% 
   ggplot() +
@@ -3686,7 +3686,7 @@ pairwise_human_fit_genes_wide %>%
 ```
 
 
-Ranks
+#### Get ranks
 ```{r}
 
 ranks_mouse = z_scores_best_worst_models %>%
@@ -3712,22 +3712,23 @@ ranks_fit = z_scores_best_worst_models %>%
   distinct() %>% 
   rename(zscore_h2model = z_score_h2fit)
 
-
 ranks_fit_vs_mouse = ranks_fit %>% 
-  select(human_symbol, fit = percentile, timepoint_ref = timepoint) %>% 
+  select(human_symbol, fit = percentile, timepoint_ref = timepoint, zscore_h2fit = zscore_h2model) %>% 
   inner_join(ranks_mouse %>% 
                select(human_symbol, mouse = percentile,
-                      timepoint_other = timepoint),
+                      timepoint_other = timepoint,
+                      zscore_h2mouse = zscore_h2model),
              by = "human_symbol") %>% 
   mutate(timepoint_ref = as.character(timepoint_ref),
          timepoint_other = as.character(timepoint_other),
          condition = "Top FIT vs Mouse")
 
 ranks_mouse_vs_fit = ranks_mouse %>% 
-  select(human_symbol, mouse = percentile, timepoint_ref = timepoint) %>% 
+  select(human_symbol, mouse = percentile, timepoint_ref = timepoint, zscore_h2mouse = zscore_h2model) %>% 
   inner_join(ranks_fit %>% 
                select(human_symbol, fit = percentile,
-                      timepoint_other = timepoint),
+                      timepoint_other = timepoint,
+                      zscore_h2fit = zscore_h2model),
              by = "human_symbol") %>% 
   mutate(timepoint_ref = as.character(timepoint_ref),
          timepoint_other = as.character(timepoint_other),
@@ -3743,8 +3744,8 @@ ranks_best_fit_and_mouse = ranks_fit_vs_mouse %>%
          human_symbol,
          timepoint_ref,
          timepoint_other, 
-         fit,
-         mouse)
+         fit, zscore_h2fit,
+         mouse, zscore_h2mouse)
 
 ranks_best_fit_and_mouse_long <- ranks_best_fit_and_mouse %>%
   pivot_longer(
@@ -3753,10 +3754,50 @@ ranks_best_fit_and_mouse_long <- ranks_best_fit_and_mouse %>%
     values_to = "percentile"
   )
 
+
+#Get genes with least zscores in one model, but have the highest zscore in the other
+ranks_best_fit_and_mouse_zscore = ranks_fit_vs_mouse %>%
+
+  # FILTER BY N
+  filter(timepoint_ref == timepoint_other) %>%
+  arrange(abs(zscore_h2fit), desc(abs(zscore_h2mouse))) %>%
+  slice_head(n = 20) %>% 
+  bind_rows(ranks_mouse_vs_fit %>%
+              filter(timepoint_ref == timepoint_other) %>%
+  arrange(abs(zscore_h2mouse), desc(abs(zscore_h2fit))) %>%
+  slice_head(n = 20)) %>%
+  
+  # FILTER BY PERCENTILE
+  # filter(
+  #   timepoint_ref == timepoint_other,
+  #   zscore_h2fit <= quantile(abs(zscore_h2fit), 0.05, na.rm = TRUE),  # os mais baixos 5%
+  #   zscore_h2mouse >= quantile(abs(zscore_h2mouse), 0.95, na.rm = TRUE)  # os mais altos 5%
+  # ) %>%
+  # arrange(abs(zscore_h2fit), -abs(zscore_h2mouse)) %>% 
+  # bind_rows(ranks_mouse_vs_fit %>%
+  #             filter(
+  #                   timepoint_ref == timepoint_other,
+  #   zscore_h2fit >= quantile(abs(zscore_h2fit), 0.95, na.rm = TRUE),  # os mais baixos 5%
+  #   zscore_h2mouse <= quantile(abs(zscore_h2mouse), 0.05, na.rm = TRUE)  # os mais altos 5%
+  # )) %>%
+  select(condition,
+         human_symbol,
+         timepoint_ref,
+         timepoint_other, 
+         fit = zscore_h2fit,
+         mouse = zscore_h2mouse)
+
+ranks_best_fit_and_mouse_long_zscore <- ranks_best_fit_and_mouse_zscore %>%
+  pivot_longer(
+    cols = c(fit, mouse),
+    names_to = "model",
+    values_to = "zscore"
+  )
+
 ```
 
 
-Plot 10th vs 90th
+#### Plot 10th vs 90th
 ```{r fig.height=4, fig.width=8}
 selected_genes = ranks_best_fit_and_mouse %>% 
   group_by(condition, timepoint_ref, timepoint_other) %>% 
@@ -3802,69 +3843,103 @@ ranks_best_fit_and_mouse_long %>%
 
 
 
+#### Plot zscores
+```{r fig.height=4, fig.width=8}
+selected_genes_zscore = ranks_best_fit_and_mouse_zscore %>% 
+  group_by(condition, timepoint_ref, timepoint_other) %>% 
+  slice_head(n = 5) %>% 
+  pivot_longer(
+    cols = c(fit, mouse),
+    names_to = "model",
+    values_to = "zscore"
+  ) 
 
-```{r}
-pairwise_human_fit_genes_wide %>% 
+
+ranks_best_fit_and_mouse_long_zscore %>% 
+  ungroup() %>% 
   ggplot() +
-  aes(x = mean,
-      fill = organism) +
-  geom_histogram(position = position_identity(), alpha = 0.3) +
-  geom_point(data = best_fit %>% 
-              select(human_symbol, timepoint, l2fc) %>%
-              mutate(day = paste0("Day ", timepoint)) %>% 
-              distinct() %>% 
-              slice_head(n = 100),
-             mapping = aes(x = l2fc, y = -100),
-             fill = "#CE1800FF",
-             pch = 21,
-             color = "#CE1800FF"
-             ) +
-  geom_point(data = best_mouse %>% 
-              select(human_symbol, timepoint, l2fc) %>%
-              mutate(day = paste0("Day ", timepoint)) %>% 
-              distinct() %>% 
-              slice_head(n = 100),
-             mapping = aes(x = l2fc, y = -300),
-             fill = "#546E7AFF",
-             pch = 21,
-             color = "#546E7AFF"
-             ) +
-  geom_point(data = worst_fit %>% 
-              select(human_symbol, timepoint, l2fc) %>%
-              mutate(day = paste0("Day ", timepoint)) %>% 
-              distinct() %>% 
-              slice_head(n = 100),
-             mapping = aes(x = l2fc, y = -500, 
-                           label = human_symbol),
-             fill = NA,
-             pch = 21,
-             color = "black"
-             ) +
-  geom_hline(yintercept = 0, color ="black") +
-  scale_y_continuous(expand = c(0.05, 0.05), n.breaks = 3) +
-    scale_fill_manual(
-  values = c(
-    FIT = "#CE1800FF", 
-    Mouse = "#546E7AFF",
-    Human = "#4DBBD5FF"))+
-    scale_color_manual(
-  values = c(
-    FIT = "#CE1800FF", 
-    Mouse = "#546E7AFF",
-    Human = "#4DBBD5FF"))+
-    theme_vaxgo() +
+  aes(x = model, y = zscore, group = interaction(condition, human_symbol), color = condition) +
+  geom_line(alpha = 0.1) +
+  facet_grid(~timepoint_ref)  +
+  labs(x = "Model",
+       y = "Zscore",
+       title = "Top 20 genes with least zscore, and their zscores in the other model") +
+    scale_color_manual(values = c(
+    "Top FIT vs Mouse" = "#CE1800FF", 
+    "Top Mouse vs FIT" = "#546E7AFF")) +
+  scale_x_discrete(expand = c(0.05, 0.05)) +
+  theme_vaxgo() +
   theme(axis.text.x = element_text(angle = 0),
         legend.position = "top",
         strip.text.x = element_text(color = "black", size = 10),
         strip.text.y = element_text(color = "black", angle = 0), 
         panel.spacing.y = unit(0.8, "lines"),
         strip.background.y = element_rect(fill = NA, color = NA)) +
-  labs(fill = "Organism",
-       color = "Organism",
-       x = "Log2-fold change",
-       y = "Frequency",
-       title = "Frequency of genes by p value cutoff")
+  geom_text_repel(data = selected_genes_zscore %>% 
+                    filter(condition == "Top FIT vs Mouse" & model == "mouse" |
+                           condition == "Top Mouse vs FIT" & model == "fit"),
+             mapping = aes(label = human_symbol,
+                           x = model,
+                           y = zscore), 
+             size = 3, max.overlaps = 10000, force = 2, nudge_x = 0.2)
+  
+  
 ```
+
+
+
+
+```{r}
+overlap_mouse_best = pairwise_human_fit_genes_wide %>% 
+  arrange(human_symbol, timepoint) %>% 
+  inner_join(best_mouse %>% 
+              select(human_symbol, timepoint) %>%
+               group_by(timepoint) %>% 
+              mutate(day = paste0("Day ", timepoint)) %>% 
+              distinct() %>% 
+              slice_head(n = 100),
+            by = join_by("human_symbol", "timepoint")) %>% 
+  filter(organism == "Mouse") %>% 
+  select(human_symbol, day, organism, l2fc, z_score = z_score_h2m)
+
+
+overlap_fit_best = pairwise_human_fit_genes_wide %>% 
+  arrange(human_symbol, timepoint) %>% 
+  inner_join(best_fit %>% 
+              select(human_symbol, timepoint) %>%
+               group_by(timepoint) %>% 
+              mutate(day = paste0("Day ", timepoint)) %>% 
+              distinct() %>% 
+              slice_head(n = 100),
+            by = join_by("human_symbol", "timepoint")) %>% 
+  filter(organism == "FIT") %>% 
+  select(human_symbol, day, organism, l2fc, z_score = z_score_h2fit)
+
+
+overlap_fit_best %>% bind_rows(overlap_mouse_best) %>% 
+  ggplot() + 
+  aes(x = organism, y = human_symbol, fill = l2fc) +
+  geom_tile() +
+  theme(axis.text.y = element_blank())
+  
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
