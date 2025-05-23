@@ -89,6 +89,99 @@ theme_vaxgo = function(){
 ```
 
 
+# Functions
+```{r}
+#Function for GSEA with custom gene sets list
+autoGSEA <- function(df, TERM2GENE, geneset_name) {
+  gsea_results <- list()
+
+  conditions <- df$condition %>%
+    unique() %>%
+    as.character()
+
+  for (condition_i in conditions) {
+    
+    degs_condition <- df %>%
+      filter(condition == condition_i) %>%
+      dplyr::select(genes, log2fold_change) %>%
+      distinct() %>%
+      # mutate(rank = rank(log2fold_change, ties.method = "random")) %>%
+      arrange(desc(log2fold_change)) %>% 
+      deframe()
+
+    auto_gsea <- tryCatch({
+      GSEA(geneList = degs_condition,
+           TERM2GENE = TERM2GENE,
+           minGSSize = 1,
+           maxGSSize = 1000,
+           pvalueCutoff = 1,
+           pAdjustMethod = "BH") %>%
+        as.data.frame() %>%
+        arrange(qvalue) %>%
+        mutate(condition = condition_i,
+               gsea_enrichment = geneset_name)
+    }, error = function(e) {
+      return(NULL)
+    })
+
+    if (!is.null(auto_gsea)) {
+      key <- paste(condition_i, geneset_name, sep = "_")
+      gsea_results[[key]] <- auto_gsea
+    }
+  }
+
+  return(list(
+    gsea = bind_rows(gsea_results)
+  ))
+}
+
+#Function for GSEA (Gene Ontology database)
+gseGO_all <- function(df, OrgDb = "org.Hs.eg.db", keyType = "SYMBOL", ontology = "BP") {
+  all_conditions <- df %>%
+    distinct(condition) %>%
+    pull(condition)
+  
+  gsea_results <- lapply(all_conditions, function(cond) {
+    message("Running for condition: ", cond)
+    
+    ranked_df <- df %>%
+      filter(condition == cond) %>%
+      arrange(value)
+    
+    gene_list <- ranked_df %>%
+      arrange(-value) %>%
+      pull(value, name = genes)
+    
+    gsea_result <- tryCatch({
+      gseGO(
+        geneList = gene_list,
+        ont = ontology,
+        keyType = keyType,
+        pvalueCutoff = 0.50,
+        verbose = TRUE,
+        OrgDb = OrgDb,
+        pAdjustMethod = "BH"
+      ) %>%
+        as.data.frame() %>%
+        arrange(qvalue) %>%
+        mutate(
+          condition = cond,
+          geneset = "Gene ontology, BP"
+        ) %>%
+        clean_names()
+    }, error = function(e) {
+      warning("Error in GSEA for condition: ", cond)
+      return(NULL)
+    })
+    
+    return(gsea_result)
+  })
+  
+  bind_rows(gsea_results)
+}
+```
+
+
 #Data curation
 ## BioProject
 ```{r}
@@ -3897,7 +3990,7 @@ overlap_mouse_best = pairwise_human_fit_genes_wide %>%
                group_by(timepoint) %>% 
               mutate(day = paste0("Day ", timepoint)) %>% 
               distinct() %>% 
-              slice_head(n = 100),
+              slice_head(n = 1000),
             by = join_by("human_symbol", "timepoint")) %>% 
   filter(organism == "Mouse") %>% 
   select(human_symbol, day, organism, l2fc, z_score = z_score_h2m)
@@ -3910,71 +4003,155 @@ overlap_fit_best = pairwise_human_fit_genes_wide %>%
                group_by(timepoint) %>% 
               mutate(day = paste0("Day ", timepoint)) %>% 
               distinct() %>% 
-              slice_head(n = 100),
+              slice_head(n = 1000),
             by = join_by("human_symbol", "timepoint")) %>% 
   filter(organism == "FIT") %>% 
   select(human_symbol, day, organism, l2fc, z_score = z_score_h2fit)
 
 
-overlap_fit_best %>% bind_rows(overlap_mouse_best) %>% 
-  ggplot() + 
-  aes(x = organism, y = human_symbol, fill = l2fc) +
-  geom_tile() +
-  theme(axis.text.y = element_blank())
-  
 ```
 
 
+```{r fig.height=5, fig.width=5}
+df_best_worst_fit_mouse_zscore = bind_rows(overlap_fit_best, overlap_mouse_best) %>% 
+    mutate(condition = paste0(organism, " ", day)) %>%
+    filter(human_symbol %in% row_clustered$labels) %>% 
+    mutate(timepoint = str_extract(day, "\\d+"),
+           timepoint = as.integer(timepoint)) %>% 
+  mutate(condition = fct_reorder(condition, timepoint), 
+           human_symbol = fct_relevel(human_symbol, c(row_clustered$labels)),
+           human_symbol = fct_rev(human_symbol))
 
 
 
+row_clustered = df_best_worst_fit_mouse_zscore %>% 
+    dplyr::select(condition, human_symbol, l2fc) %>% 
+    distinct() %>% 
+    pivot_wider(names_from = "condition",
+                values_from= "l2fc") %>%
+    column_to_rownames("human_symbol") %>% 
+    as.matrix() %>% 
+    replace(is.na(.), 0) %>% 
+    dist(.) %>% 
+    hclust()
+
+
+column_order <- c(df_best_worst_fit_mouse_zscore$condition) %>% levels()
+```
+
+
+```{r fig.height=7, fig.width=5}
+labels_day = df_best_worst_fit_mouse_zscore %>% 
+  filter(human_symbol %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, c(column_order %>% as.character() %>% unique()))) %>% 
+  ggplot() +
+  aes(x = condition, y = 1, fill = timepoint %>% as.character()) + 
+  geom_tile() + 
+  scale_fill_manual(values = c(
+    "0" = "white",
+    "1" = "#caf0f8",
+    "3" = "#90e0ef",
+    "7" = "#0096c7")) +
+  theme_void() +
+  labs(y = "Day") +
+  theme(axis.title.y = element_text(size = 10, hjust = 1),
+        legend.position = "none")
+
+labels_organism = df_best_worst_fit_mouse_zscore %>% 
+  filter(human_symbol %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, c(column_order %>% as.character() %>% unique()))) %>% 
+  ggplot() +
+  aes(x = condition, y = 1, fill = organism) + 
+  geom_tile() + 
+  scale_fill_manual(values = c(
+    "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+  theme_void() +
+  labs(y = "Organism") +
+  theme(axis.title.y = element_text(size = 10, hjust = 1),
+        legend.position = "none")
+
+
+heatmap_worst_best_fit_mouse_zscore = df_best_worst_fit_mouse_zscore %>% 
+ggplot(aes(x=condition, y = human_symbol, fill = l2fc)) +
+    geom_tile(color = "black",
+              size = 0, na.rm = F) + 
+    theme_minimal() + 
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid = element_blank(),
+          legend.direction = "horizontal",
+          legend.position = "bottom") +
+    labs(x = "",
+         y = "") +
+    scale_fill_gradient2(
+        low = "#4DBBD5FF",      # azul para -1
+        mid = "white",          # branco para 0
+        high = "#DC0000FF",     # vermelho para +1
+        midpoint = 0, 
+        n.breaks = 3,
+        oob = scales::squish,
+        limits = c(-0.1, 0.1),      # fixa o intervalo
+        name = "Log2FC", ) +
+    scale_y_discrete(position = "right")
 
 
 
+patch_worst_best_fit_mouse_zscore = 
+  (labels_organism/
+  labels_day/
+  heatmap_worst_best_fit_mouse_zscore) +
+  plot_layout(heights = c( 0.3,0.3, 6),
+              guides = 'collect',
+              axes = "collect") +
+  plot_annotation(title = "GSEA ImmuneGO + BTM",
+                  subtitle = "Main processes, p-adjusted value <= 0.25",
+                  theme = theme(legend.position = "bottom",
+                                plot.title = element_text(hjust = 0.5, size = 10),
+                                plot.subtitle = element_text(hjust = 0.5, size = 10),
+                                plot.margin = margin(1, 1, 1, 1, unit = "cm"),
+                                legend.direction = "vertical", 
+                                legend.box = "vertical"))
 
-
-
-
-
-
-
-
-
-
-
+patch_worst_best_fit_mouse_zscore
+```
 
 #### ORA: Which processes are better or worse predicted?
 ```{r fig.width=10, fig.height= 8}
-#FIT
-df_resultados_fit_worst <- enrichGO(gene = worst_fit %>%
-                                filter(organism == "FIT") %>%
-                                select(human_symbol, diff_z_fit_mouse) %>%
-                                arrange(diff_z_fit_mouse) %>%
-                                mutate(percent_rank = percent_rank(diff_z_fit_mouse),
-                                       percentile = round(percent_rank * 100, 2)) %>%
-                                filter(percentile < 10) %>%
-                                pull(human_symbol),
-                              OrgDb = org.Hs.eg.db,
-                              keyType = 'SYMBOL',
-                              readable = T,
-                              ont = "BP",
-                              pAdjustMethod = "BH",
-                              qvalueCutoff = 0.25) %>%
-  as_data_frame() %>%
-  clean_names() %>%
-  mutate(log_q = -log10(qvalue)) %>%
-  arrange(-log_q)
-
-
 
 #FIT BEST
 df_resultados_fit_best <- enrichGO(gene = best_fit %>%
                                      filter(organism == "FIT") %>%
                                      select(human_symbol, z_score_h2fit) %>%
-                                     arrange(z_score_h2fit) %>%
-                                     mutate(percent_rank = percent_rank(z_score_h2fit),
+                                     mutate(percent_rank = percent_rank(abs(z_score_h2fit)),
                                             percentile = round(percent_rank * 100, 2)) %>%
-                                     filter(percentile < 10) %>%
+                                      arrange(abs(z_score_h2fit)) %>% 
+                                     filter(percentile <= 10) %>%
+                                     pull(human_symbol),
+                                   OrgDb = org.Hs.eg.db,
+                                   keyType = 'SYMBOL',
+                                   readable = T,
+                                   ont = "BP",
+                                   pAdjustMethod = "BH",
+                                   qvalueCutoff = 0.50) %>% 
+  as_data_frame() %>%
+  clean_names() %>%
+  mutate(log_q = -log10(qvalue)) %>%
+  arrange(-log_q)
+
+#FIT Worst
+df_resultados_fit_worst <- enrichGO(gene = best_fit %>%
+                                     filter(organism == "FIT") %>%
+                                     select(human_symbol, z_score_h2fit) %>%
+                                      arrange(abs(z_score_h2fit)) %>%
+                                     mutate(percent_rank = percent_rank(abs(z_score_h2fit)),
+                                            percentile = round(percent_rank * 100, 2)) %>%
+                                     filter(percentile >= 90) %>%
                                      pull(human_symbol),
                                    OrgDb = org.Hs.eg.db,
                                    keyType = 'SYMBOL',
@@ -3993,10 +4170,32 @@ df_resultados_fit_best <- enrichGO(gene = best_fit %>%
 df_resultados_mouse_best <- enrichGO(gene = best_mouse %>%
                                        filter(organism == "Mouse") %>%
                                        select(human_symbol, z_score_h2m) %>%
-                                       arrange(z_score_h2m) %>%
-                                       mutate(percent_rank = percent_rank(z_score_h2m),
+                                       arrange(abs(z_score_h2m)) %>% 
+                                       mutate(percent_rank = percent_rank(abs(z_score_h2m)),
                                               percentile = round(percent_rank * 100, 2)) %>%
-                                       filter(percentile < 10) %>%
+                                       filter(percentile <= 10) %>%
+                                       
+                                       pull(human_symbol),
+                                     OrgDb = org.Hs.eg.db,
+                                     keyType = 'SYMBOL',
+                                     readable = T,
+                                     ont = "BP",
+                                     pAdjustMethod = "BH",
+                                     qvalueCutoff = 0.50) %>% 
+  as_data_frame() %>%
+  clean_names() %>%
+  mutate(log_q = -log10(qvalue)) %>%
+  arrange(-log_q)
+
+
+#MOUSE WORST
+df_resultados_mouse_worst <- enrichGO(gene = best_mouse %>%
+                                       filter(organism == "Mouse") %>%
+                                       select(human_symbol, z_score_h2m) %>%
+                                      arrange(abs(z_score_h2m)) %>% 
+                                       mutate(percent_rank = percent_rank(abs(z_score_h2m)),
+                                              percentile = round(percent_rank * 100, 2)) %>%
+                                       filter(percentile >= 90) %>%
                                        pull(human_symbol),
                                      OrgDb = org.Hs.eg.db,
                                      keyType = 'SYMBOL',
@@ -4020,12 +4219,9 @@ df_resultados_mouse_best_plot = df_resultados_mouse_best %>%
   slice_head(n = 10) %>% 
   ggplot() +
   aes(x = log_q, 
-      y = description,
-      fill = log_q) +
+      y = description) +
   geom_segment( aes(xend = 0, yend = description)) +
-  geom_point( size=4, pch = 21, color = "black") +
-  scale_fill_gradient(low = "white",
-                      high = "#546E7AFF") +
+  geom_point( size=4, pch = 21, color = "black", fill = "#546E7AFF") +
   theme_vaxgo() +
     scale_y_discrete(labels = label_wrap(30)) +
   theme(axis.text.x = element_text(angle = 0),
@@ -4034,21 +4230,18 @@ df_resultados_mouse_best_plot = df_resultados_mouse_best %>%
         strip.text.y = element_text(color = "black", angle = 0), 
         panel.spacing.y = unit(0.8, "lines"),
         strip.background.y = element_rect(fill = NA, color = NA)) +
-  labs(title = "10th percentile of genes in Mouse prediction. Difference in Z-score to human.\nORA with all BPs")
+  labs(title = "Mouse best 10th percentile")
 
 
-df_resultados_fit_best_10 = df_resultados_fit_best %>% 
+df_resultados_mouse_worst_plot = df_resultados_mouse_worst %>% 
   mutate(description = fct_reorder(description, log_q)) %>% 
     arrange(-log_q) %>% 
   slice_head(n = 10) %>% 
   ggplot() +
   aes(x = log_q, 
-      y = description,
-      fill = log_q) +
+      y = description) +
   geom_segment( aes(xend = 0, yend = description)) +
-  geom_point( size=4, pch = 21, color = "black") +
-  scale_fill_gradient(low = "white",
-                      high = "#CE1800FF")+
+  geom_point( size=4, pch = 21, color = "black", fill = "#546E7AFF") +
   theme_vaxgo() +
     scale_y_discrete(labels = label_wrap(30)) +
   theme(axis.text.x = element_text(angle = 0),
@@ -4057,9 +4250,27 @@ df_resultados_fit_best_10 = df_resultados_fit_best %>%
         strip.text.y = element_text(color = "black", angle = 0), 
         panel.spacing.y = unit(0.8, "lines"),
         strip.background.y = element_rect(fill = NA, color = NA)) +
-  labs(title = "10th percentile of genes in FIT prediction. Difference in Z-score to human.\nORA with all BPs")
+  labs(title = "Mouse worst 90th percentile")
 
 
+df_resultados_fit_best_plot = df_resultados_fit_best %>% 
+  mutate(description = fct_reorder(description, log_q)) %>% 
+    arrange(-log_q) %>% 
+  slice_head(n = 10) %>% 
+  ggplot() +
+  aes(x = log_q, 
+      y = description) +
+  geom_segment( aes(xend = 0, yend = description)) +
+  geom_point( size=4, pch = 21, color = "black", fill = "#CE1800FF") +
+  theme_vaxgo() +
+    scale_y_discrete(labels = label_wrap(30)) +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "none",
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", angle = 0), 
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(title = "FIT best 10th percentile")
 
 df_resultados_fit_worst_plot = df_resultados_fit_worst %>% 
   mutate(description = fct_reorder(description, log_q)) %>% 
@@ -4067,28 +4278,209 @@ df_resultados_fit_worst_plot = df_resultados_fit_worst %>%
   slice_head(n = 10) %>% 
   ggplot() +
   aes(x = log_q, 
-      y = description,
-      fill = log_q) +
+      y = description) +
   geom_segment( aes(xend = 0, yend = description)) +
-  geom_point( size=4, pch = 21, color = "black") +
-  scale_fill_gradient(low = "white",
-                      high = "#4DBBD5FF") +
+  geom_point( size=4, pch = 21, color = "black", fill = "#CE1800FF") +
   theme_vaxgo() +
-  scale_y_discrete(labels = label_wrap(30)) +
+    scale_y_discrete(labels = label_wrap(30)) +
   theme(axis.text.x = element_text(angle = 0),
         legend.position = "none",
         strip.text.x = element_text(color = "black", size = 10),
         strip.text.y = element_text(color = "black", angle = 0), 
         panel.spacing.y = unit(0.8, "lines"),
-        strip.background.y = element_rect(fill = NA, color = NA))  +
-  labs(title = "10th percentile of genes that were most different in FIT prediction from mouse and human.\nDifference in Z-score. ORA with all BPs")
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(title = "FIT worst 90th percentile")
 
 
-df_resultados_fit_best_10 + df_resultados_mouse_best_plot + df_resultados_fit_worst_plot +
-  plot_layout(guides = "collect", axes = "collect", ncol = 2) 
+
+
+df_resultados_mouse_best_plot + 
+  df_resultados_mouse_worst_plot + 
+  df_resultados_fit_best_plot + 
+  df_resultados_fit_worst_plot +
+  plot_layout(guides = "collect", axes = "collect", ncol = 4) 
 ```
 
 
+
+#### GSEA: Which processes are better or worse predicted?
+
+```{r fig.width=10, fig.height= 8}
+organism = "org.Hs.eg.db"
+
+
+#All Gene ontologies
+fit_mouse_ranked_zscore = ranks_mouse_vs_fit %>% 
+    ungroup() %>% 
+  rename(zscore = fit) %>% 
+  mutate(condition = paste0(condition, " (Day ", timepoint_ref, ")")) %>% 
+    filter(timepoint_ref == timepoint_other) %>% 
+  select(human_symbol, zscore, condition) %>% 
+  bind_rows(ranks_fit_vs_mouse %>%
+              ungroup() %>%
+                filter(timepoint_ref == timepoint_other) %>% 
+              rename(zscore = mouse) %>%
+              mutate(condition = paste0(condition, " (Day ", timepoint_ref, ")")) %>%
+              select(human_symbol, zscore, condition)) %>% 
+  rename(genes = human_symbol,
+         value = zscore)
+
+
+gseGO_all_zscore = gseGO_all(fit_mouse_ranked_zscore)
+
+
+#ImmuneGO ontologies
+
+ImmuneGO_Mouse_Manual <- read_excel(here("VaxGO", "ImmuneGO_Mouse.xlsx"))
+ImmuneGO_Mouse_Manual_genes = ImmuneGO_Mouse_Manual %>% separate_rows(genes)
+immunego_btm_manual_grouped = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genesets.csv"))
+ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
+
+#Human ImmuneGO
+term2gene = ImmuneGO_BTM_grouped_genes %>% 
+  select(process, genes)
+
+
+fit_mouse_ranked_zscore = ranks_mouse_vs_fit %>% 
+    ungroup() %>% 
+  rename(zscore = fit) %>% 
+  mutate(condition = paste0(condition, " (Day ", timepoint_ref, ")")) %>% 
+    filter(timepoint_ref == timepoint_other) %>% 
+  select(human_symbol, zscore, condition) %>% 
+  bind_rows(ranks_fit_vs_mouse %>%
+              ungroup() %>%
+                filter(timepoint_ref == timepoint_other) %>% 
+              rename(zscore = mouse) %>%
+              mutate(condition = paste0(condition, " (Day ", timepoint_ref, ")")) %>%
+              select(human_symbol, zscore, condition)) %>% 
+  distinct() %>% 
+  select(condition, genes = human_symbol, log2fold_change = zscore) 
+
+  
+fit_mouse_ranked_zscores_gsea_results_immuneGO_Manual_human = autoGSEA(df = fit_mouse_ranked_zscore,
+         TERM2GENE = term2gene,
+         geneset_name = "Human_ImmuneGO") %>% 
+  clean_names()
+
+fit_mouse_ranked_zscores_gsea_results_immuneGO_Manual_human %>% 
+    saveRDS(here("GSEA_ORA", "fit_mouse_ranked_zscores_gsea_results_immuneGO_Manual_human.rds"))
+
+```
+
+
+
+
+#####GSEA all BP in Gene ontology
+
+```{r fig.height=10, fig.width=10}
+row_clustered = gseGO_all_zscore %>% 
+    dplyr::select(condition, description, nes) %>% 
+    distinct() %>% 
+    pivot_wider(names_from = "condition",
+                values_from= "nes") %>%
+    column_to_rownames("description") %>% 
+    as.matrix() %>% 
+    replace(is.na(.), 0) %>% 
+    dist(.) %>% 
+    hclust()
+
+
+gseGO_all_zscore %>% 
+  clean_names() %>% 
+  filter(p_adjust < 0.01) %>% 
+  arrange(-abs(nes)) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  ggplot(aes(x=condition, y = description, fill = nes)) +
+  geom_tile(color = "white",
+            size = 0, na.rm = F) + 
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  scale_y_discrete(labels = label_wrap(15)) +
+    theme_minimal() + 
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 1, hjust=1),
+          axis.ticks = element_blank(),
+          panel.grid = element_blank(),
+          legend.direction = "horizontal",
+          legend.position = "bottom") +
+    labs(x = "",
+         y = "") +
+    scale_fill_gradient2(
+        low = "#4DBBD5FF",      # azul para -1
+        mid = "white",          # branco para 0
+        high = "#DC0000FF",     # vermelho para +1
+        midpoint = 0, 
+        n.breaks = 3,
+        oob = scales::squish,
+        limits = c(-1, 1),      # fixa o intervalo
+        name = "NES") +
+    scale_y_discrete(position = "right")
+
+```
+
+
+##### GSEA Main immune processes
+
+```{r fig.height=7, fig.width=5}
+row_clustered = fit_mouse_ranked_zscores_gsea_results_immuneGO_Manual_human$gsea %>% 
+    clean_names() %>% 
+  filter(p_adjust <= 0.50) %>%
+  filter(!str_detect(description, "\\(M"),#Filter out BTM IDs
+         !str_detect(description, "[a-z]"),
+         !str_detect(description, "PRR|APP")) %>% #Filter out main processes (Upper case)
+    dplyr::select(condition, description, nes) %>% 
+    distinct() %>% 
+    pivot_wider(names_from = "condition",
+                values_from= "nes") %>%
+    column_to_rownames("description") %>% 
+    as.matrix() %>% 
+    replace(is.na(.), 0) %>% 
+    dist(.) %>% 
+    hclust()
+
+
+fit_mouse_ranked_zscores_gsea_results_immuneGO_Manual_human$gsea %>% 
+  clean_names() %>% 
+  filter(id %in% c(row_clustered$labels)) %>% 
+  # filter(p_adjust < 0.25) %>% 
+  arrange(-abs(nes)) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              TRUE ~ "")) %>% 
+  ggplot(aes(x=condition, y = description, fill = nes)) +
+  geom_tile(color = "white",
+            size = 0, na.rm = F) + 
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  scale_y_discrete(labels = label_wrap(15)) +
+    theme_minimal() + 
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 1, hjust=1),
+          axis.ticks = element_blank(),
+          panel.grid = element_blank(),
+          plot.margin = margin(1, 1, 1, 2, unit = "cm"),
+          legend.direction = "horizontal",
+          legend.position = "top") +
+    labs(x = "",
+         y = "") +
+    scale_fill_gradient2(
+        low = "#4DBBD5FF",      # azul para -1
+        mid = "white",          # branco para 0
+        high = "#DC0000FF",     # vermelho para +1
+        midpoint = 0, 
+        n.breaks = 3,
+        oob = scales::squish,
+        limits = c(-1, 1),      # fixa o intervalo
+        name = "NES") +
+    scale_y_discrete(position = "right")
+
+```
 
 
 
@@ -4545,25 +4937,28 @@ metrics_FIT_tuning_params_plots %>%
 
 
 #### Plot correlation
+
+Mouse vs Human (cutoffs for mouse)
 ```{r fig.height=12, fig.width=6}
 human_vs_mouse_corr = pairwise_human_fit_test %>% 
 mutate(pval_cuts = case_when(
+  pval_mouse_adj <= 0.0001 ~ "<0.0001",
   pval_mouse_adj <= 0.001 ~ "<0.001",
   pval_mouse_adj <= 0.01 ~ "<0.01",
   pval_mouse_adj <= 0.05 ~ "<0.05",
-  pval_mouse_adj <= 0.10 ~ "<0.10",
-  pval_mouse_adj <= 0.25 ~ "<0.25",
-  TRUE ~ ">0.25"
+    TRUE ~ ">0.05"
 )) %>% 
   ggplot() +
   aes(x = Mouse,
       y = Human) +
   geom_point(alpha = 0.5,
-             fill = NA,
+             fill = "#90A4AEFF",
              pch = 21,
+             size = 1,
              show.legend = F,
              color = "#90A4AEFF") +
   geom_smooth(method = 'lm', se = TRUE, color = "black") +
+  geom_vline(xintercept = 0, linetype = 1, size = 0.5) +
   facet_grid(~timepoint~pval_cuts, scales = "free_x") +
     scale_x_continuous(n.breaks = 4) +
   scale_y_continuous(n.breaks = 4) +
@@ -4578,26 +4973,27 @@ mutate(pval_cuts = case_when(
     axis.text.y = element_text(size = 8),
     panel.spacing.x = unit(1, "lines"),
   )
-
+human_vs_mouse_corr
 
 fit_vs_human_corr = pairwise_human_fit_test %>% 
 mutate(pval_cuts = case_when(
+  pval_fit_adj <= 0.0001 ~ "<0.0001",
   pval_fit_adj <= 0.001 ~ "<0.001",
   pval_fit_adj <= 0.01 ~ "<0.01",
   pval_fit_adj <= 0.05 ~ "<0.05",
-  pval_fit_adj <= 0.10 ~ "<0.10",
-  pval_fit_adj <= 0.25 ~ "<0.25",
-  TRUE ~ ">0.25"
+  TRUE ~ ">0.05"
 )) %>% 
   ggplot() +
   aes(x = `FIT Prediction`,
       y = Human) +
   geom_point(alpha = 0.5,
-             fill = NA,
+             fill = "#CE1800FF",
              pch = 21,
+             size = 1,
              show.legend = F,
              color = "#CE1800FF") +
   geom_smooth(method = 'lm', se = TRUE, color = "black") +
+    geom_vline(xintercept = 0, linetype = 1, size = 0.5) +
     scale_x_continuous(n.breaks = 4) +
   scale_y_continuous(n.breaks = 4) +
   scale_color_brewer(direction = -1, palette = "Greys") +
@@ -4615,6 +5011,7 @@ mutate(pval_cuts = case_when(
     panel.spacing.x = unit(1, "lines"),
   )
 
+fit_vs_human_corr
 
 fit_vs_mouse_corr = pairwise_human_fit_test %>% 
 mutate(pval_cuts = case_when(
@@ -4622,17 +5019,18 @@ mutate(pval_cuts = case_when(
   pval_mouse_adj <= 0.001 ~ "<0.001",
   pval_mouse_adj <= 0.01 ~ "<0.01",
   pval_mouse_adj <= 0.05 ~ "<0.05",
-  pval_mouse_adj <= 0.10 ~ "<0.10",
-  TRUE ~ ">0.10"
+  TRUE ~ ">0.05"
 )) %>% 
   ggplot() +
   aes(x = Mouse,
       y = `FIT Prediction`) +
   geom_point(alpha = 0.5,
-             fill = NA,
+             fill = "#3182bd",
              pch = 21,
+             size = 1,
              show.legend = F,
              color = "#3182bd") +
+    geom_vline(xintercept = 0, linetype = 1, size = 0.5) +
   geom_smooth(method = 'lm', se = TRUE, color = "black") +
   facet_grid(~timepoint~pval_cuts, scales = "free_x") +
     scale_x_continuous(n.breaks = 4) +
