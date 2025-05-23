@@ -2998,8 +2998,992 @@ pairwise_human_fit_measures %>%
   
 ```
 
-# Regression model: Regression metrics
+# Gene set enrichment analysis (GSEA)
 
+
+```{r}
+ImmuneGO_Mouse_Manual <- read_excel(here("VaxGO", "ImmuneGO_Mouse.xlsx"))
+
+ImmuneGO_Mouse_Manual_genes = ImmuneGO_Mouse_Manual %>% 
+  separate_rows(genes)
+
+immunego_btm_manual_grouped = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genesets.csv"))
+
+ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
+
+dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds"))
+```
+
+
+```{r}
+#Mouse ImmuneGO
+term2gene = ImmuneGO_Mouse_Manual_genes %>% 
+  select(process, genes) %>% 
+  mutate(genes = str_to_upper(genes))
+
+df_genes2GSEA = dge_long_genes %>% 
+  select(condition, 
+         genes = human_symbol, 
+         log2fold_change = l2fc) %>% 
+  arrange(genes)
+
+
+gsea_results_immuneGO_Manual_Mouse = autoGSEA(df = df_genes2GSEA,
+         TERM2GENE = term2gene,
+         geneset_name = "Mouse_ImmuneGO")
+
+gsea_results_immuneGO_Manual_Mouse %>% 
+    saveRDS(here("GSEA_ORA", "gsea_results_immuneGO_Manual_Mouse.rds"))
+  
+  
+  
+#Human ImmuneGO_BTM
+term2gene = ImmuneGO_BTM_grouped_genes %>% 
+  select(process, genes)
+
+df_genes2GSEA_human = dge_long_genes %>% 
+  select(condition, genes = human_symbol, log2fold_change = l2fc) %>% 
+  distinct()
+
+gsea_results_immuneGO_Manual_human = autoGSEA(df = df_genes2GSEA_human,
+         TERM2GENE = term2gene,
+         geneset_name = "Human_ImmuneGO")
+
+
+gsea_results_immuneGO_Manual_human %>% 
+    saveRDS(here("GSEA_ORA", "gsea_results_immuneGO_BTM_Human_Manual.rds"))
+
+
+
+#Human ImmuneGO
+term2gene = ImmuneGO_BTM_grouped_genes %>% 
+  select(process, genes)
+
+df_genes2GSEA_human = dge_long_genes %>% 
+  distinct() %>% 
+  select(condition, genes = human_symbol, log2fold_change = l2fc) 
+
+  
+gsea_results_immuneGO_Manual_human = autoGSEA(df = df_genes2GSEA_human,
+         TERM2GENE = term2gene,
+         geneset_name = "Human_ImmuneGO")
+
+gsea_results_immuneGO_Manual_human
+
+
+gsea_results_immuneGO_Manual_human %>% 
+    saveRDS(here("GSEA_ORA", "gsea_results_immuneGO_BTM_Human_Manual.rds"))
+```
+
+```{r}
+
+gsea_results_immuneGO_Manual_Mouse = read_rds(here("GSEA_ORA", "gsea_results_immuneGO_Manual_Mouse.rds"))
+gsea_results_immuneGO_Manual = gsea_results_immuneGO_Manual_Mouse$gsea
+gsea_results_immuneGO_BTM_human = read_rds(here("GSEA_ORA", "gsea_results_immuneGO_BTM_Human_Manual.rds"))
+gsea_results_immuneGO_BTM_human = gsea_results_immuneGO_BTM_human$gsea
+
+gsea_results_immuneGO_Manual_human = gsea_results_immuneGO_Manual_human$gsea
+
+```
+
+
+
+#### Heatmap (Mouse immune processes)
+
+```{r fig.height=8, fig.width=20}
+# Function for clustering by day
+cluster_by_day <- function(df, day_column = "day", condition_column = "condition") {
+  
+  # Obter os níveis do fator da coluna de dias
+  days <- levels(df[[day_column]])
+  
+  # Inicializar uma lista para armazenar as ordens
+  orders <- list()
+  
+  # Loop por cada nível (dia) da coluna fator day
+  for (day_value in days) {
+    # Filtrar os dados para o dia atual
+    day_data <- df %>%
+      filter(!!sym(day_column) == day_value) %>%
+      dplyr::select(!!sym(condition_column)) %>%
+      distinct()
+    
+    # Criar uma matriz binária onde 1 representa a presença da condição
+    if (nrow(day_data) > 1) {
+      # Matriz com condições como rótulos e 1 para presença
+      presence_matrix <- table(day_data[[condition_column]]) > 0
+      dist_matrix <- as.matrix(presence_matrix)
+      
+      # Aplicar o clustering
+      col_clustered <- dist(dist_matrix) %>% hclust()
+      
+      # Armazenar a ordem dos clusters
+      orders[[day_value]] <- col_clustered$labels[col_clustered$order]
+    } else {
+      # Se houver apenas uma condição, armazenar o rótulo
+      orders[[day_value]] <- as.character(day_data[[condition_column]])
+    }
+  }
+  
+  # Converter a lista de ordens para um data frame
+  order_df <- data.frame(
+    day = rep(names(orders), sapply(orders, length)),
+    condition = unlist(orders)
+  )
+  
+  return(order_df)
+}
+
+```
+
+
+
+Specific processes
+```{r fig.height=15, fig.width=12}
+library(ggdendro)
+library(cowplot)
+
+df =  gsea_results_immuneGO_Manual %>% 
+  clean_names() %>% 
+  select(condition, id = description, p_adjust, nes) %>% 
+  filter(p_adjust<= 0.25) %>% 
+  separate(condition,into = c("model", "day"), remove = F) %>% 
+  mutate(day = str_remove(day, "Day"),
+         day = day %>% fct_relevel(day, "0", "1", "3", "7")) %>% 
+  distinct() %>% 
+  rownames_to_column("del") %>% 
+  select(-del)
+
+
+row_clustered = df %>% 
+  dplyr::select(condition, id, nes) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "condition",
+              values_from= "nes") %>%
+  column_to_rownames("id") %>% 
+  as.matrix() %>% 
+  replace(is.na(.), 0) %>% 
+  dist(.) %>% 
+  hclust()
+
+result_vac <- cluster_by_day(df, day_column = "day", condition_column = "condition") %>%
+  distinct() %>% 
+  mutate(day = fct_relevel(day, df$day %>% unique() %>% sort() %>% as.character()))
+
+
+column_order <- c(result_vac$condition)
+
+labels_day = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order)) %>% 
+  ggplot() +
+  aes(x = condition, y = 1, fill = day) + 
+  geom_tile() + 
+  scale_fill_manual(values = c(
+    "0" = "white",
+    "1" = "#caf0f8",
+    "3" = "#90e0ef",
+    "7" = "#0096c7")) +
+  theme_void() +
+  labs(y = "Day") +
+  theme(axis.title.y = element_text(size = 10, hjust = 1),
+        legend.position = "none")
+
+
+labels_organism = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order)) %>% 
+  ggplot() +
+  aes(x = condition, y = 1, fill = model) + 
+  geom_tile() + 
+  scale_fill_manual(values = c(
+    "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+  theme_void() +
+  labs(y = "Organism") +
+  theme(axis.title.y = element_text(size = 10, hjust = 1),
+        legend.position = "none")
+
+#Plot
+dotplot = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order),
+                  id = fct_relevel(id, c(row_clustered$labels)),
+         id = fct_rev(id)) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  ggplot(aes(x=condition, y = id, fill = nes, size = logq)) +
+  geom_tile(color = "white",
+            size = 0, na.rm = F) + 
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  theme_minimal() + 
+  theme(axis.text = element_text(color = "black", size = 8) ,
+        axis.line  = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        axis.ticks = element_blank(),
+        legend.direction = "horizontal",
+        legend.position = "bottom") +
+  labs(x = "",
+       y = "") +
+  scale_fill_gradient2(
+  low = "#4DBBD5FF",      # azul para -1
+  mid = "white",          # branco para 0
+  high = "#DC0000FF",     # vermelho para +1
+  midpoint = 0,
+  oob = scales::squish,
+  limits = c(-1, 2),      # fixa o intervalo
+  name = "NES", ) +
+  scale_y_discrete(position = "right") +
+  scale_size(range = c(2, 6))
+  
+
+patch_immune_main = 
+  labels_organism/
+  labels_day/
+  dotplot +
+  plot_layout(heights = c(0.08, 0.08, 5),
+              guides = 'collect') +
+  plot_annotation(title = "GSEA ImmuneGO_Mouse",
+                  subtitle = "NES, padj<=0.10",
+                  theme = theme(legend.position = "bottom",
+                                plot.margin = margin(0.5, 0, 0.5, 1, unit = "cm"),
+                                legend.direction = "horizontal", 
+                                legend.box = "horizontal"))
+
+
+# patch_immune_main %>% 
+#   ggsave(filename = here("Figures", "GSEA_ImmuneGO_MainGOs_Bubbleplot.png"),
+#          width = 12,
+#          height = 8)
+patch_immune_main
+```
+
+
+#### Heatmap (Human ImmuneGO+BTM)
+
+Specific processes
+```{r fig.height=15, fig.width=8}
+library(ggdendro)
+library(cowplot)
+
+df =  gsea_results_immuneGO_Manual_human %>% 
+  clean_names() %>% 
+  filter(p_adjust<= 0.25) %>% 
+  select(condition, id = description, p_adjust, nes) %>% 
+  separate(condition,into = c("model", "day"), remove = F) %>% 
+  mutate(day = str_remove(day, "Day"),
+         day = day %>% fct_relevel(day, "0", "1", "3", "7")) %>% 
+  distinct() %>% 
+  rownames_to_column("del") %>% 
+  select(-del)
+
+
+row_clustered = df %>% 
+  dplyr::select(condition, id, nes) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "condition",
+              values_from= "nes") %>%
+  column_to_rownames("id") %>% 
+  as.matrix() %>% 
+  replace(is.na(.), 0) %>% 
+  dist(.) %>% 
+  hclust()
+
+result_vac <- cluster_by_day(df, day_column = "day", condition_column = "condition") %>%
+  distinct() %>% 
+  mutate(day = fct_relevel(day, df$day %>% unique() %>% sort() %>% as.character()))
+
+
+column_order <- c(result_vac$condition)
+
+labels_day = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order)) %>% 
+  ggplot() +
+  aes(x = condition, y = 1, fill = day) + 
+  geom_tile() + 
+  scale_fill_manual(values = c(
+    "0" = "white",
+    "1" = "#caf0f8",
+    "3" = "#90e0ef",
+    "7" = "#0096c7")) +
+  theme_void() +
+  labs(y = "Day") +
+  theme(axis.title.y = element_text(size = 10, hjust = 1),
+        legend.position = "none")
+
+
+labels_organism = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order)) %>% 
+  ggplot() +
+  aes(x = condition, y = 1, fill = model) + 
+  geom_tile() + 
+  scale_fill_manual(values = c(
+    "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+  theme_void() +
+  labs(y = "Organism") +
+  theme(axis.title.y = element_text(size = 10, hjust = 1),
+        legend.position = "none")
+
+#Plot
+dotplot = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order),
+                  id = fct_relevel(id, c(row_clustered$labels)),
+         id = fct_rev(id)) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  ggplot(aes(x=condition, y = id, fill = nes, size = logq)) +
+  geom_tile(color = "white",
+            size = 0,
+            na.rm = F) + 
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  theme_minimal() + 
+  theme(axis.text = element_text(color = "black", size = 8) ,
+        axis.line  = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        axis.ticks = element_blank(),
+        legend.direction = "horizontal",
+        legend.position = "bottom") +
+  labs(x = "",
+       y = "") +
+  scale_fill_gradient2(
+  low = "#4DBBD5FF",      # azul para -1
+  mid = "white",          # branco para 0
+  high = "#DC0000FF",     # vermelho para +1
+  midpoint = 0,
+  oob = scales::squish,
+  limits = c(-1, 2),      # fixa o intervalo
+  name = "NES", ) +
+  scale_y_discrete(position = "right") +
+  scale_size(range = c(2, 6))
+  
+
+patch_immune_main_human = 
+  labels_organism/
+  labels_day/
+  dotplot +
+  plot_layout(heights = c(0.08, 0.08, 5),
+              guides = 'collect') +
+  plot_annotation(title = "GSEA ImmuneGO_BTM_Human",
+                  subtitle = "NES, padj<=0.10",
+                  theme = theme(legend.position = "bottom",
+                                plot.margin = margin(0.5, 0, 0.5, 1, unit = "cm"),
+                                legend.direction = "horizontal", 
+                                legend.box = "horizontal"))
+
+
+patch_immune_main_human %>%
+  ggsave(filename = here("Figures", "GSEA_ImmuneGO_BTM_Human_Specific.png"),
+         width = 8,
+         height = 15)
+patch_immune_main_human
+```
+#### Heatmap (Human ImmuneGO)
+
+##### Main processes
+
+Specific processes
+```{r fig.height=8, fig.width=6}
+library(ggdendro)
+library(cowplot)
+
+df =  gsea_results_immuneGO_Manual_human %>% 
+  clean_names() %>% 
+  filter(p_adjust <= 0.50) %>%
+  filter(!str_detect(description, "\\(M"),#Filter out BTM IDs
+         !str_detect(description, "[a-z]"),
+         !str_detect(description, "PRR|APP")) %>% #Filter out main processes (Upper case)
+  select(condition, id = description, p_adjust, nes) %>% 
+  separate(condition,into = c("model", "day"), remove = F) %>% 
+  mutate(day = str_remove(day, "Day"),
+         day = day %>% fct_relevel(day, "0", "1", "3", "7")) %>% 
+  distinct() %>% 
+  rownames_to_column("del") %>% 
+  select(-del)
+
+df$condition %>% unique()
+```
+
+
+```{r fig.height=8, fig.width=6}
+row_clustered = df %>% 
+  dplyr::select(condition, id, nes) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "condition",
+              values_from= "nes") %>%
+  column_to_rownames("id") %>% 
+  as.matrix() %>% 
+  replace(is.na(.), 0) %>% 
+  dist(.) %>% 
+  hclust()
+
+result_vac <- cluster_by_day(df, day_column = "day", condition_column = "condition") %>%
+  distinct() %>% 
+  mutate(day = fct_relevel(day, df$day %>% unique() %>% sort() %>% as.character()))
+
+
+column_order <- c(result_vac$condition)
+
+labels_day = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order)) %>% 
+  ggplot() +
+  aes(x = condition, y = 1, fill = day) + 
+  geom_tile() + 
+  scale_fill_manual(values = c(
+    "0" = "white",
+    "1" = "#caf0f8",
+    "3" = "#90e0ef",
+    "7" = "#0096c7")) +
+  theme_void() +
+  labs(y = "Day") +
+  theme(axis.title.y = element_text(size = 10, hjust = 1),
+        legend.position = "none")
+
+
+labels_organism = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order)) %>% 
+  ggplot() +
+  aes(x = condition, y = 1, fill = model) + 
+  geom_tile() + 
+  scale_fill_manual(values = c(
+    "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+  theme_void() +
+  labs(y = "Organism") +
+  theme(axis.title.y = element_text(size = 10, hjust = 1),
+        legend.position = "none")
+
+#Plot
+dotplot = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order),
+                  id = fct_relevel(id, c(row_clustered$labels)),
+         id = fct_rev(id)) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              # p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  ggplot(aes(x=condition, y = id, fill = nes, size = logq)) +
+  geom_tile(color = "white",
+            size = 0) + 
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  theme_minimal() + 
+  theme(axis.text = element_text(color = "black", size = 8) ,
+        axis.line  = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        axis.ticks = element_blank(),
+        legend.direction = "horizontal",
+        legend.position = "bottom") +
+  labs(x = "",
+       y = "") +
+  scale_fill_gradient2(
+  low = "#4DBBD5FF",      # azul para -1
+  mid = "white",          # branco para 0
+  high = "#DC0000FF",     # vermelho para +1
+  midpoint = 0,
+  oob = scales::squish,
+  limits = c(-1, 2),      # fixa o intervalo
+  name = "NES", ) +
+  scale_y_discrete(position = "right") +
+  scale_size(range = c(2, 6))
+  
+
+patch_immune_main_human_ImmuneGO = 
+  labels_organism/
+  labels_day/
+  dotplot +
+  plot_layout(heights = c(0.1, 0.1, 5),
+              guides = 'collect') +
+  plot_annotation(title = "GSEA ImmuneGO_Human, Main processes",
+                  subtitle = "NES, padj<=0.25",
+                  theme = theme(legend.position = "bottom",
+                                plot.margin = margin(0.5, 0, 0.5, 1, unit = "cm"),
+                                legend.direction = "horizontal", 
+                                legend.box = "horizontal"))
+
+
+patch_immune_main_human_ImmuneGO %>%
+  ggsave(filename = here("Figures", "GSEA_ImmuneGO_Human_Main.png"),
+         width = 6,
+         height = 8)
+patch_immune_main_human_ImmuneGO
+```
+
+
+
+```{r fig.height=8, fig.width=10}
+idorder = c(
+  "IMMUNE SYSTEM",
+  "ANTIMICROBIAL",
+  "LEUKOCYTES",
+  "COMPLEMENT",
+  "INNATE IMMUNE SYSTEM",
+  "INNATE",
+  "INFLAMMATION",
+  "SIGNALING",
+  "ANTIVIRAL & IFN",
+  "NEUTROPHIL",
+  "MAST CELL",
+  "EOSINOPHIL",
+  "MAST CELL",
+  "MYELOID CELL",
+  "ARPP",
+  "MONOCYTE",
+  "MACROPHAGE",
+  "DENDRITIC CELL",
+  "NK CELL",
+  "ADAPTIVE IMMUNE SYSTEM",
+  "ADAPTIVE",
+  "LYMPHOCYTE",
+  "CELLULAR ADAPTIVE IMMUNE SYSTEM",
+  "CELULLAR ADAP.",
+  "T CELL",
+  "HUMORAL ADAPTIVE IMMUNE SYSTEM",
+  "HUMORAL ADAP.",
+  "B CELL",
+  "IMMUNOGLOBULINS (M156.0)"
+  # "IMMUNOGLOBULIN MEDIATED RESPONSE",
+  # "IMMUNOGLOBULIN\nMEDIATED RESPONSE"
+)
+
+df_day0 = df %>% 
+  mutate(day = "0",
+         nes = 0,
+         p_adjust = 1,
+         logq = 0) %>% 
+  distinct()
+```
+
+
+```{r fig.height=8, fig.width=10}
+df %>% 
+  bind_rows(df_day0) %>%
+  mutate(day = fct_relevel(day, "0", "1","3", "7")) %>% 
+  mutate(id = fct_relevel(id, c(idorder))) %>% 
+  ggplot() +
+  aes(x = day, y = nes, group = model) +
+  geom_line(aes(color = model,
+                group = model),
+            size = 1,
+            alpha = 1) +
+  geom_point(aes(
+                 fill = model,
+                 ),
+             size = 2,
+             pch = 21,
+             color = "black",
+             data = df %>% filter(p_adjust <= 0.25)
+            ) +
+  scale_fill_manual(values = c(
+    "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+    scale_color_manual(values = c(
+    "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+  scale_y_continuous(n.breaks = 5) +
+  scale_x_discrete(expand = c(0.01, 0.01)) +
+   theme_vaxgo() +
+  theme(axis.text = element_text(color = "black", size = 8) ,
+        axis.text.x = element_text(angle = 0, vjust = 1, hjust=0.5),
+        # axis.ticks = element_blank(),
+        legend.direction = "horizontal",
+        legend.position = "bottom") +
+  labs(x = "Day",
+       y = "NES",
+       color = "",
+       shape = "",
+       alpha = "", 
+       subtitle = "Processes with <= 0.25 are depicted with points.",
+       title = "Temporal dynamics of immunization, GSEA of Main immune processes (BTM + ImmuneGO)") +
+    facet_wrap(~id, 
+               # scales = "free"
+               )
+```
+
+
+```{r}
+scale_color_manual(values = c(ann_vaxsig_colors$type, 
+                                ann_vaxsig_colors$target_pathogen_disease,
+                                ann_vaxsig_colors$dose,
+                                "SARS-COV-2/BBIBP" = "#00A087FF",
+                                "SARS-COV-2/ZF2001" = "#8491B4FF",
+                                "SARS-COV-2/BNT" = "#4DBBD5FF",
+                                "SARS-COV-2/MO" = "#72ddf7",
+                                "SARS-COV-2/CHAD" = "#3C5488FF",
+                                "SARS-COV-2/ChAd (V1)" = "#3C5488FF",
+                               "SARS-COV-2/ChAd (V2)" = "#3C5488FF",
+                               "SARS-COV-2/ChAd-BNT" = "#00A087FF",
+                                "SARS-COV-2/I" = "red",
+                                "SARS-COV-2/I Hospital" = "red",
+                                "SARS-COV-2/I-I" = "purple",
+                                "SARS-COV-2/BNT-I" = "pink",
+                                "SARS-COV-2/BNT-I Hospital" = "pink",
+                                "SARS-COV-2/I-BNT" = "#Af101e")) + 
+  # Manual shape scale
+    scale_shape_manual(values = c("0" = 8, 
+                                "1" = 16, 
+                                "2" = 17, 
+                                "3" = 15)) +
+  theme_minimal()+
+  # ggthemes::theme_few() +
+  scale_x_continuous(breaks = c(0, 3, 7, 14, 21, 28, 30)) +
+  guides(fill=guide_legend(ncol=1),
+         color = guide_legend(ncol = 1)) +
+  theme(legend.position = "right",
+        strip.text.x = element_text(color = "black", 
+                                    size = 10,
+                                    face = "bold"), 
+        strip.text.y = element_text(color = "black", 
+                                    size = 10, 
+                                    hjust = 0,
+                                    angle = 360,
+                                    face = "bold"), 
+        axis.text.x = element_text(color = "black", size = 10),
+        axis.text.y = element_text(vjust = 0.5, size = 10, color = "black"),
+        axis.line = element_line(size = 1, colour = "black", linetype=1),
+        axis.ticks = element_line(size = 0.5, color = "black"),
+        panel.grid.major.y = element_line(size = 0.5, 
+                                    linetype = 2,
+                                    color = "gray75"),
+        panel.grid.minor.y = element_line(size = 0, 
+                                    linetype = 2,
+                                    color = "gray75"),
+        panel.grid.major.x = element_line(size = 0.5, 
+                                    linetype = 2,
+                                    color = "gray75"),
+        panel.grid.minor.x = element_line(size = 0, 
+                                    linetype = 2,
+                                    color = "gray75")) +
+  labs(x = "Day",
+       y = "NES",
+       color = "Pathogen",
+       shape = "Dose",
+       alpha = "COVID-19 or Other",
+       title = "Temporal dynamics of immunization, GSEA of Immune processes (BTM + ImmuneGO)") +
+    facet_grid(~id~type_grouped, 
+               scales = "free_x")
+
+all_together
+```
+
+
+
+
+
+##### Specific processes
+```{r fig.height=15, fig.width=8}
+library(ggdendro)
+library(cowplot)
+
+df =  gsea_results_immuneGO_Manual_human %>% 
+  clean_names() %>% 
+  filter(!str_detect(description, "\\(M"),#Filter out BTM IDs
+         str_detect(description, "[a-z]")) %>% #Filter out main processes (Upper case)
+  select(condition, id = description, p_adjust, nes) %>% 
+  separate(condition,into = c("model", "day"), remove = F) %>% 
+  mutate(day = str_remove(day, "Day"),
+         day = day %>% fct_relevel(day, "0", "1", "3", "7")) %>% 
+  distinct() %>% 
+  rownames_to_column("del") %>% 
+  select(-del)
+
+
+df_p10 = df %>% 
+  filter(p_adjust<= 0.10) %>%
+  mutate(logq = -log10(p_adjust))
+
+
+df_neg = df %>% 
+  filter(p_adjust<= 0.50) %>%
+  filter(nes < 0) %>% 
+  mutate(logq = -log10(p_adjust))
+
+df = bind_rows(df_p10,
+            df_neg)
+
+
+row_clustered = df %>% 
+  dplyr::select(condition, id, nes) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "condition",
+              values_from= "nes") %>%
+  column_to_rownames("id") %>% 
+  as.matrix() %>% 
+  replace(is.na(.), 0) %>% 
+  dist(.) %>% 
+  hclust()
+
+result_vac <- cluster_by_day(df, day_column = "day", condition_column = "condition") %>%
+  distinct() %>% 
+  mutate(day = fct_relevel(day, df$day %>% unique() %>% sort() %>% as.character()))
+
+
+column_order <- c(result_vac$condition)
+
+labels_day = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order)) %>% 
+  ggplot() +
+  aes(x = condition, y = 1, fill = day) + 
+  geom_tile() + 
+  scale_fill_manual(values = c(
+    "0" = "white",
+    "1" = "#caf0f8",
+    "3" = "#90e0ef",
+    "7" = "#0096c7")) +
+  theme_void() +
+  labs(y = "Day") +
+  theme(axis.title.y = element_text(size = 10, hjust = 1),
+        legend.position = "none")
+
+
+labels_organism = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order)) %>% 
+  ggplot() +
+  aes(x = condition, y = 1, fill = model) + 
+  geom_tile() + 
+  scale_fill_manual(values = c(
+    "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+  theme_void() +
+  labs(y = "Organism") +
+  theme(axis.title.y = element_text(size = 10, hjust = 1),
+        legend.position = "none")
+
+#Plot
+dotplot = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order),
+                  id = fct_relevel(id, c(row_clustered$labels)),
+         id = fct_rev(id)) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  ggplot(aes(x=condition, y = id, fill = nes, size = logq)) +
+  geom_tile(color = "white",
+            size = 0) + 
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  theme_minimal() + 
+  theme(axis.text = element_text(color = "black", size = 8) ,
+        axis.line  = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        axis.ticks = element_blank(),
+        legend.direction = "horizontal",
+        legend.position = "bottom") +
+  labs(x = "",
+       y = "") +
+  scale_fill_gradient2(
+  low = "#4DBBD5FF",      # azul para -1
+  mid = "white",          # branco para 0
+  high = "#DC0000FF",     # vermelho para +1
+  midpoint = 0,
+  oob = scales::squish,
+  limits = c(-1, 2),      # fixa o intervalo
+  name = "NES", ) +
+  scale_y_discrete(position = "right") +
+  scale_size(range = c(2, 6))
+  
+
+patch_immune_main_human_ImmuneGO = 
+  labels_organism/
+  labels_day/
+  dotplot +
+  plot_layout(heights = c(0.08, 0.08, 5),
+              guides = 'collect') +
+  plot_annotation(title = "GSEA ImmuneGO_Human, Specific processes",
+                  subtitle = "NES, padj<=0.10",
+                  theme = theme(legend.position = "bottom",
+                                plot.margin = margin(0.5, 0, 0.5, 1, unit = "cm"),
+                                legend.direction = "horizontal", 
+                                legend.box = "horizontal"))
+
+
+patch_immune_main_human_ImmuneGO %>%
+  ggsave(filename = here("Figures", "GSEA_ImmuneGO_Human_Specific.png"),
+         width = 8,
+         height = 15)
+patch_immune_main_human_ImmuneGO
+```
+
+#### BTM 
+
+##### Specific processes
+```{r fig.height=12, fig.width=8}
+library(ggdendro)
+library(cowplot)
+
+df =  gsea_results_immuneGO_Manual_human %>% 
+  clean_names() %>% 
+  filter(str_detect(description, "\\(M")) %>% #Filter out BTM IDs
+  select(condition, id = description, p_adjust, nes) %>% 
+  separate(condition,into = c("model", "day"), remove = F) %>% 
+  mutate(day = str_remove(day, "Day"),
+         day = day %>% fct_relevel(day, "0", "1", "3", "7")) %>% 
+  distinct() %>% 
+  rownames_to_column("del") %>% 
+  select(-del)
+
+
+df_p10 = df %>% 
+  filter(p_adjust<= 0.10) %>%
+  mutate(logq = -log10(p_adjust))
+
+
+df_neg = df %>% 
+  filter(p_adjust<= 0.50) %>%
+  filter(nes < 0) %>% 
+  mutate(logq = -log10(p_adjust))
+
+df = bind_rows(df_p10,
+            df_neg)
+
+
+
+
+
+row_clustered = df %>% 
+  dplyr::select(condition, id, nes) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "condition",
+              values_from= "nes") %>%
+  column_to_rownames("id") %>% 
+  as.matrix() %>% 
+  replace(is.na(.), 0) %>% 
+  dist(.) %>% 
+  hclust()
+
+result_vac <- cluster_by_day(df, day_column = "day", condition_column = "condition") %>%
+  distinct() %>% 
+  mutate(day = fct_relevel(day, df$day %>% unique() %>% sort() %>% as.character()))
+
+
+column_order <- c(result_vac$condition)
+
+labels_day = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order)) %>% 
+  ggplot() +
+  aes(x = condition, y = 1, fill = day) + 
+  geom_tile() + 
+  scale_fill_manual(values = c(
+    "0" = "white",
+    "1" = "#caf0f8",
+    "3" = "#90e0ef",
+    "7" = "#0096c7")) +
+  theme_void() +
+  labs(y = "Day") +
+  theme(axis.title.y = element_text(size = 10, hjust = 1),
+        legend.position = "none")
+
+
+labels_organism = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order)) %>% 
+  ggplot() +
+  aes(x = condition, y = 1, fill = model) + 
+  geom_tile() + 
+  scale_fill_manual(values = c(
+    "Human"  = "#4DBBD5FF",
+    "Mouse" = "#90A4AEFF",
+    "FIT"   = "#CE1800FF"
+  )) +
+  theme_void() +
+  labs(y = "Organism") +
+  theme(axis.title.y = element_text(size = 10, hjust = 1),
+        legend.position = "none")
+
+#Plot
+dotplot = df %>% 
+  filter(id %in% row_clustered$labels) %>% 
+  mutate(condition = factor(condition, column_order),
+                  id = fct_relevel(id, c(row_clustered$labels)),
+         id = fct_rev(id)) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  ggplot(aes(x=condition, y = id, fill = nes, size = logq)) +
+  geom_tile(color = "white",
+            size = 0) + 
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  theme_minimal() + 
+  theme(axis.text = element_text(color = "black", size = 8) ,
+        axis.line  = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        axis.ticks = element_blank(),
+        legend.direction = "horizontal",
+        legend.position = "bottom") +
+  labs(x = "",
+       y = "") +
+  scale_fill_gradient2(
+  low = "#4DBBD5FF",      # azul para -1
+  mid = "white",          # branco para 0
+  high = "#DC0000FF",     # vermelho para +1
+  midpoint = 0,
+  oob = scales::squish,
+  limits = c(-1, 2),      # fixa o intervalo
+  name = "NES", ) +
+  scale_y_discrete(position = "right") +
+  scale_size(range = c(2, 6))
+  
+
+patch_immune_main_human_BTM = 
+  labels_organism/
+  labels_day/
+  dotplot +
+  plot_layout(heights = c(0.08, 0.08, 5),
+              guides = 'collect') +
+  plot_annotation(title = "GSEA BTM human, Specific processes",
+                  subtitle = "NES, padj<=0.10",
+                  theme = theme(legend.position = "bottom",
+                                plot.margin = margin(0.5, 0, 0.5, 1, unit = "cm"),
+                                legend.direction = "horizontal", 
+                                legend.box = "horizontal"))
+
+
+patch_immune_main_human_BTM %>%
+  ggsave(filename = here("Figures", "GSEA_BTM_Human_Specific.png"),
+         width = 8,
+         height = 12)
+patch_immune_main_human_BTM
+```
+
+
+
+
+
+
+
+
+# Get best and worst predicted genes
 ```{r fig.height=5, fig.width=5}
 pairwise_human_fit_measures = readRDS(here("FIT_Mouse2man", "pairwise_human_fit_measures.rds"))
 
@@ -3036,7 +4020,221 @@ pairwise_human_fit_test
 pairwise_human_fit_test %>% saveRDS(here("FIT_Mouse2man", "pairwise_human_fit_test.rds"))
 ```
 
-### Get genes
+
+
+#### Plot correlation
+
+Mouse vs Human (cutoffs for mouse)
+```{r fig.height=12, fig.width=6}
+human_vs_mouse_corr = pairwise_human_fit_test %>% 
+mutate(pval_cuts = case_when(
+  pval_mouse_adj <= 0.0001 ~ "<0.0001",
+  pval_mouse_adj <= 0.001 ~ "<0.001",
+  pval_mouse_adj <= 0.01 ~ "<0.01",
+  pval_mouse_adj <= 0.05 ~ "<0.05",
+    TRUE ~ ">0.05"
+)) %>% 
+  ggplot() +
+  aes(x = Mouse,
+      y = Human) +
+  geom_point(alpha = 0.5,
+             fill = "#90A4AEFF",
+             pch = 21,
+             size = 1,
+             show.legend = F,
+             color = "#90A4AEFF") +
+  geom_smooth(method = 'lm', se = TRUE, color = "black") +
+  geom_vline(xintercept = 0, linetype = 1, size = 0.5) +
+  facet_grid(~timepoint~pval_cuts, scales = "free_x") +
+    scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
+  theme_vaxgo() +
+  labs(title ="Mouse vs Human gene expression") +
+    theme(
+      legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
+  )
+human_vs_mouse_corr
+
+fit_vs_human_corr = pairwise_human_fit_test %>% 
+mutate(pval_cuts = case_when(
+  pval_fit_adj <= 0.0001 ~ "<0.0001",
+  pval_fit_adj <= 0.001 ~ "<0.001",
+  pval_fit_adj <= 0.01 ~ "<0.01",
+  pval_fit_adj <= 0.05 ~ "<0.05",
+  TRUE ~ ">0.05"
+)) %>% 
+  ggplot() +
+  aes(x = `FIT Prediction`,
+      y = Human) +
+  geom_point(alpha = 0.5,
+             fill = "#CE1800FF",
+             pch = 21,
+             size = 1,
+             show.legend = F,
+             color = "#CE1800FF") +
+  geom_smooth(method = 'lm', se = TRUE, color = "black") +
+    geom_vline(xintercept = 0, linetype = 1, size = 0.5) +
+    scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
+  scale_color_brewer(direction = -1, palette = "Greys") +
+  scale_fill_brewer(direction = -1, palette = "Greys") +
+  theme_vaxgo() +
+  facet_grid(~timepoint~pval_cuts, scales = "free_x") +
+  labs(title ="FIT prediction vs Human gene expression") +
+    theme(
+      legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
+  )
+
+fit_vs_human_corr
+
+fit_vs_mouse_corr = pairwise_human_fit_test %>% 
+mutate(pval_cuts = case_when(
+  pval_mouse_adj <= 0.0001 ~ "<0.0001",
+  pval_mouse_adj <= 0.001 ~ "<0.001",
+  pval_mouse_adj <= 0.01 ~ "<0.01",
+  pval_mouse_adj <= 0.05 ~ "<0.05",
+  TRUE ~ ">0.05"
+)) %>% 
+  ggplot() +
+  aes(x = Mouse,
+      y = `FIT Prediction`) +
+  geom_point(alpha = 0.5,
+             fill = "#3182bd",
+             pch = 21,
+             size = 1,
+             show.legend = F,
+             color = "#3182bd") +
+    geom_vline(xintercept = 0, linetype = 1, size = 0.5) +
+  geom_smooth(method = 'lm', se = TRUE, color = "black") +
+  facet_grid(~timepoint~pval_cuts, scales = "free_x") +
+    scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(n.breaks = 4) +
+  theme_vaxgo() +
+  labs(title ="FIT prediction vs Mouse") +
+    theme(
+      legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    axis.text.x = element_text(size = 8, angle = 0),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(1, "lines"),
+  )
+
+pairwise_human_fit_test_corr_plots = human_vs_mouse_corr / 
+  fit_vs_human_corr / 
+  fit_vs_mouse_corr +
+  plot_layout(guides =  "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+
+pairwise_human_fit_test_corr_plots %>% 
+  ggsave(filename = here("Figures", "pairwise_human_fit_test_corr_plots.png"), width = 6, height = 12)
+
+pairwise_human_fit_test_corr_plots
+```
+
+
+#### Which genes have the highest covariance?
+```{r fig.height=8, fig.width=8}
+genes_vary_human = pairwise_human_fit_test %>% 
+  select(human_symbol, mean_human, mean_mouse) %>% 
+  arrange(human_symbol) %>% 
+  group_by(human_symbol) %>% 
+  summarize(sd_human = sd(mean_human),
+            sd_mouse = sd(mean_mouse),
+            mean_human_time = mean(mean_human),
+            mean_mouse_time = mean(mean_mouse)) %>% 
+  ggplot() +
+  aes(x = mean_human_time,
+      y = mean_mouse_time) +
+  geom_point(color = "#3182bd") +
+  gghighlight(abs(mean_human_time) > 0.2 |
+                abs(mean_mouse_time) == 0,
+              use_direct_label = FALSE) +
+  geom_text_repel(aes(label = human_symbol)) +
+   theme_vaxgo() +
+  labs(title = "Which genes vary only in human?")
+
+
+genes_vary_mouse = pairwise_human_fit_test %>% 
+  select(human_symbol, mean_human, mean_mouse) %>% 
+  arrange(human_symbol) %>% 
+  group_by(human_symbol) %>% 
+  summarize(sd_human = sd(mean_human),
+            sd_mouse = sd(mean_mouse),
+            mean_human_time = mean(mean_human),
+            mean_mouse_time = mean(mean_mouse)) %>% 
+  ggplot() +
+  aes(x = mean_human_time,
+      y = mean_mouse_time) +
+  geom_point(color = "#90A4AEFF") +
+  gghighlight(abs(mean_mouse_time) > 0.2 |
+                abs(mean_human_time) == 0,
+              use_direct_label = FALSE) +
+  geom_text_repel(aes(label = human_symbol)) +
+  theme_vaxgo() +
+  labs(title = "Which genes vary only in mouse?") 
+
+
+genes_notvary_mouse_human = pairwise_human_fit_test %>% 
+  select(human_symbol, mean_human, mean_mouse) %>% 
+  arrange(human_symbol) %>% 
+  group_by(human_symbol) %>% 
+  summarize(sd_human = sd(mean_human),
+            cov = cov(mean_human, mean_mouse),
+            mean_mouse,
+            mean_human) %>% 
+  ggplot() +
+  aes(x = mean_human_time,
+      y = mean_mouse_time) +
+  geom_point(color = "black") +
+  gghighlight(abs(mean_human_time) <0.1 &
+                abs(mean_mouse_time) < 0.1) +
+  geom_text_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4) +
+  theme_vaxgo() +
+  labs(title = "Which genes do not vary in both human and mouse?")
+
+
+pairwise_human_fit_test %>% 
+  select(human_symbol, mean_human, mean_mouse, timepoint) %>% 
+  arrange(human_symbol) %>% 
+  group_by(human_symbol) %>% 
+  summarize(sd_human = sd(mean_human),
+            cov = cov(mean_human, mean_mouse),
+            mean_mouse,
+            mean_human) %>% 
+  filter(abs(cov) > 0.1,
+         # abs(mean_human) > 0.2 &
+         #  abs(mean_mouse)  > 0.2
+         ) %>% 
+  ggplot() +
+  aes(x = mean_human,
+      y = mean_mouse) +
+  geom_point(color = "#90A4AEFF") +
+  geom_smooth(method = "lm") +
+  theme_vaxgo() +
+  labs(title = "Which genes vary only in mouse?")
+  
+
+genes_vary_mouse + genes_vary_human + genes_vary_mouse_human + genes_notvary_mouse_human +
+  plot_layout(guides = "collect", axes = "collect", axis_titles =  "collect",
+              ncol =  2)
+  
+```
+
 
 
 ####Top 10 genes
@@ -3890,7 +5088,7 @@ ranks_best_fit_and_mouse_long_zscore <- ranks_best_fit_and_mouse_zscore %>%
 ```
 
 
-#### Plot 10th vs 90th
+#### Plot percentiles
 ```{r fig.height=4, fig.width=8}
 selected_genes = ranks_best_fit_and_mouse %>% 
   group_by(condition, timepoint_ref, timepoint_other) %>% 
@@ -3903,7 +5101,7 @@ selected_genes = ranks_best_fit_and_mouse %>%
   ) 
 
 
-ranks_best_fit_and_mouse_long %>% 
+ranks_percentile_best_fit_and_mouse_long_plot = ranks_best_fit_and_mouse_long %>% 
   filter(timepoint_ref == timepoint_other) %>% 
   ggplot() +
   aes(x = model, y = percentile, group = interaction(condition, human_symbol), color = condition) +
@@ -3931,12 +5129,12 @@ ranks_best_fit_and_mouse_long %>%
                            y = percentile), 
              size = 3, max.overlaps = 10000, force = 2, nudge_x = 0.2)
   
-  
+ ranks_percentile_best_fit_and_mouse_long_plot 
 ```
 
 
 
-#### Plot zscores
+#### Plot ranks by zscores
 ```{r fig.height=4, fig.width=8}
 selected_genes_zscore = ranks_best_fit_and_mouse_zscore %>% 
   group_by(condition, timepoint_ref, timepoint_other) %>% 
@@ -3948,7 +5146,7 @@ selected_genes_zscore = ranks_best_fit_and_mouse_zscore %>%
   ) 
 
 
-ranks_best_fit_and_mouse_long_zscore %>% 
+ranks_best_worst_fit_and_mouse_long_zscore_plot = ranks_best_fit_and_mouse_long_zscore %>% 
   ungroup() %>% 
   ggplot() +
   aes(x = model, y = zscore, group = interaction(condition, human_symbol), color = condition) +
@@ -3975,13 +5173,15 @@ ranks_best_fit_and_mouse_long_zscore %>%
                            x = model,
                            y = zscore), 
              size = 3, max.overlaps = 10000, force = 2, nudge_x = 0.2)
-  
+
+
+ranks_best_worst_fit_and_mouse_long_zscore_plot
   
 ```
 
 
 
-
+Get overlaps
 ```{r}
 overlap_mouse_best = pairwise_human_fit_genes_wide %>% 
   arrange(human_symbol, timepoint) %>% 
@@ -4039,7 +5239,7 @@ row_clustered = df_best_worst_fit_mouse_zscore %>%
 column_order <- c(df_best_worst_fit_mouse_zscore$condition) %>% levels()
 ```
 
-
+Plot heatmap
 ```{r fig.height=7, fig.width=5}
 labels_day = df_best_worst_fit_mouse_zscore %>% 
   filter(human_symbol %in% row_clustered$labels) %>% 
@@ -4298,7 +5498,7 @@ df_resultados_mouse_best_plot +
   df_resultados_mouse_worst_plot + 
   df_resultados_fit_best_plot + 
   df_resultados_fit_worst_plot +
-  plot_layout(guides = "collect", axes = "collect", ncol = 4) 
+  plot_layout(guides = "collect", axes = "collect", ncol = 2) 
 ```
 
 
@@ -4341,36 +5541,56 @@ term2gene = ImmuneGO_BTM_grouped_genes %>%
   select(process, genes)
 
 
+
+# Rank best to worst
 fit_mouse_ranked_zscore = ranks_mouse_vs_fit %>% 
     ungroup() %>% 
-  rename(zscore = fit) %>% 
-  mutate(condition = paste0(condition, " (Day ", timepoint_ref, ")")) %>% 
+  rename(zscore = zscore_h2mouse) %>% 
+  mutate(condition = paste0("Mouse best", " (Day ", timepoint_ref, ")")) %>% 
     filter(timepoint_ref == timepoint_other) %>% 
   select(human_symbol, zscore, condition) %>% 
   bind_rows(ranks_fit_vs_mouse %>%
               ungroup() %>%
                 filter(timepoint_ref == timepoint_other) %>% 
-              rename(zscore = mouse) %>%
-              mutate(condition = paste0(condition, " (Day ", timepoint_ref, ")")) %>%
+              rename(zscore = zscore_h2fit) %>%
+              mutate(condition = paste0("FIT best", " (Day ", timepoint_ref, ")")) %>%
               select(human_symbol, zscore, condition)) %>% 
   distinct() %>% 
   select(condition, genes = human_symbol, log2fold_change = zscore) 
 
-  
-fit_mouse_ranked_zscores_gsea_results_immuneGO_Manual_human = autoGSEA(df = fit_mouse_ranked_zscore,
+
+fit_mouse_ranked_zscore_best_worst_gsea_results_immuneGO_Manual_human = autoGSEA(df = fit_mouse_ranked_zscore,
          TERM2GENE = term2gene,
          geneset_name = "Human_ImmuneGO") %>% 
   clean_names()
 
-fit_mouse_ranked_zscores_gsea_results_immuneGO_Manual_human %>% 
-    saveRDS(here("GSEA_ORA", "fit_mouse_ranked_zscores_gsea_results_immuneGO_Manual_human.rds"))
+fit_mouse_ranked_zscore_best_worst_gsea_results_immuneGO_Manual_human %>% 
+    saveRDS(here("GSEA_ORA", "fit_mouse_ranked_zscore_best_worst_gsea_results_immuneGO_Manual_human"))
+
+
+
+# Rank Worst to best
+fit_mouse_ranked_zscore_worst_best = fit_mouse_ranked_zscore %>% 
+  group_by() %>% 
+  arrange(-abs(log2fold_change)) %>% 
+  mutate(log2fold_change = -log2fold_change,
+         condition = str_replace(condition, "best", "worst"))  
+
+  
+fit_mouse_ranked_zscore_worst_best_gsea_results_immuneGO_Manual_human = autoGSEA(df = fit_mouse_ranked_zscore_worst_best,
+         TERM2GENE = term2gene,
+         geneset_name = "Human_ImmuneGO") %>% 
+  clean_names()
+
+fit_mouse_ranked_zscore_worst_best_gsea_results_immuneGO_Manual_human %>% 
+    saveRDS(here("GSEA_ORA", "fit_mouse_ranked_zscore_worst_best_gsea_results_immuneGO_Manual_human.rds"))
 
 ```
 
 
 
 
-#####GSEA all BP in Gene ontology
+##### GSEA all BP in Gene ontology
 
 ```{r fig.height=10, fig.width=10}
 row_clustered = gseGO_all_zscore %>% 
@@ -4426,10 +5646,11 @@ gseGO_all_zscore %>%
 
 ##### GSEA Main immune processes
 
-```{r fig.height=7, fig.width=5}
-row_clustered = fit_mouse_ranked_zscores_gsea_results_immuneGO_Manual_human$gsea %>% 
-    clean_names() %>% 
-  filter(p_adjust <= 0.50) %>%
+```{r fig.height=7, fig.width=7}
+row_clustered = fit_mouse_ranked_zscore_best_worst_gsea_results_immuneGO_Manual_human$gsea %>% 
+  bind_rows(fit_mouse_ranked_zscore_worst_best_gsea_results_immuneGO_Manual_human$gsea) %>% 
+  clean_names() %>% 
+  # filter(p_adjust <= 0.50) %>%
   filter(!str_detect(description, "\\(M"),#Filter out BTM IDs
          !str_detect(description, "[a-z]"),
          !str_detect(description, "PRR|APP")) %>% #Filter out main processes (Upper case)
@@ -4444,14 +5665,34 @@ row_clustered = fit_mouse_ranked_zscores_gsea_results_immuneGO_Manual_human$gsea
     hclust()
 
 
-fit_mouse_ranked_zscores_gsea_results_immuneGO_Manual_human$gsea %>% 
+col_clustered = fit_mouse_ranked_zscore_best_worst_gsea_results_immuneGO_Manual_human$gsea %>% 
+  bind_rows(fit_mouse_ranked_zscore_worst_best_gsea_results_immuneGO_Manual_human$gsea) %>% 
+  clean_names() %>% 
+  # filter(p_adjust <= 0.50) %>%
+  filter(!str_detect(description, "\\(M"),#Filter out BTM IDs
+         !str_detect(description, "[a-z]"),
+         !str_detect(description, "PRR|APP")) %>% #Filter out main processes (Upper case)
+    dplyr::select(condition, description, nes) %>% 
+    distinct() %>% 
+    pivot_wider(names_from = "description",
+                values_from= "nes") %>%
+    column_to_rownames("condition") %>% 
+    as.matrix() %>% 
+    replace(is.na(.), 0) %>% 
+    dist(.) %>% 
+    hclust()
+
+
+fit_mouse_ranked_zscore_best_worst_gsea_results_immuneGO_Manual_human$gsea %>% 
+  bind_rows(fit_mouse_ranked_zscore_worst_best_gsea_results_immuneGO_Manual_human$gsea) %>% 
   clean_names() %>% 
   filter(id %in% c(row_clustered$labels)) %>% 
   # filter(p_adjust < 0.25) %>% 
   arrange(-abs(nes)) %>% 
     mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
                               p_adjust <= 0.25 ~ "-",
-                              TRUE ~ "")) %>% 
+                              TRUE ~ ""),
+           condition = fct_relevel(condition, col_clustered$labels)) %>% 
   ggplot(aes(x=condition, y = description, fill = nes)) +
   geom_tile(color = "white",
             size = 0, na.rm = F) + 
@@ -4489,7 +5730,7 @@ fit_mouse_ranked_zscores_gsea_results_immuneGO_Manual_human$gsea %>%
 
 
 
-
+# Regression model performance
 
 
 ## Compute overall metrics 
@@ -5059,6 +6300,7 @@ pairwise_human_fit_test_corr_plots %>%
 
 pairwise_human_fit_test_corr_plots
 ```
+
 
 
 
@@ -6067,7 +7309,7 @@ pairwise_human_fit_test_corr_plots_immune
 
 
 
-# Classification model
+# Classification model performance
 
 ```{r}
 #Define cutoffs
@@ -6134,7 +7376,7 @@ classified_df_countgenes_degs_direction = classified_df %>%
 ```
 
 
-### Number of DEGs
+## Number of DEGs
 Lineplot
 ```{r fig.width=10, fig.height=4}
 classification_degs_ngenes_plot = classified_df_countgenes_degs_direction %>%
@@ -6451,7 +7693,7 @@ summary_table_accuracy
 
 ```
 
-### Classification metrics 
+## Classification metrics 
 ```{r fig.height=8, fig.width=15, message=FALSE, warning=FALSE}
 classification_degs_comparison = read_csv(file = here("FIT_Mouse2man", "classification_degs_comparison.csv"))
 
@@ -6743,1048 +7985,6 @@ precision_recall_plot + sens_spec_plot +
               guides = "collect", 
               axis_titles = "collect") 
 ```
-
-
-
-## Gene set enrichment analysis (GSEA)
-
-Function
-
-```{r}
-
-autoGSEA <- function(df, TERM2GENE, geneset_name) {
-  gsea_results <- list()
-
-  conditions <- df$condition %>%
-    unique() %>%
-    as.character()
-
-  for (condition_i in conditions) {
-    
-    degs_condition <- df %>%
-      filter(condition == condition_i) %>%
-      dplyr::select(genes, log2fold_change) %>%
-      distinct() %>%
-      # mutate(rank = rank(log2fold_change, ties.method = "random")) %>%
-      arrange(desc(log2fold_change)) %>% 
-      deframe()
-
-    auto_gsea <- tryCatch({
-      GSEA(geneList = degs_condition,
-           TERM2GENE = TERM2GENE,
-           minGSSize = 1,
-           maxGSSize = 1000,
-           pvalueCutoff = 1,
-           pAdjustMethod = "BH") %>%
-        as.data.frame() %>%
-        arrange(qvalue) %>%
-        mutate(condition = condition_i,
-               gsea_enrichment = geneset_name)
-    }, error = function(e) {
-      return(NULL)
-    })
-
-    if (!is.null(auto_gsea)) {
-      key <- paste(condition_i, geneset_name, sep = "_")
-      gsea_results[[key]] <- auto_gsea
-    }
-  }
-
-  return(list(
-    gsea = bind_rows(gsea_results)
-  ))
-}
-
-dge_long_genes df$condition %>%
-    unique() %>%
-    as.character()
-
-dge_long_genes %>% 
-  filter(condition == "Human_Day3") %>%
-      dplyr::select(genes = human_symbol, log2fold_change = l2fc) %>%
-      distinct() %>%
-      arrange(desc(log2fold_change)) %>% 
-      deframe()
-
-```
-
-
-
-```{r}
-ImmuneGO_Mouse_Manual <- read_excel(here("VaxGO", "ImmuneGO_Mouse.xlsx"))
-
-ImmuneGO_Mouse_Manual_genes = ImmuneGO_Mouse_Manual %>% 
-  separate_rows(genes)
-
-immunego_btm_manual_grouped = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genesets.csv"))
-
-ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
-
-dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds"))
-```
-
-
-```{r}
-#Mouse ImmuneGO
-term2gene = ImmuneGO_Mouse_Manual_genes %>% 
-  select(process, genes) %>% 
-  mutate(genes = str_to_upper(genes))
-
-df_genes2GSEA = dge_long_genes %>% 
-  select(condition, 
-         genes = human_symbol, 
-         log2fold_change = l2fc) %>% 
-  arrange(genes)
-
-
-gsea_results_immuneGO_Manual_Mouse = autoGSEA(df = df_genes2GSEA,
-         TERM2GENE = term2gene,
-         geneset_name = "Mouse_ImmuneGO")
-
-gsea_results_immuneGO_Manual_Mouse %>% 
-    saveRDS(here("GSEA_ORA", "gsea_results_immuneGO_Manual_Mouse.rds"))
-  
-  
-  
-#Human ImmuneGO_BTM
-term2gene = ImmuneGO_BTM_grouped_genes %>% 
-  select(process, genes)
-
-df_genes2GSEA_human = dge_long_genes %>% 
-  select(condition, genes = human_symbol, log2fold_change = l2fc) %>% 
-  distinct()
-
-gsea_results_immuneGO_Manual_human = autoGSEA(df = df_genes2GSEA_human,
-         TERM2GENE = term2gene,
-         geneset_name = "Human_ImmuneGO")
-
-
-gsea_results_immuneGO_Manual_human %>% 
-    saveRDS(here("GSEA_ORA", "gsea_results_immuneGO_BTM_Human_Manual.rds"))
-
-
-
-#Human ImmuneGO
-term2gene = ImmuneGO_BTM_grouped_genes %>% 
-  select(process, genes)
-
-df_genes2GSEA_human = dge_long_genes %>% 
-  distinct() %>% 
-  select(condition, genes = human_symbol, log2fold_change = l2fc) 
-
-  
-gsea_results_immuneGO_Manual_human = autoGSEA(df = df_genes2GSEA_human,
-         TERM2GENE = term2gene,
-         geneset_name = "Human_ImmuneGO")
-
-gsea_results_immuneGO_Manual_human
-
-
-gsea_results_immuneGO_Manual_human %>% 
-    saveRDS(here("GSEA_ORA", "gsea_results_immuneGO_BTM_Human_Manual.rds"))
-```
-
-```{r}
-
-gsea_results_immuneGO_Manual_Mouse = read_rds(here("GSEA_ORA", "gsea_results_immuneGO_Manual_Mouse.rds"))
-gsea_results_immuneGO_Manual = gsea_results_immuneGO_Manual_Mouse$gsea
-gsea_results_immuneGO_BTM_human = read_rds(here("GSEA_ORA", "gsea_results_immuneGO_BTM_Human_Manual.rds"))
-gsea_results_immuneGO_BTM_human = gsea_results_immuneGO_BTM_human$gsea
-
-gsea_results_immuneGO_Manual_human = gsea_results_immuneGO_Manual_human$gsea
-
-```
-
-
-
-#### Heatmap (Mouse immune processes)
-
-```{r fig.height=8, fig.width=20}
-# Function for clustering by day
-cluster_by_day <- function(df, day_column = "day", condition_column = "condition") {
-  
-  # Obter os níveis do fator da coluna de dias
-  days <- levels(df[[day_column]])
-  
-  # Inicializar uma lista para armazenar as ordens
-  orders <- list()
-  
-  # Loop por cada nível (dia) da coluna fator day
-  for (day_value in days) {
-    # Filtrar os dados para o dia atual
-    day_data <- df %>%
-      filter(!!sym(day_column) == day_value) %>%
-      dplyr::select(!!sym(condition_column)) %>%
-      distinct()
-    
-    # Criar uma matriz binária onde 1 representa a presença da condição
-    if (nrow(day_data) > 1) {
-      # Matriz com condições como rótulos e 1 para presença
-      presence_matrix <- table(day_data[[condition_column]]) > 0
-      dist_matrix <- as.matrix(presence_matrix)
-      
-      # Aplicar o clustering
-      col_clustered <- dist(dist_matrix) %>% hclust()
-      
-      # Armazenar a ordem dos clusters
-      orders[[day_value]] <- col_clustered$labels[col_clustered$order]
-    } else {
-      # Se houver apenas uma condição, armazenar o rótulo
-      orders[[day_value]] <- as.character(day_data[[condition_column]])
-    }
-  }
-  
-  # Converter a lista de ordens para um data frame
-  order_df <- data.frame(
-    day = rep(names(orders), sapply(orders, length)),
-    condition = unlist(orders)
-  )
-  
-  return(order_df)
-}
-
-```
-
-
-
-Specific processes
-```{r fig.height=15, fig.width=12}
-library(ggdendro)
-library(cowplot)
-
-df =  gsea_results_immuneGO_Manual %>% 
-  clean_names() %>% 
-  select(condition, id = description, p_adjust, nes) %>% 
-  filter(p_adjust<= 0.25) %>% 
-  separate(condition,into = c("model", "day"), remove = F) %>% 
-  mutate(day = str_remove(day, "Day"),
-         day = day %>% fct_relevel(day, "0", "1", "3", "7")) %>% 
-  distinct() %>% 
-  rownames_to_column("del") %>% 
-  select(-del)
-
-
-row_clustered = df %>% 
-  dplyr::select(condition, id, nes) %>% 
-  distinct() %>% 
-  pivot_wider(names_from = "condition",
-              values_from= "nes") %>%
-  column_to_rownames("id") %>% 
-  as.matrix() %>% 
-  replace(is.na(.), 0) %>% 
-  dist(.) %>% 
-  hclust()
-
-result_vac <- cluster_by_day(df, day_column = "day", condition_column = "condition") %>%
-  distinct() %>% 
-  mutate(day = fct_relevel(day, df$day %>% unique() %>% sort() %>% as.character()))
-
-
-column_order <- c(result_vac$condition)
-
-labels_day = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order)) %>% 
-  ggplot() +
-  aes(x = condition, y = 1, fill = day) + 
-  geom_tile() + 
-  scale_fill_manual(values = c(
-    "0" = "white",
-    "1" = "#caf0f8",
-    "3" = "#90e0ef",
-    "7" = "#0096c7")) +
-  theme_void() +
-  labs(y = "Day") +
-  theme(axis.title.y = element_text(size = 10, hjust = 1),
-        legend.position = "none")
-
-
-labels_organism = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order)) %>% 
-  ggplot() +
-  aes(x = condition, y = 1, fill = model) + 
-  geom_tile() + 
-  scale_fill_manual(values = c(
-    "Human"  = "#4DBBD5FF",
-    "Mouse" = "#90A4AEFF",
-    "FIT"   = "#CE1800FF"
-  )) +
-  theme_void() +
-  labs(y = "Organism") +
-  theme(axis.title.y = element_text(size = 10, hjust = 1),
-        legend.position = "none")
-
-#Plot
-dotplot = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order),
-                  id = fct_relevel(id, c(row_clustered$labels)),
-         id = fct_rev(id)) %>% 
-    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
-                              p_adjust <= 0.25 ~ "-",
-                              p_adjust <= 0.50 ~ "/",
-                              p_adjust <= 0.05 ~ "**",
-                              TRUE ~ "")) %>% 
-  ggplot(aes(x=condition, y = id, fill = nes, size = logq)) +
-  geom_tile(color = "white",
-            size = 0, na.rm = F) + 
-  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
-  theme_minimal() + 
-  theme(axis.text = element_text(color = "black", size = 8) ,
-        axis.line  = element_blank(),
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-        axis.ticks = element_blank(),
-        legend.direction = "horizontal",
-        legend.position = "bottom") +
-  labs(x = "",
-       y = "") +
-  scale_fill_gradient2(
-  low = "#4DBBD5FF",      # azul para -1
-  mid = "white",          # branco para 0
-  high = "#DC0000FF",     # vermelho para +1
-  midpoint = 0,
-  oob = scales::squish,
-  limits = c(-1, 2),      # fixa o intervalo
-  name = "NES", ) +
-  scale_y_discrete(position = "right") +
-  scale_size(range = c(2, 6))
-  
-
-patch_immune_main = 
-  labels_organism/
-  labels_day/
-  dotplot +
-  plot_layout(heights = c(0.08, 0.08, 5),
-              guides = 'collect') +
-  plot_annotation(title = "GSEA ImmuneGO_Mouse",
-                  subtitle = "NES, padj<=0.10",
-                  theme = theme(legend.position = "bottom",
-                                plot.margin = margin(0.5, 0, 0.5, 1, unit = "cm"),
-                                legend.direction = "horizontal", 
-                                legend.box = "horizontal"))
-
-
-# patch_immune_main %>% 
-#   ggsave(filename = here("Figures", "GSEA_ImmuneGO_MainGOs_Bubbleplot.png"),
-#          width = 12,
-#          height = 8)
-patch_immune_main
-```
-
-
-#### Heatmap (Human ImmuneGO+BTM)
-
-Specific processes
-```{r fig.height=15, fig.width=8}
-library(ggdendro)
-library(cowplot)
-
-df =  gsea_results_immuneGO_Manual_human %>% 
-  clean_names() %>% 
-  filter(p_adjust<= 0.25) %>% 
-  select(condition, id = description, p_adjust, nes) %>% 
-  separate(condition,into = c("model", "day"), remove = F) %>% 
-  mutate(day = str_remove(day, "Day"),
-         day = day %>% fct_relevel(day, "0", "1", "3", "7")) %>% 
-  distinct() %>% 
-  rownames_to_column("del") %>% 
-  select(-del)
-
-
-row_clustered = df %>% 
-  dplyr::select(condition, id, nes) %>% 
-  distinct() %>% 
-  pivot_wider(names_from = "condition",
-              values_from= "nes") %>%
-  column_to_rownames("id") %>% 
-  as.matrix() %>% 
-  replace(is.na(.), 0) %>% 
-  dist(.) %>% 
-  hclust()
-
-result_vac <- cluster_by_day(df, day_column = "day", condition_column = "condition") %>%
-  distinct() %>% 
-  mutate(day = fct_relevel(day, df$day %>% unique() %>% sort() %>% as.character()))
-
-
-column_order <- c(result_vac$condition)
-
-labels_day = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order)) %>% 
-  ggplot() +
-  aes(x = condition, y = 1, fill = day) + 
-  geom_tile() + 
-  scale_fill_manual(values = c(
-    "0" = "white",
-    "1" = "#caf0f8",
-    "3" = "#90e0ef",
-    "7" = "#0096c7")) +
-  theme_void() +
-  labs(y = "Day") +
-  theme(axis.title.y = element_text(size = 10, hjust = 1),
-        legend.position = "none")
-
-
-labels_organism = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order)) %>% 
-  ggplot() +
-  aes(x = condition, y = 1, fill = model) + 
-  geom_tile() + 
-  scale_fill_manual(values = c(
-    "Human"  = "#4DBBD5FF",
-    "Mouse" = "#90A4AEFF",
-    "FIT"   = "#CE1800FF"
-  )) +
-  theme_void() +
-  labs(y = "Organism") +
-  theme(axis.title.y = element_text(size = 10, hjust = 1),
-        legend.position = "none")
-
-#Plot
-dotplot = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order),
-                  id = fct_relevel(id, c(row_clustered$labels)),
-         id = fct_rev(id)) %>% 
-    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
-                              p_adjust <= 0.25 ~ "-",
-                              p_adjust <= 0.50 ~ "/",
-                              p_adjust <= 0.05 ~ "**",
-                              TRUE ~ "")) %>% 
-  ggplot(aes(x=condition, y = id, fill = nes, size = logq)) +
-  geom_tile(color = "white",
-            size = 0,
-            na.rm = F) + 
-  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
-  theme_minimal() + 
-  theme(axis.text = element_text(color = "black", size = 8) ,
-        axis.line  = element_blank(),
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-        axis.ticks = element_blank(),
-        legend.direction = "horizontal",
-        legend.position = "bottom") +
-  labs(x = "",
-       y = "") +
-  scale_fill_gradient2(
-  low = "#4DBBD5FF",      # azul para -1
-  mid = "white",          # branco para 0
-  high = "#DC0000FF",     # vermelho para +1
-  midpoint = 0,
-  oob = scales::squish,
-  limits = c(-1, 2),      # fixa o intervalo
-  name = "NES", ) +
-  scale_y_discrete(position = "right") +
-  scale_size(range = c(2, 6))
-  
-
-patch_immune_main_human = 
-  labels_organism/
-  labels_day/
-  dotplot +
-  plot_layout(heights = c(0.08, 0.08, 5),
-              guides = 'collect') +
-  plot_annotation(title = "GSEA ImmuneGO_BTM_Human",
-                  subtitle = "NES, padj<=0.10",
-                  theme = theme(legend.position = "bottom",
-                                plot.margin = margin(0.5, 0, 0.5, 1, unit = "cm"),
-                                legend.direction = "horizontal", 
-                                legend.box = "horizontal"))
-
-
-patch_immune_main_human %>%
-  ggsave(filename = here("Figures", "GSEA_ImmuneGO_BTM_Human_Specific.png"),
-         width = 8,
-         height = 15)
-patch_immune_main_human
-```
-#### Heatmap (Human ImmuneGO)
-
-##### Main processes
-
-Specific processes
-```{r fig.height=8, fig.width=6}
-library(ggdendro)
-library(cowplot)
-
-df =  gsea_results_immuneGO_Manual_human %>% 
-  clean_names() %>% 
-  filter(p_adjust <= 0.50) %>%
-  filter(!str_detect(description, "\\(M"),#Filter out BTM IDs
-         !str_detect(description, "[a-z]"),
-         !str_detect(description, "PRR|APP")) %>% #Filter out main processes (Upper case)
-  select(condition, id = description, p_adjust, nes) %>% 
-  separate(condition,into = c("model", "day"), remove = F) %>% 
-  mutate(day = str_remove(day, "Day"),
-         day = day %>% fct_relevel(day, "0", "1", "3", "7")) %>% 
-  distinct() %>% 
-  rownames_to_column("del") %>% 
-  select(-del)
-
-df$condition %>% unique()
-```
-
-
-```{r fig.height=8, fig.width=6}
-row_clustered = df %>% 
-  dplyr::select(condition, id, nes) %>% 
-  distinct() %>% 
-  pivot_wider(names_from = "condition",
-              values_from= "nes") %>%
-  column_to_rownames("id") %>% 
-  as.matrix() %>% 
-  replace(is.na(.), 0) %>% 
-  dist(.) %>% 
-  hclust()
-
-result_vac <- cluster_by_day(df, day_column = "day", condition_column = "condition") %>%
-  distinct() %>% 
-  mutate(day = fct_relevel(day, df$day %>% unique() %>% sort() %>% as.character()))
-
-
-column_order <- c(result_vac$condition)
-
-labels_day = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order)) %>% 
-  ggplot() +
-  aes(x = condition, y = 1, fill = day) + 
-  geom_tile() + 
-  scale_fill_manual(values = c(
-    "0" = "white",
-    "1" = "#caf0f8",
-    "3" = "#90e0ef",
-    "7" = "#0096c7")) +
-  theme_void() +
-  labs(y = "Day") +
-  theme(axis.title.y = element_text(size = 10, hjust = 1),
-        legend.position = "none")
-
-
-labels_organism = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order)) %>% 
-  ggplot() +
-  aes(x = condition, y = 1, fill = model) + 
-  geom_tile() + 
-  scale_fill_manual(values = c(
-    "Human"  = "#4DBBD5FF",
-    "Mouse" = "#90A4AEFF",
-    "FIT"   = "#CE1800FF"
-  )) +
-  theme_void() +
-  labs(y = "Organism") +
-  theme(axis.title.y = element_text(size = 10, hjust = 1),
-        legend.position = "none")
-
-#Plot
-dotplot = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order),
-                  id = fct_relevel(id, c(row_clustered$labels)),
-         id = fct_rev(id)) %>% 
-    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
-                              p_adjust <= 0.25 ~ "-",
-                              # p_adjust <= 0.50 ~ "/",
-                              p_adjust <= 0.05 ~ "**",
-                              TRUE ~ "")) %>% 
-  ggplot(aes(x=condition, y = id, fill = nes, size = logq)) +
-  geom_tile(color = "white",
-            size = 0) + 
-  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
-  theme_minimal() + 
-  theme(axis.text = element_text(color = "black", size = 8) ,
-        axis.line  = element_blank(),
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-        axis.ticks = element_blank(),
-        legend.direction = "horizontal",
-        legend.position = "bottom") +
-  labs(x = "",
-       y = "") +
-  scale_fill_gradient2(
-  low = "#4DBBD5FF",      # azul para -1
-  mid = "white",          # branco para 0
-  high = "#DC0000FF",     # vermelho para +1
-  midpoint = 0,
-  oob = scales::squish,
-  limits = c(-1, 2),      # fixa o intervalo
-  name = "NES", ) +
-  scale_y_discrete(position = "right") +
-  scale_size(range = c(2, 6))
-  
-
-patch_immune_main_human_ImmuneGO = 
-  labels_organism/
-  labels_day/
-  dotplot +
-  plot_layout(heights = c(0.1, 0.1, 5),
-              guides = 'collect') +
-  plot_annotation(title = "GSEA ImmuneGO_Human, Main processes",
-                  subtitle = "NES, padj<=0.25",
-                  theme = theme(legend.position = "bottom",
-                                plot.margin = margin(0.5, 0, 0.5, 1, unit = "cm"),
-                                legend.direction = "horizontal", 
-                                legend.box = "horizontal"))
-
-
-patch_immune_main_human_ImmuneGO %>%
-  ggsave(filename = here("Figures", "GSEA_ImmuneGO_Human_Main.png"),
-         width = 6,
-         height = 8)
-patch_immune_main_human_ImmuneGO
-```
-
-
-
-```{r fig.height=8, fig.width=10}
-idorder = c(
-  "IMMUNE SYSTEM",
-  "ANTIMICROBIAL",
-  "LEUKOCYTES",
-  "COMPLEMENT",
-  "INNATE IMMUNE SYSTEM",
-  "INNATE",
-  "INFLAMMATION",
-  "SIGNALING",
-  "ANTIVIRAL & IFN",
-  "NEUTROPHIL",
-  "MAST CELL",
-  "EOSINOPHIL",
-  "MAST CELL",
-  "MYELOID CELL",
-  "ARPP",
-  "MONOCYTE",
-  "MACROPHAGE",
-  "DENDRITIC CELL",
-  "NK CELL",
-  "ADAPTIVE IMMUNE SYSTEM",
-  "ADAPTIVE",
-  "LYMPHOCYTE",
-  "CELLULAR ADAPTIVE IMMUNE SYSTEM",
-  "CELULLAR ADAP.",
-  "T CELL",
-  "HUMORAL ADAPTIVE IMMUNE SYSTEM",
-  "HUMORAL ADAP.",
-  "B CELL",
-  "IMMUNOGLOBULINS (M156.0)"
-  # "IMMUNOGLOBULIN MEDIATED RESPONSE",
-  # "IMMUNOGLOBULIN\nMEDIATED RESPONSE"
-)
-
-df_day0 = df %>% 
-  mutate(day = "0",
-         nes = 0,
-         p_adjust = 1,
-         logq = 0) %>% 
-  distinct()
-```
-
-
-```{r fig.height=8, fig.width=10}
-df %>% 
-  bind_rows(df_day0) %>%
-  mutate(day = fct_relevel(day, "0", "1","3", "7")) %>% 
-  mutate(id = fct_relevel(id, c(idorder))) %>% 
-  ggplot() +
-  aes(x = day, y = nes, group = model) +
-  geom_line(aes(color = model,
-                group = model),
-            size = 1,
-            alpha = 1) +
-  geom_point(aes(
-                 fill = model,
-                 ),
-             size = 2,
-             pch = 21,
-             color = "black",
-             data = df %>% filter(p_adjust <= 0.25)
-            ) +
-  scale_fill_manual(values = c(
-    "Human"  = "#4DBBD5FF",
-    "Mouse" = "#90A4AEFF",
-    "FIT"   = "#CE1800FF"
-  )) +
-    scale_color_manual(values = c(
-    "Human"  = "#4DBBD5FF",
-    "Mouse" = "#90A4AEFF",
-    "FIT"   = "#CE1800FF"
-  )) +
-  scale_y_continuous(n.breaks = 5) +
-  scale_x_discrete(expand = c(0.01, 0.01)) +
-   theme_vaxgo() +
-  theme(axis.text = element_text(color = "black", size = 8) ,
-        axis.text.x = element_text(angle = 0, vjust = 1, hjust=0.5),
-        # axis.ticks = element_blank(),
-        legend.direction = "horizontal",
-        legend.position = "bottom") +
-  labs(x = "Day",
-       y = "NES",
-       color = "",
-       shape = "",
-       alpha = "", 
-       subtitle = "Processes with <= 0.25 are depicted with points.",
-       title = "Temporal dynamics of immunization, GSEA of Main immune processes (BTM + ImmuneGO)") +
-    facet_wrap(~id, 
-               # scales = "free"
-               )
-```
-
-
-```{r}
-scale_color_manual(values = c(ann_vaxsig_colors$type, 
-                                ann_vaxsig_colors$target_pathogen_disease,
-                                ann_vaxsig_colors$dose,
-                                "SARS-COV-2/BBIBP" = "#00A087FF",
-                                "SARS-COV-2/ZF2001" = "#8491B4FF",
-                                "SARS-COV-2/BNT" = "#4DBBD5FF",
-                                "SARS-COV-2/MO" = "#72ddf7",
-                                "SARS-COV-2/CHAD" = "#3C5488FF",
-                                "SARS-COV-2/ChAd (V1)" = "#3C5488FF",
-                               "SARS-COV-2/ChAd (V2)" = "#3C5488FF",
-                               "SARS-COV-2/ChAd-BNT" = "#00A087FF",
-                                "SARS-COV-2/I" = "red",
-                                "SARS-COV-2/I Hospital" = "red",
-                                "SARS-COV-2/I-I" = "purple",
-                                "SARS-COV-2/BNT-I" = "pink",
-                                "SARS-COV-2/BNT-I Hospital" = "pink",
-                                "SARS-COV-2/I-BNT" = "#Af101e")) + 
-  # Manual shape scale
-    scale_shape_manual(values = c("0" = 8, 
-                                "1" = 16, 
-                                "2" = 17, 
-                                "3" = 15)) +
-  theme_minimal()+
-  # ggthemes::theme_few() +
-  scale_x_continuous(breaks = c(0, 3, 7, 14, 21, 28, 30)) +
-  guides(fill=guide_legend(ncol=1),
-         color = guide_legend(ncol = 1)) +
-  theme(legend.position = "right",
-        strip.text.x = element_text(color = "black", 
-                                    size = 10,
-                                    face = "bold"), 
-        strip.text.y = element_text(color = "black", 
-                                    size = 10, 
-                                    hjust = 0,
-                                    angle = 360,
-                                    face = "bold"), 
-        axis.text.x = element_text(color = "black", size = 10),
-        axis.text.y = element_text(vjust = 0.5, size = 10, color = "black"),
-        axis.line = element_line(size = 1, colour = "black", linetype=1),
-        axis.ticks = element_line(size = 0.5, color = "black"),
-        panel.grid.major.y = element_line(size = 0.5, 
-                                    linetype = 2,
-                                    color = "gray75"),
-        panel.grid.minor.y = element_line(size = 0, 
-                                    linetype = 2,
-                                    color = "gray75"),
-        panel.grid.major.x = element_line(size = 0.5, 
-                                    linetype = 2,
-                                    color = "gray75"),
-        panel.grid.minor.x = element_line(size = 0, 
-                                    linetype = 2,
-                                    color = "gray75")) +
-  labs(x = "Day",
-       y = "NES",
-       color = "Pathogen",
-       shape = "Dose",
-       alpha = "COVID-19 or Other",
-       title = "Temporal dynamics of immunization, GSEA of Immune processes (BTM + ImmuneGO)") +
-    facet_grid(~id~type_grouped, 
-               scales = "free_x")
-
-all_together
-```
-
-
-
-
-
-##### Specific processes
-```{r fig.height=15, fig.width=8}
-library(ggdendro)
-library(cowplot)
-
-df =  gsea_results_immuneGO_Manual_human %>% 
-  clean_names() %>% 
-  filter(!str_detect(description, "\\(M"),#Filter out BTM IDs
-         str_detect(description, "[a-z]")) %>% #Filter out main processes (Upper case)
-  select(condition, id = description, p_adjust, nes) %>% 
-  separate(condition,into = c("model", "day"), remove = F) %>% 
-  mutate(day = str_remove(day, "Day"),
-         day = day %>% fct_relevel(day, "0", "1", "3", "7")) %>% 
-  distinct() %>% 
-  rownames_to_column("del") %>% 
-  select(-del)
-
-
-df_p10 = df %>% 
-  filter(p_adjust<= 0.10) %>%
-  mutate(logq = -log10(p_adjust))
-
-
-df_neg = df %>% 
-  filter(p_adjust<= 0.50) %>%
-  filter(nes < 0) %>% 
-  mutate(logq = -log10(p_adjust))
-
-df = bind_rows(df_p10,
-            df_neg)
-
-
-row_clustered = df %>% 
-  dplyr::select(condition, id, nes) %>% 
-  distinct() %>% 
-  pivot_wider(names_from = "condition",
-              values_from= "nes") %>%
-  column_to_rownames("id") %>% 
-  as.matrix() %>% 
-  replace(is.na(.), 0) %>% 
-  dist(.) %>% 
-  hclust()
-
-result_vac <- cluster_by_day(df, day_column = "day", condition_column = "condition") %>%
-  distinct() %>% 
-  mutate(day = fct_relevel(day, df$day %>% unique() %>% sort() %>% as.character()))
-
-
-column_order <- c(result_vac$condition)
-
-labels_day = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order)) %>% 
-  ggplot() +
-  aes(x = condition, y = 1, fill = day) + 
-  geom_tile() + 
-  scale_fill_manual(values = c(
-    "0" = "white",
-    "1" = "#caf0f8",
-    "3" = "#90e0ef",
-    "7" = "#0096c7")) +
-  theme_void() +
-  labs(y = "Day") +
-  theme(axis.title.y = element_text(size = 10, hjust = 1),
-        legend.position = "none")
-
-
-labels_organism = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order)) %>% 
-  ggplot() +
-  aes(x = condition, y = 1, fill = model) + 
-  geom_tile() + 
-  scale_fill_manual(values = c(
-    "Human"  = "#4DBBD5FF",
-    "Mouse" = "#90A4AEFF",
-    "FIT"   = "#CE1800FF"
-  )) +
-  theme_void() +
-  labs(y = "Organism") +
-  theme(axis.title.y = element_text(size = 10, hjust = 1),
-        legend.position = "none")
-
-#Plot
-dotplot = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order),
-                  id = fct_relevel(id, c(row_clustered$labels)),
-         id = fct_rev(id)) %>% 
-    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
-                              p_adjust <= 0.25 ~ "-",
-                              p_adjust <= 0.50 ~ "/",
-                              p_adjust <= 0.05 ~ "**",
-                              TRUE ~ "")) %>% 
-  ggplot(aes(x=condition, y = id, fill = nes, size = logq)) +
-  geom_tile(color = "white",
-            size = 0) + 
-  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
-  theme_minimal() + 
-  theme(axis.text = element_text(color = "black", size = 8) ,
-        axis.line  = element_blank(),
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-        axis.ticks = element_blank(),
-        legend.direction = "horizontal",
-        legend.position = "bottom") +
-  labs(x = "",
-       y = "") +
-  scale_fill_gradient2(
-  low = "#4DBBD5FF",      # azul para -1
-  mid = "white",          # branco para 0
-  high = "#DC0000FF",     # vermelho para +1
-  midpoint = 0,
-  oob = scales::squish,
-  limits = c(-1, 2),      # fixa o intervalo
-  name = "NES", ) +
-  scale_y_discrete(position = "right") +
-  scale_size(range = c(2, 6))
-  
-
-patch_immune_main_human_ImmuneGO = 
-  labels_organism/
-  labels_day/
-  dotplot +
-  plot_layout(heights = c(0.08, 0.08, 5),
-              guides = 'collect') +
-  plot_annotation(title = "GSEA ImmuneGO_Human, Specific processes",
-                  subtitle = "NES, padj<=0.10",
-                  theme = theme(legend.position = "bottom",
-                                plot.margin = margin(0.5, 0, 0.5, 1, unit = "cm"),
-                                legend.direction = "horizontal", 
-                                legend.box = "horizontal"))
-
-
-patch_immune_main_human_ImmuneGO %>%
-  ggsave(filename = here("Figures", "GSEA_ImmuneGO_Human_Specific.png"),
-         width = 8,
-         height = 15)
-patch_immune_main_human_ImmuneGO
-```
-
-#### BTM 
-
-##### Specific processes
-```{r fig.height=12, fig.width=8}
-library(ggdendro)
-library(cowplot)
-
-df =  gsea_results_immuneGO_Manual_human %>% 
-  clean_names() %>% 
-  filter(str_detect(description, "\\(M")) %>% #Filter out BTM IDs
-  select(condition, id = description, p_adjust, nes) %>% 
-  separate(condition,into = c("model", "day"), remove = F) %>% 
-  mutate(day = str_remove(day, "Day"),
-         day = day %>% fct_relevel(day, "0", "1", "3", "7")) %>% 
-  distinct() %>% 
-  rownames_to_column("del") %>% 
-  select(-del)
-
-
-df_p10 = df %>% 
-  filter(p_adjust<= 0.10) %>%
-  mutate(logq = -log10(p_adjust))
-
-
-df_neg = df %>% 
-  filter(p_adjust<= 0.50) %>%
-  filter(nes < 0) %>% 
-  mutate(logq = -log10(p_adjust))
-
-df = bind_rows(df_p10,
-            df_neg)
-
-
-
-
-
-row_clustered = df %>% 
-  dplyr::select(condition, id, nes) %>% 
-  distinct() %>% 
-  pivot_wider(names_from = "condition",
-              values_from= "nes") %>%
-  column_to_rownames("id") %>% 
-  as.matrix() %>% 
-  replace(is.na(.), 0) %>% 
-  dist(.) %>% 
-  hclust()
-
-result_vac <- cluster_by_day(df, day_column = "day", condition_column = "condition") %>%
-  distinct() %>% 
-  mutate(day = fct_relevel(day, df$day %>% unique() %>% sort() %>% as.character()))
-
-
-column_order <- c(result_vac$condition)
-
-labels_day = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order)) %>% 
-  ggplot() +
-  aes(x = condition, y = 1, fill = day) + 
-  geom_tile() + 
-  scale_fill_manual(values = c(
-    "0" = "white",
-    "1" = "#caf0f8",
-    "3" = "#90e0ef",
-    "7" = "#0096c7")) +
-  theme_void() +
-  labs(y = "Day") +
-  theme(axis.title.y = element_text(size = 10, hjust = 1),
-        legend.position = "none")
-
-
-labels_organism = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order)) %>% 
-  ggplot() +
-  aes(x = condition, y = 1, fill = model) + 
-  geom_tile() + 
-  scale_fill_manual(values = c(
-    "Human"  = "#4DBBD5FF",
-    "Mouse" = "#90A4AEFF",
-    "FIT"   = "#CE1800FF"
-  )) +
-  theme_void() +
-  labs(y = "Organism") +
-  theme(axis.title.y = element_text(size = 10, hjust = 1),
-        legend.position = "none")
-
-#Plot
-dotplot = df %>% 
-  filter(id %in% row_clustered$labels) %>% 
-  mutate(condition = factor(condition, column_order),
-                  id = fct_relevel(id, c(row_clustered$labels)),
-         id = fct_rev(id)) %>% 
-    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
-                              p_adjust <= 0.25 ~ "-",
-                              p_adjust <= 0.50 ~ "/",
-                              p_adjust <= 0.05 ~ "**",
-                              TRUE ~ "")) %>% 
-  ggplot(aes(x=condition, y = id, fill = nes, size = logq)) +
-  geom_tile(color = "white",
-            size = 0) + 
-  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
-  theme_minimal() + 
-  theme(axis.text = element_text(color = "black", size = 8) ,
-        axis.line  = element_blank(),
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-        axis.ticks = element_blank(),
-        legend.direction = "horizontal",
-        legend.position = "bottom") +
-  labs(x = "",
-       y = "") +
-  scale_fill_gradient2(
-  low = "#4DBBD5FF",      # azul para -1
-  mid = "white",          # branco para 0
-  high = "#DC0000FF",     # vermelho para +1
-  midpoint = 0,
-  oob = scales::squish,
-  limits = c(-1, 2),      # fixa o intervalo
-  name = "NES", ) +
-  scale_y_discrete(position = "right") +
-  scale_size(range = c(2, 6))
-  
-
-patch_immune_main_human_BTM = 
-  labels_organism/
-  labels_day/
-  dotplot +
-  plot_layout(heights = c(0.08, 0.08, 5),
-              guides = 'collect') +
-  plot_annotation(title = "GSEA BTM human, Specific processes",
-                  subtitle = "NES, padj<=0.10",
-                  theme = theme(legend.position = "bottom",
-                                plot.margin = margin(0.5, 0, 0.5, 1, unit = "cm"),
-                                legend.direction = "horizontal", 
-                                legend.box = "horizontal"))
-
-
-patch_immune_main_human_BTM %>%
-  ggsave(filename = here("Figures", "GSEA_BTM_Human_Specific.png"),
-         width = 8,
-         height = 12)
-patch_immune_main_human_BTM
-```
-
 
 #Build new models
 
