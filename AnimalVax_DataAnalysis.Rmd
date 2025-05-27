@@ -66,6 +66,7 @@ theme_vaxgo = function(){
     legend.text = element_text(size = 10),
     legend.title = element_text(size = 12),
     plot.title = element_text(size = 10),
+    plot.subtitle = element_text(size = 8),
     axis.title.y = element_text(color = "black"),
     panel.border = element_blank(),
     panel.grid.major.y = element_line(size = 0.25, 
@@ -157,7 +158,7 @@ gseGO_all <- function(df, OrgDb = "org.Hs.eg.db", keyType = "SYMBOL", ontology =
         geneList = gene_list,
         ont = ontology,
         keyType = keyType,
-        pvalueCutoff = 0.50,
+        pvalueCutoff = 1,
         verbose = TRUE,
         OrgDb = OrgDb,
         pAdjustMethod = "BH"
@@ -4149,95 +4150,380 @@ pairwise_human_fit_test_corr_plots
 
 #### Which genes have the highest covariance?
 ```{r fig.height=8, fig.width=8}
-genes_vary_human = pairwise_human_fit_test %>% 
+cov_genes = pairwise_human_fit_test %>% 
   select(human_symbol, mean_human, mean_mouse) %>% 
   arrange(human_symbol) %>% 
   group_by(human_symbol) %>% 
   summarize(sd_human = sd(mean_human),
-            sd_mouse = sd(mean_mouse),
+            cov = cov(mean_human, mean_mouse),
             mean_human_time = mean(mean_human),
             mean_mouse_time = mean(mean_mouse)) %>% 
+  arrange(-cov)
+
+cov_genes %>% filter(abs(cov) > 0.001) #5922 genes from 6,373 (92.9%)
+cov_genes %>% filter(abs(cov) > 0.01) #3211 genes from 6,373 (50.3%)
+cov_genes %>% filter(abs(cov) > 0.1) #158 genes
+cov_genes %>% filter(abs(cov) > 0.2) #17 genes
+cov_genes %>% filter(abs(cov) > 0.3) #1 genes
+
+
+genes_vary_human_all = cov_genes %>% 
+  filter(abs(mean_human_time) >= 0.1,
+        abs(mean_mouse_time) <= 0.1) %>% 
+  arrange(-abs(cov))
+
+genes_vary_mouse_all = cov_genes %>% 
+  filter(abs(mean_mouse_time) >= 0.1,
+                abs(mean_human_time) <= 0.1) %>% 
+  arrange(-abs(cov))
+
+genes_vary_human_mouse_all = cov_genes %>% 
+  filter(abs(mean_human_time) >= 0.1,
+         abs(mean_mouse_time) >= 0.1) %>% 
+  arrange(-abs(cov))
+
+genes_not_vary_human_mouse_all = cov_genes %>% 
+   filter(abs(mean_human_time) <= 0.1, 
+          abs(mean_mouse_time) <= 0.1) %>%  
+  arrange(-abs(cov))
+
+cov_genes %>% filter(abs(mean_human_time) > 0.1) #3,962
+cov_genes %>% filter(abs(mean_human_time) > 0.2) #2191
+
+cov_genes %>% filter(abs(mean_mouse_time) > 0.1) #3363
+cov_genes %>% filter(abs(mean_mouse_time) > 0.2) #1631
+
+cov_genes %>% filter(abs(mean_mouse_time) < 0.1) #3,010
+cov_genes %>% filter(abs(mean_mouse_time) < 0.2) #4742
+
+
+
+genes_vary_human_all #1915
+genes_vary_mouse_all #1316
+genes_not_vary_human_mouse_all #1095
+genes_vary_human_mouse_all #2047
+```
+
+
+```{r fig.height=8, fig.width=8}
+genes_vary_human = cov_genes %>% 
   ggplot() +
   aes(x = mean_human_time,
       y = mean_mouse_time) +
-  geom_point(color = "#3182bd") +
-  gghighlight(abs(mean_human_time) > 0.2 |
-                abs(mean_mouse_time) == 0,
-              use_direct_label = FALSE) +
-  geom_text_repel(aes(label = human_symbol)) +
+    geom_point(color = "#3182bd", fill = NA, pch = 21) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(limits = c(-1.5, 1.5)) +
+    gghighlight(abs(mean_human_time) >= 0.1,
+                abs(mean_mouse_time) <= 0.1,
+              use_direct_label = FALSE, 
+              unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+  geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
+                  data = cov_genes %>% 
+                    filter(abs(mean_human_time) > 0.1,
+                abs(mean_mouse_time) <= 0.1) %>% 
+                  arrange(-abs(cov)) %>% 
+                  slice_head(n = 10)) +
    theme_vaxgo() +
-  labs(title = "Which genes vary only in human?")
+  labs(title = "Which genes vary only in human?",
+       subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1.")
 
-
-genes_vary_mouse = pairwise_human_fit_test %>% 
-  select(human_symbol, mean_human, mean_mouse) %>% 
-  arrange(human_symbol) %>% 
-  group_by(human_symbol) %>% 
-  summarize(sd_human = sd(mean_human),
-            sd_mouse = sd(mean_mouse),
-            mean_human_time = mean(mean_human),
-            mean_mouse_time = mean(mean_mouse)) %>% 
+genes_vary_mouse = cov_genes %>% 
   ggplot() +
   aes(x = mean_human_time,
       y = mean_mouse_time) +
-  geom_point(color = "#90A4AEFF") +
-  gghighlight(abs(mean_mouse_time) > 0.2 |
-                abs(mean_human_time) == 0,
-              use_direct_label = FALSE) +
-  geom_text_repel(aes(label = human_symbol)) +
+    geom_point(color = "#90A4AEFF", fill = NA, pch = 21) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(limits = c(-1.5, 1.5)) +
+  gghighlight(abs(mean_mouse_time) >= 0.1,
+                abs(mean_human_time) <= 0.1,
+              use_direct_label = FALSE,
+              unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+  geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
+                  data = cov_genes %>% 
+                    filter(abs(mean_mouse_time) >= 0.1,
+                abs(mean_human_time) <= 0.1) %>% 
+                  arrange(-abs(cov)) %>% 
+                  slice_head(n = 10)) +
+
   theme_vaxgo() +
-  labs(title = "Which genes vary only in mouse?") 
+  labs(title = "Which genes vary only in mouse?",
+       subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1") 
 
 
-genes_notvary_mouse_human = pairwise_human_fit_test %>% 
-  select(human_symbol, mean_human, mean_mouse) %>% 
-  arrange(human_symbol) %>% 
-  group_by(human_symbol) %>% 
-  summarize(sd_human = sd(mean_human),
-            cov = cov(mean_human, mean_mouse),
-            mean_mouse,
-            mean_human) %>% 
+genes_vary_mouse_human = cov_genes %>% 
   ggplot() +
   aes(x = mean_human_time,
       y = mean_mouse_time) +
-  geom_point(color = "black") +
-  gghighlight(abs(mean_human_time) <0.1 &
-                abs(mean_mouse_time) < 0.1) +
-  geom_text_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4) +
+  geom_point(color = "black", fill = NA, pch = 21) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(limits = c(-1.5, 1.5)) +
+  gghighlight(abs(mean_human_time) >= 0.1,
+                abs(mean_mouse_time) >= 0.1,
+                            unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+  geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
+                  data = cov_genes %>% 
+                    filter(abs(mean_human_time) >= 0.1,
+                abs(mean_mouse_time) >= 0.1) %>% 
+                  arrange(-abs(cov)) %>% 
+                  slice_head(n = 10)) +
   theme_vaxgo() +
-  labs(title = "Which genes do not vary in both human and mouse?")
+  labs(title = "Which genes vary in both human and mouse?",
+       subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1")
 
-
-pairwise_human_fit_test %>% 
-  select(human_symbol, mean_human, mean_mouse, timepoint) %>% 
-  arrange(human_symbol) %>% 
-  group_by(human_symbol) %>% 
-  summarize(sd_human = sd(mean_human),
-            cov = cov(mean_human, mean_mouse),
-            mean_mouse,
-            mean_human) %>% 
-  filter(abs(cov) > 0.1,
-         # abs(mean_human) > 0.2 &
-         #  abs(mean_mouse)  > 0.2
-         ) %>% 
+genes_notvary_mouse_human = cov_genes %>% 
   ggplot() +
-  aes(x = mean_human,
-      y = mean_mouse) +
-  geom_point(color = "#90A4AEFF") +
-  geom_smooth(method = "lm") +
+  aes(x = mean_human_time,
+      y = mean_mouse_time) +
+  geom_point(color = "black", fill = NA, pch = 21) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(limits = c(-1.5, 1.5)) +
+  gghighlight(abs(mean_human_time) <= 0.1,
+                abs(mean_mouse_time) <= 0.1,
+              unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+  geom_label_repel(aes(label = human_symbol), 
+                  # color = "red",
+                  max.overlaps = 20, force_pull = 4, size = 3, 
+                  data = cov_genes %>% 
+                    filter(abs(mean_human_time) <= 0.1, 
+                             abs(mean_mouse_time) <= 0.1) %>%  
+                    arrange(-abs(cov)) %>% 
+                    slice_head(n = 10)) +
   theme_vaxgo() +
-  labs(title = "Which genes vary only in mouse?")
+  labs(title = "Which genes do not vary in both human and mouse?",
+       subtitle = "Top 10 genes with highest covariance. Mean cutoff < 0.1")
   
 
+#Plot all
 genes_vary_mouse + genes_vary_human + genes_vary_mouse_human + genes_notvary_mouse_human +
   plot_layout(guides = "collect", axes = "collect", axis_titles =  "collect",
               ncol =  2)
   
 ```
+#### Enrichment analysis
+
+```{r fig.width=10, fig.height= 8}
+organism = "org.Hs.eg.db"
+
+#All Gene ontologies
+genes_vary_human_all_cov = genes_vary_human_all %>% 
+  select(genes = human_symbol, value = cov) %>% 
+  mutate(condition = "Vary in human, mean > 0.1") %>% 
+  bind_rows(genes_vary_mouse_all %>% 
+            select(genes = human_symbol, value = cov) %>% 
+              mutate(condition = "Vary in Mouse, mean > 0.1"),
+            genes_vary_human_mouse_all %>% 
+            select(genes = human_symbol, value = cov) %>% 
+              mutate(condition = "Vary in Mouse and Human, mean > 0.1"),
+            genes_not_vary_human_mouse_all %>% 
+            select(genes = human_symbol, value = cov) %>% 
+              mutate(condition = "No variation in Mouse and Human, mean < 0.1"),
+            cov_genes %>%
+              select(genes = human_symbol, value = cov) %>%
+              mutate(condition = "All genes, no cutoff, only covariance"))
+
+
+#GSEA
+gseGO_all_cov = gseGO_all(genes_vary_human_all_cov)
+
+
+ 
+ 
+ #ORA
+oraGO_all_cov_vary_both <- enrichGO(gene = genes_vary_human_all_cov %>% 
+                                      filter(condition == "Vary in Mouse and Human, mean > 0.1") %>% 
+                                      pull(genes),
+                                   OrgDb = org.Hs.eg.db,
+                                   keyType = 'SYMBOL',
+                                   readable = T,
+                                   ont = "BP",
+                                   pAdjustMethod = "BH",
+                                   qvalueCutoff = 0.50) %>% 
+  as_data_frame() %>%
+  clean_names() %>%
+  mutate(log_q = -log10(qvalue),
+         condition = "Vary in Mouse and Human, mean > 0.1") %>%
+  arrange(-log_q)
+
+oraGO_all_cov_vary_human <- enrichGO(gene = genes_vary_human_all_cov %>% 
+                                      filter(condition == "Vary in human, mean > 0.1") %>% 
+                                      pull(genes),
+                                   OrgDb = org.Hs.eg.db,
+                                   keyType = 'SYMBOL',
+                                   readable = T,
+                                   ont = "BP",
+                                   pAdjustMethod = "BH",
+                                   qvalueCutoff = 0.50) %>% 
+  as_data_frame() %>%
+  clean_names() %>%
+  mutate(log_q = -log10(qvalue),
+         condition = "Vary in human, mean > 0.1") %>%
+  arrange(-log_q)
+
+oraGO_all_cov_vary_mouse <- enrichGO(gene = genes_vary_human_all_cov %>% 
+                                      filter(condition == "Vary in Mouse, mean > 0.1") %>% 
+                                      pull(genes),
+                                   OrgDb = org.Hs.eg.db,
+                                   keyType = 'SYMBOL',
+                                   readable = T,
+                                   ont = "BP",
+                                   pAdjustMethod = "BH",
+                                   qvalueCutoff = 0.50) %>% 
+  as_data_frame() %>%
+  clean_names() %>%
+  mutate(log_q = -log10(qvalue),
+         condition = "Vary in mouse, mean > 0.1") %>%
+  arrange(-log_q)
+
+oraGO_all_cov_notvary_human_mouse <- enrichGO(gene = genes_vary_human_all_cov %>% 
+                                      filter(condition == "No variation in Mouse and Human, mean < 0.1") %>% 
+                                      pull(genes),
+                                   OrgDb = org.Hs.eg.db,
+                                   keyType = 'SYMBOL',
+                                   readable = T,
+                                   ont = "BP",
+                                   pAdjustMethod = "BH",
+                                   qvalueCutoff = 0.50) %>% 
+  as_data_frame() %>%
+  clean_names() %>%
+  mutate(log_q = -log10(qvalue),
+         condition = "No variation in Mouse and Human, mean < 0.1") %>%
+  arrange(-log_q)
 
 
 
-####Top 10 genes
+oraGO_all_cov_all_conditions = bind_rows(oraGO_all_cov_vary_both, 
+          oraGO_all_cov_vary_human, 
+          oraGO_all_cov_vary_mouse,
+          oraGO_all_cov_notvary_human_mouse)
+```
+
+
+ORA
+
+```{r fig.height=8, fig.width=8}
+row_clustered = oraGO_all_cov_all_conditions %>% 
+    dplyr::select(condition, description, log_q) %>% 
+    distinct() %>% 
+    pivot_wider(names_from = "condition",
+                values_from= "log_q") %>%
+    column_to_rownames("description") %>% 
+    as.matrix() %>% 
+    replace(is.na(.), 0) %>% 
+    dist(.) %>% 
+    hclust()
+
+
+oraGO_all_cov_all_conditions %>% 
+  clean_names() %>% 
+  # filter(p_adjust < 0.01) %>% 
+  filter(description %in% c(row_clustered$labels)) %>% 
+  group_by(condition) %>% 
+  arrange(p_adjust) %>% 
+  slice_head(n = 10) %>% 
+  select(condition, description, log_q, p_adjust, everything()) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  mutate(condition = fct_relevel(condition, "Vary in mouse, mean > 0.1", 
+                                 "Vary in human, mean > 0.1", 
+                                 "Vary in Mouse and Human, mean > 0.1"
+                                 )) %>% 
+  ggplot(aes(x=fct_rev(condition), y = description, fill = log_q)) +
+  geom_point(aes(size = count),
+             pch = 21) +
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  scale_fill_gradient(low = "white", high = "red") +
+  scale_x_discrete(labels = label_wrap(20)) +
+    theme_minimal() + 
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
+          axis.ticks = element_blank(),
+          # panel.grid = element_blank(), 
+          plot.margin = margin(1, 1, 2, 2, unit = "cm"),
+          legend.direction = "vertical",
+          legend.position = "left") +
+    labs(x = "",
+         y = "",
+         title = "Top 5 enriched genes, ORA") +
+    scale_y_discrete(position = "right") 
+
+```
+
+GSEA
+
+```{r fig.height=8, fig.width=8}
+row_clustered = gseGO_all_cov %>% 
+    dplyr::select(condition, description, nes) %>% 
+    # filter(condition == "All genes, no cutoff, only covariance") %>% 
+    distinct() %>% 
+    pivot_wider(names_from = "condition",
+                values_from= "nes") %>%
+    column_to_rownames("description") %>% 
+    as.matrix() %>% 
+    replace(is.na(.), 0) %>% 
+    dist(.) %>% 
+    hclust()
+
+
+gseGO_all_cov %>% 
+  clean_names() %>% 
+  # filter(p_adjust < 0.01) %>% 
+  filter(description %in% c(row_clustered$labels)) %>% 
+  group_by(condition) %>% 
+  arrange(p_adjust) %>% 
+  slice_head(n = 5) %>% 
+  select(condition, description, nes, p_adjust, everything()) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  ggplot(aes(x=condition, y = description, fill = nes)) +
+  geom_tile(color = "white",
+            size = 0, na.rm = F) + 
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  scale_y_discrete(labels = label_wrap(15)) +
+    theme_minimal() + 
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 1, hjust=1),
+          axis.ticks = element_blank(),
+          panel.grid = element_blank(), 
+          plot.margin = margin(1, 1, 1, 4, unit = "cm"),
+          legend.direction = "horizontal",
+          legend.position = "top") +
+    labs(x = "",
+         y = "",
+         title = "Top 5 enriched genes, GSEA, by covariance") +
+    scale_fill_gradient2(
+        low = "#4DBBD5FF",      # azul para -1
+        mid = "white",          # branco para 0
+        high = "#DC0000FF",     # vermelho para +1
+        midpoint = 0, 
+        n.breaks = 3,
+        oob = scales::squish,
+        limits = c(-1, 1),      # fixa o intervalo
+        name = "NES") +
+    scale_y_discrete(position = "right") 
+
+```
+
+
+
+
+
+
+
+
+
+
+
+####Top best and worst predicted genes
 
 ```{r}
 pairwise_human_fit_test = read_rds(here("FIT_Mouse2man", "pairwise_human_fit_test.rds"))
