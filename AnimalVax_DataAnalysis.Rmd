@@ -4301,8 +4301,14 @@ genes_vary_mouse + genes_vary_human + genes_vary_mouse_human + genes_notvary_mou
 ```
 #### Enrichment analysis
 
+
+
+
 ```{r fig.width=10, fig.height= 8}
 organism = "org.Hs.eg.db"
+
+library(msigdbr)
+library(fgsea)
 
 #All Gene ontologies
 genes_vary_human_all_cov = genes_vary_human_all %>% 
@@ -4322,13 +4328,24 @@ genes_vary_human_all_cov = genes_vary_human_all %>%
               mutate(condition = "All genes, no cutoff, only covariance"))
 
 
-#GSEA
+#GSEA for GOs
 gseGO_all_cov = gseGO_all(genes_vary_human_all_cov)
 
+#GSEA for hallmarks
+#Retrieve human H (hallmark) gene set
+msigdbr_df <- msigdbr(species = "human", category = "H") %>% 
+  select(process = gs_name, genes = human_gene_symbol) %>% 
+  mutate(process = str_remove(process, "HALLMARK_"))
 
- 
- 
- #ORA
+gsea_hallmarks_all_cov= autoGSEA(df = genes_vary_human_all_cov %>% rename(log2fold_change = value),
+         TERM2GENE = msigdbr_df,
+         geneset_name = "Hallmarks MSigDB") %>% 
+  clean_names()
+```
+
+
+```{r fig.width=10, fig.height= 8}
+#ORA Gene ontologies
 oraGO_all_cov_vary_both <- enrichGO(gene = genes_vary_human_all_cov %>% 
                                       filter(condition == "Vary in Mouse and Human, mean > 0.1") %>% 
                                       pull(genes),
@@ -4395,11 +4412,67 @@ oraGO_all_cov_all_conditions = bind_rows(oraGO_all_cov_vary_both,
           oraGO_all_cov_vary_human, 
           oraGO_all_cov_vary_mouse,
           oraGO_all_cov_notvary_human_mouse)
+
+
+
+#ORA Hallmarks
+
+ora_hallmakrs_vary_both <- enricher(
+  gene = genes_vary_human_all_cov %>% 
+                                      filter(condition == "Vary in Mouse and Human, mean > 0.1") %>% 
+                                      pull(genes), # A vector of your genes of interest
+  pvalueCutoff = 0.50, # Can choose a FDR cutoff
+  pAdjustMethod = "BH", # Method to be used for multiple testing correction
+  TERM2GENE = msigdbr_df) %>% 
+  as.data.frame() %>% 
+  clean_names() %>% 
+  mutate(condition = "Vary in Mouse and Human, mean > 0.1")
+
+ora_hallmakrs_vary_human <- enricher(
+  gene = genes_vary_human_all_cov %>% 
+                                      filter(condition == "Vary in human, mean > 0.1") %>% 
+                                      pull(genes), # A vector of your genes of interest
+  pvalueCutoff = 0.50, # Can choose a FDR cutoff
+  pAdjustMethod = "BH", # Method to be used for multiple testing correction
+  TERM2GENE = msigdbr_df) %>% 
+  as.data.frame() %>% 
+  clean_names() %>% 
+  mutate(condition = "Vary in human, mean > 0.1")
+
+ora_hallmakrs_vary_mouse <- enricher(
+  gene = genes_vary_human_all_cov %>% 
+                                      filter(condition == "Vary in Mouse, mean > 0.1") %>% 
+                                      pull(genes), # A vector of your genes of interest
+  pvalueCutoff = 0.50, # Can choose a FDR cutoff
+  pAdjustMethod = "BH", # Method to be used for multiple testing correction
+  TERM2GENE = msigdbr_df) %>% 
+  as.data.frame() %>% 
+  clean_names() %>% 
+  mutate(condition = "Vary in Mouse, mean > 0.1")
+
+ora_hallmakrs_no_variation <- enricher(
+  gene = genes_vary_human_all_cov %>% 
+                                      filter(condition == "No variation in Mouse and Human, mean < 0.1") %>% 
+                                      pull(genes), # A vector of your genes of interest
+  pvalueCutoff = 0.50, # Can choose a FDR cutoff
+  pAdjustMethod = "BH", # Method to be used for multiple testing correction
+  TERM2GENE = msigdbr_df) %>% 
+  as.data.frame() %>% 
+  clean_names() %>% 
+  mutate(condition = "No variation in Mouse and Human, mean < 0.1")
+
+
+ora_hallmarks_all_cov_all_conditions = bind_rows(ora_hallmakrs_vary_both, 
+          ora_hallmakrs_vary_human, 
+          ora_hallmakrs_vary_mouse,
+          ora_hallmakrs_no_variation) %>% 
+  mutate(log_q = -log(qvalue))
+
+
 ```
 
 
-ORA
-
+ORA GOs
 ```{r fig.height=8, fig.width=8}
 row_clustered = oraGO_all_cov_all_conditions %>% 
     dplyr::select(condition, description, log_q) %>% 
@@ -4453,7 +4526,62 @@ oraGO_all_cov_all_conditions %>%
 
 ```
 
-GSEA
+
+ORA Hallmarks
+```{r fig.height=8, fig.width=8}
+row_clustered = ora_hallmarks_all_cov_all_conditions %>% 
+    dplyr::select(condition, description, log_q) %>% 
+    distinct() %>% 
+    pivot_wider(names_from = "condition",
+                values_from= "log_q") %>%
+    column_to_rownames("description") %>% 
+    as.matrix() %>% 
+    replace(is.na(.), 0) %>% 
+    dist(.) %>% 
+    hclust()
+
+
+ora_hallmarks_all_cov_all_conditions %>% 
+  clean_names() %>% 
+  # filter(p_adjust < 0.01) %>% 
+  filter(description %in% c(row_clustered$labels)) %>% 
+  group_by(condition) %>% 
+  arrange(p_adjust) %>% 
+  # slice_head(n = 10) %>% 
+  select(condition, description, log_q, p_adjust, everything()) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  mutate(condition = fct_relevel(condition, "Vary in mouse, mean > 0.1", 
+                                 "Vary in human, mean > 0.1", 
+                                 "Vary in Mouse and Human, mean > 0.1"
+                                 )) %>% 
+  ggplot(aes(x=fct_rev(condition), y = description, fill = log_q)) +
+  geom_tile(color = "white",
+            size = 0, na.rm = F) + 
+  geom_text(aes(label = signific), size = 6, vjust = 0.8, color = "black") +
+  scale_fill_gradient(low = "white", high = "red") +
+  scale_x_discrete(labels = label_wrap(20)) +
+    theme_minimal() + 
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
+          axis.ticks = element_blank(),
+          # panel.grid = element_blank(), 
+          plot.margin = margin(1, 1, 2, 2, unit = "cm"),
+          legend.direction = "vertical",
+          legend.position = "left") +
+    labs(x = "",
+         y = "",
+         title = "ORA, MSigDB Hallmarks") +
+    scale_y_discrete(position = "right") 
+
+```
+
+GSEA Gene ontologies
 
 ```{r fig.height=8, fig.width=8}
 row_clustered = gseGO_all_cov %>% 
@@ -4512,6 +4640,72 @@ gseGO_all_cov %>%
     scale_y_discrete(position = "right") 
 
 ```
+
+
+GSEA Hallmarks
+
+```{r fig.height=10, fig.width=10}
+gsea_hallmarks_all_cov$gsea
+
+
+
+row_clustered = gsea_hallmarks_all_cov$gsea %>% 
+  clean_names() %>% 
+    dplyr::select(condition, description, nes) %>% 
+    # filter(condition == "All genes, no cutoff, only covariance") %>% 
+    distinct() %>% 
+    pivot_wider(names_from = "condition",
+                values_from= "nes") %>%
+    column_to_rownames("description") %>% 
+    as.matrix() %>% 
+    replace(is.na(.), 0) %>% 
+    dist(.) %>% 
+    hclust()
+
+
+gsea_hallmarks_all_cov$gsea %>% 
+  clean_names() %>% 
+  # filter(p_adjust < 0.01) %>% 
+  filter(description %in% c(row_clustered$labels)) %>% 
+  group_by(condition) %>% 
+  arrange(p_adjust) %>% 
+  # slice_head(n = 5) %>% 
+  select(condition, description, nes, p_adjust, everything()) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  ggplot(aes(x=condition, y = description, fill = nes)) +
+  geom_tile(color = "white",
+            size = 0, na.rm = F) + 
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  scale_y_discrete(labels = label_wrap(15)) +
+    theme_minimal() + 
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 1, hjust=1),
+          axis.ticks = element_blank(),
+          panel.grid = element_blank(), 
+          plot.margin = margin(1, 1, 1, 4, unit = "cm"),
+          legend.direction = "horizontal",
+          legend.position = "top") +
+    labs(x = "",
+         y = "",
+         title = "Top 5 enriched genes, GSEA, by covariance") +
+    scale_fill_gradient2(
+        low = "#4DBBD5FF",      # azul para -1
+        mid = "white",          # branco para 0
+        high = "#DC0000FF",     # vermelho para +1
+        midpoint = 0, 
+        n.breaks = 3,
+        oob = scales::squish,
+        limits = c(-1, 1),      # fixa o intervalo
+        name = "NES") +
+    scale_y_discrete(position = "right") 
+```
+
 
 
 
@@ -8326,6 +8520,15 @@ AllData_V2.0_blood %>%
 Import
 ```{r}
 AllData_V2.0_blood = read_rds(here("new_models", "AllData_FIT_training_blood.rds"))
+#Import files
+pca_rotations = FIT.mouse2man::pca_rotations
+best_models = FIT.mouse2man::best_models
+HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez
+MM_Entrez_symbol_desc = FIT.mouse2man::MM_Entrez_symbol_desc
+Psoriasis_classifier_neg = FIT.mouse2man::Psoriasis_classifier_neg
+slopes_per_gene_V2.0 = FIT.mouse2man::slopes_per_gene_V2.0
+StaphInfection_classifier_pos = FIT.mouse2man::StaphInfection_classifier_pos
+AllData_V2.0 = FIT.mouse2man::AllData_V2.0 #Training data
 ```
 
 ## Plot distributions
@@ -8372,11 +8575,7 @@ AllData_V2.0_distributions_plot = AllData_V2.0 %>%
 
 
 AllData_V2.0_distributions_plot 
-  
-```
 
-
-```{r fig.height=8, fig.width=3}
 AllData_V2.0_blood_distributions_plot = AllData_V2.0_blood %>% 
   clean_names() %>% 
   pivot_longer(cols = c(fc_hs:qval_mm),
@@ -8434,6 +8633,602 @@ AllData_V2.0_distributions_plot + AllData_V2.0_blood_distributions_plot +
   plot_annotation(theme = theme(legend.position = "top"))
 
 ```
+
+## Plot correlation
+
+
+```{r}
+cov_genes_FIT_training = AllData_V2.0 %>% 
+  clean_names() %>% 
+  select(hs_entrez, mean_human = fc_hs, mean_mouse = fc_mm) %>% 
+  inner_join(HS_MM_Symbol_Entrez %>%
+               clean_names() %>%
+               select(human_symbol = hgnc_symbol,
+                      hs_entrez = human_entrez) %>% 
+               mutate(hs_entrez = as.character(hs_entrez)),
+             by = "hs_entrez") %>% 
+  arrange(human_symbol) %>% 
+  group_by(human_symbol) %>% 
+  summarize(sd_human = sd(mean_human),
+            cov = cov(mean_human, mean_mouse),
+            mean_human_time = mean(mean_human),
+            mean_mouse_time = mean(mean_mouse)) %>% 
+  arrange(-cov)
+
+cov_genes_FIT_training %>% filter(abs(cov) > 0.001) #15891 genes from 6,373 (92.9%)
+cov_genes_FIT_training %>% filter(abs(cov) > 0.01) #11320 genes from 6,373 (50.3%)
+cov_genes_FIT_training %>% filter(abs(cov) > 0.1) #1151 genes
+cov_genes_FIT_training %>% filter(abs(cov) > 0.2) #356 genes
+cov_genes_FIT_training %>% filter(abs(cov) > 0.3) #186 genes
+
+
+genes_vary_human_all_FIT = cov_genes_FIT_training %>% 
+  filter(abs(mean_human_time) >= 0.1,
+        abs(mean_mouse_time) <= 0.1) %>% 
+  arrange(-abs(cov))
+
+genes_vary_mouse_all_FIT = cov_genes_FIT_training %>% 
+  filter(abs(mean_mouse_time) >= 0.1,
+                abs(mean_human_time) <= 0.1) %>% 
+  arrange(-abs(cov))
+
+genes_vary_human_mouse_all_FIT = cov_genes_FIT_training %>% 
+  filter(abs(mean_human_time) >= 0.1,
+         abs(mean_mouse_time) >= 0.1) %>% 
+  arrange(-abs(cov))
+
+genes_not_vary_human_mouse_all_FIT = cov_genes_FIT_training %>% 
+   filter(abs(mean_human_time) <= 0.1, 
+          abs(mean_mouse_time) <= 0.1) %>%  
+  arrange(-abs(cov))
+
+cov_genes_FIT_training %>% filter(abs(mean_human_time) > 0.1) #3,962
+cov_genes_FIT_training %>% filter(abs(mean_human_time) > 0.2) #2191
+
+cov_genes_FIT_training %>% filter(abs(mean_mouse_time) > 0.1) #3363
+cov_genes_FIT_training %>% filter(abs(mean_mouse_time) > 0.2) #1631
+
+cov_genes_FIT_training %>% filter(abs(mean_mouse_time) < 0.1) #3,010
+cov_genes_FIT_training %>% filter(abs(mean_mouse_time) < 0.2) #4742
+
+
+
+genes_vary_human_all_FIT #5,787
+genes_vary_mouse_all_FIT #1,807
+genes_not_vary_human_mouse_all_FIT #6,476
+genes_vary_human_mouse_all_FIT #2,355
+```
+
+
+```{r fig.height=8, fig.width=8}
+genes_vary_human = cov_genes_FIT_training %>% 
+  ggplot() +
+  aes(x = mean_human_time,
+      y = mean_mouse_time) +
+    geom_point(color = "#3182bd", fill = NA, pch = 21) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(limits = c(-1.5, 1.5)) +
+    gghighlight(abs(mean_human_time) >= 0.1,
+                abs(mean_mouse_time) <= 0.1,
+              use_direct_label = FALSE, 
+              unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+  geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
+                  data = cov_genes_FIT_training %>% 
+                    filter(abs(mean_human_time) > 0.1,
+                abs(mean_mouse_time) <= 0.1) %>% 
+                  arrange(-abs(cov)) %>% 
+                  slice_head(n = 10)) +
+   theme_vaxgo() +
+  labs(title = "Which genes vary only in human?",
+       subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1.")
+
+genes_vary_mouse = cov_genes_FIT_training %>% 
+  ggplot() +
+  aes(x = mean_human_time,
+      y = mean_mouse_time) +
+    geom_point(color = "#90A4AEFF", fill = NA, pch = 21) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(limits = c(-1.5, 1.5)) +
+  gghighlight(abs(mean_mouse_time) >= 0.1,
+                abs(mean_human_time) <= 0.1,
+              use_direct_label = FALSE,
+              unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+  geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
+                  data = cov_genes_FIT_training %>% 
+                    filter(abs(mean_mouse_time) >= 0.1,
+                abs(mean_human_time) <= 0.1) %>% 
+                  arrange(-abs(cov)) %>% 
+                  slice_head(n = 10)) +
+
+  theme_vaxgo() +
+  labs(title = "Which genes vary only in mouse?",
+       subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1") 
+
+
+genes_vary_mouse_human = cov_genes_FIT_training %>% 
+  ggplot() +
+  aes(x = mean_human_time,
+      y = mean_mouse_time) +
+  geom_point(color = "black", fill = NA, pch = 21) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(limits = c(-1.5, 1.5)) +
+  gghighlight(abs(mean_human_time) >= 0.1,
+                abs(mean_mouse_time) >= 0.1,
+                            unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+  geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
+                  data = cov_genes_FIT_training %>% 
+                    filter(abs(mean_human_time) >= 0.1,
+                abs(mean_mouse_time) >= 0.1) %>% 
+                  arrange(-abs(cov)) %>% 
+                  slice_head(n = 10)) +
+  theme_vaxgo() +
+  labs(title = "Which genes vary in both human and mouse?",
+       subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1")
+
+genes_notvary_mouse_human = cov_genes_FIT_training %>% 
+  ggplot() +
+  aes(x = mean_human_time,
+      y = mean_mouse_time) +
+  geom_point(color = "black", fill = NA, pch = 21) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(limits = c(-1.5, 1.5)) +
+  gghighlight(abs(mean_human_time) <= 0.1,
+                abs(mean_mouse_time) <= 0.1,
+              unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+  geom_label_repel(aes(label = human_symbol), 
+                  # color = "red",
+                  max.overlaps = 20, force_pull = 4, size = 3, 
+                  data = cov_genes_FIT_training %>% 
+                    filter(abs(mean_human_time) <= 0.1, 
+                             abs(mean_mouse_time) <= 0.1) %>%  
+                    arrange(-abs(cov)) %>% 
+                    slice_head(n = 10)) +
+  theme_vaxgo() +
+  labs(title = "Which genes do not vary in both human and mouse?",
+       subtitle = "Top 10 genes with highest covariance. Mean cutoff < 0.1")
+  
+
+#Plot all
+genes_vary_mouse + genes_vary_human + genes_vary_mouse_human + genes_notvary_mouse_human +
+  plot_layout(guides = "collect", axes = "collect", axis_titles =  "collect",
+              ncol =  2)
+  
+```
+#### Enrichment analysis
+
+
+
+
+```{r fig.width=10, fig.height= 8}
+organism = "org.Hs.eg.db"
+
+library(msigdbr)
+library(fgsea)
+
+#All Gene ontologies
+genes_vary_human_all_cov_FIT = cov_genes_FIT_training %>% 
+  select(genes = human_symbol, value = cov) %>% 
+  mutate(condition = "Vary in human, mean > 0.1") %>% 
+  bind_rows(genes_vary_mouse_all_FIT %>% 
+            select(genes = human_symbol, value = cov) %>% 
+              mutate(condition = "Vary in Mouse, mean > 0.1"),
+            genes_vary_human_mouse_all_FIT %>% 
+            select(genes = human_symbol, value = cov) %>% 
+              mutate(condition = "Vary in Mouse and Human, mean > 0.1"),
+            genes_not_vary_human_mouse_all_FIT %>% 
+            select(genes = human_symbol, value = cov) %>% 
+              mutate(condition = "No variation in Mouse and Human, mean < 0.1"),
+            cov_genes_FIT_training %>%
+              select(genes = human_symbol, value = cov) %>%
+              mutate(condition = "All genes, no cutoff, only covariance"))
+
+
+#GSEA for GOs
+gseGO_all_cov_FIT = gseGO_all(genes_vary_human_all_cov_FIT)
+
+#GSEA for hallmarks
+#Retrieve human H (hallmark) gene set
+msigdbr_df <- msigdbr(species = "human", category = "H") %>% 
+  select(process = gs_name, genes = human_gene_symbol) %>% 
+  mutate(process = str_remove(process, "HALLMARK_"))
+
+gsea_hallmarks_all_cov_FIT= autoGSEA(df = genes_vary_human_all_cov_FIT %>% 
+                                       rename(log2fold_change = value),
+         TERM2GENE = msigdbr_df,
+         geneset_name = "Hallmarks MSigDB") %>% 
+  clean_names()
+```
+
+
+```{r fig.width=10, fig.height= 8}
+#ORA Gene ontologies
+oraGO_all_cov_vary_both_FIT <- enrichGO(gene = genes_vary_human_all_cov_FIT %>% 
+                                      filter(condition == "Vary in Mouse and Human, mean > 0.1") %>% 
+                                      pull(genes),
+                                   OrgDb = org.Hs.eg.db,
+                                   keyType = 'SYMBOL',
+                                   readable = T,
+                                   ont = "BP",
+                                   pAdjustMethod = "BH",
+                                   qvalueCutoff = 0.50) %>% 
+  as_data_frame() %>%
+  clean_names() %>%
+  mutate(log_q = -log10(qvalue),
+         condition = "Vary in Mouse and Human, mean > 0.1") %>%
+  arrange(-log_q)
+
+oraGO_all_cov_vary_human_FIT <- enrichGO(gene = genes_vary_human_all_cov_FIT %>% 
+                                      filter(condition == "Vary in human, mean > 0.1") %>% 
+                                      pull(genes),
+                                   OrgDb = org.Hs.eg.db,
+                                   keyType = 'SYMBOL',
+                                   readable = T,
+                                   ont = "BP",
+                                   pAdjustMethod = "BH",
+                                   qvalueCutoff = 0.50) %>% 
+  as_data_frame() %>%
+  clean_names() %>%
+  mutate(log_q = -log10(qvalue),
+         condition = "Vary in human, mean > 0.1") %>%
+  arrange(-log_q)
+
+oraGO_all_cov_vary_mouse_FIT <- enrichGO(gene = genes_vary_human_all_cov_FIT %>% 
+                                      filter(condition == "Vary in Mouse, mean > 0.1") %>% 
+                                      pull(genes),
+                                   OrgDb = org.Hs.eg.db,
+                                   keyType = 'SYMBOL',
+                                   readable = T,
+                                   ont = "BP",
+                                   pAdjustMethod = "BH",
+                                   qvalueCutoff = 0.50) %>% 
+  as_data_frame() %>%
+  clean_names() %>%
+  mutate(log_q = -log10(qvalue),
+         condition = "Vary in mouse, mean > 0.1") %>%
+  arrange(-log_q)
+
+oraGO_all_cov_notvary_human_mouse_FIT <- enrichGO(gene = genes_vary_human_all_cov_FIT %>% 
+                                      filter(condition == "No variation in Mouse and Human, mean < 0.1") %>% 
+                                      pull(genes),
+                                   OrgDb = org.Hs.eg.db,
+                                   keyType = 'SYMBOL',
+                                   readable = T,
+                                   ont = "BP",
+                                   pAdjustMethod = "BH",
+                                   qvalueCutoff = 0.50) %>% 
+  as_data_frame() %>%
+  clean_names() %>%
+  mutate(log_q = -log10(qvalue),
+         condition = "No variation in Mouse and Human, mean < 0.1") %>%
+  arrange(-log_q)
+
+
+
+oraGO_all_cov_all_conditions_FIT = bind_rows(oraGO_all_cov_vary_both_FIT, 
+          oraGO_all_cov_vary_human_FIT, 
+          oraGO_all_cov_vary_mouse_FIT,
+          oraGO_all_cov_notvary_human_mouse_FIT)
+
+
+
+#ORA Hallmarks
+
+ora_hallmakrs_vary_both_FIT <- enricher(
+  gene = genes_vary_human_all_cov_FIT %>% 
+                                      filter(condition == "Vary in Mouse and Human, mean > 0.1") %>% 
+                                      pull(genes), # A vector of your genes of interest
+  pvalueCutoff = 0.50, # Can choose a FDR cutoff
+  pAdjustMethod = "BH", # Method to be used for multiple testing correction
+  TERM2GENE = msigdbr_df) %>% 
+  as.data.frame() %>% 
+  clean_names() %>% 
+  mutate(condition = "Vary in Mouse and Human, mean > 0.1")
+
+ora_hallmakrs_vary_human_FIT <- enricher(
+  gene = genes_vary_human_all_cov_FIT %>% 
+                                      filter(condition == "Vary in human, mean > 0.1") %>% 
+                                      pull(genes), # A vector of your genes of interest
+  pvalueCutoff = 0.50, # Can choose a FDR cutoff
+  pAdjustMethod = "BH", # Method to be used for multiple testing correction
+  TERM2GENE = msigdbr_df) %>% 
+  as.data.frame() %>% 
+  clean_names() %>% 
+  mutate(condition = "Vary in human, mean > 0.1")
+
+ora_hallmakrs_vary_mouse_FIT <- enricher(
+  gene = genes_vary_human_all_cov_FIT %>% 
+                                      filter(condition == "Vary in Mouse, mean > 0.1") %>% 
+                                      pull(genes), # A vector of your genes of interest
+  pvalueCutoff = 0.50, # Can choose a FDR cutoff
+  pAdjustMethod = "BH", # Method to be used for multiple testing correction
+  TERM2GENE = msigdbr_df) %>% 
+  as.data.frame() %>% 
+  clean_names() %>% 
+  mutate(condition = "Vary in Mouse, mean > 0.1")
+
+ora_hallmakrs_no_variation_FIT <- enricher(
+  gene = genes_vary_human_all_cov_FIT %>% 
+                                      filter(condition == "No variation in Mouse and Human, mean < 0.1") %>% 
+                                      pull(genes), # A vector of your genes of interest
+  pvalueCutoff = 0.50, # Can choose a FDR cutoff
+  pAdjustMethod = "BH", # Method to be used for multiple testing correction
+  TERM2GENE = msigdbr_df) %>% 
+  as.data.frame() %>% 
+  clean_names() %>% 
+  mutate(condition = "No variation in Mouse and Human, mean < 0.1")
+
+
+ora_hallmarks_all_cov_all_conditions_FIT = bind_rows(ora_hallmakrs_vary_both_FIT, 
+          ora_hallmakrs_vary_human_FIT, 
+          ora_hallmakrs_vary_mouse_FIT,
+          ora_hallmakrs_no_variation_FIT) %>% 
+  mutate(log_q = -log(qvalue))
+
+
+```
+
+
+ORA GOs
+```{r fig.height=8, fig.width=8}
+row_clustered = oraGO_all_cov_all_conditions %>% 
+    dplyr::select(condition, description, log_q) %>% 
+    distinct() %>% 
+    pivot_wider(names_from = "condition",
+                values_from= "log_q") %>%
+    column_to_rownames("description") %>% 
+    as.matrix() %>% 
+    replace(is.na(.), 0) %>% 
+    dist(.) %>% 
+    hclust()
+
+
+oraGO_all_cov_all_conditions %>% 
+  clean_names() %>% 
+  # filter(p_adjust < 0.01) %>% 
+  filter(description %in% c(row_clustered$labels)) %>% 
+  group_by(condition) %>% 
+  arrange(p_adjust) %>% 
+  slice_head(n = 10) %>% 
+  select(condition, description, log_q, p_adjust, everything()) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  mutate(condition = fct_relevel(condition, "Vary in mouse, mean > 0.1", 
+                                 "Vary in human, mean > 0.1", 
+                                 "Vary in Mouse and Human, mean > 0.1"
+                                 )) %>% 
+  ggplot(aes(x=fct_rev(condition), y = description, fill = log_q)) +
+  geom_point(aes(size = count),
+             pch = 21) +
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  scale_fill_gradient(low = "white", high = "red") +
+  scale_x_discrete(labels = label_wrap(20)) +
+    theme_minimal() + 
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
+          axis.ticks = element_blank(),
+          # panel.grid = element_blank(), 
+          plot.margin = margin(1, 1, 2, 2, unit = "cm"),
+          legend.direction = "vertical",
+          legend.position = "left") +
+    labs(x = "",
+         y = "",
+         title = "Top 5 enriched genes, ORA") +
+    scale_y_discrete(position = "right") 
+
+```
+
+
+ORA Hallmarks
+```{r fig.height=8, fig.width=8}
+row_clustered = ora_hallmarks_all_cov_all_conditions %>% 
+    dplyr::select(condition, description, log_q) %>% 
+    distinct() %>% 
+    pivot_wider(names_from = "condition",
+                values_from= "log_q") %>%
+    column_to_rownames("description") %>% 
+    as.matrix() %>% 
+    replace(is.na(.), 0) %>% 
+    dist(.) %>% 
+    hclust()
+
+
+ora_hallmarks_all_cov_all_conditions %>% 
+  clean_names() %>% 
+  # filter(p_adjust < 0.01) %>% 
+  filter(description %in% c(row_clustered$labels)) %>% 
+  group_by(condition) %>% 
+  arrange(p_adjust) %>% 
+  # slice_head(n = 10) %>% 
+  select(condition, description, log_q, p_adjust, everything()) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  mutate(condition = fct_relevel(condition, "Vary in mouse, mean > 0.1", 
+                                 "Vary in human, mean > 0.1", 
+                                 "Vary in Mouse and Human, mean > 0.1"
+                                 )) %>% 
+  ggplot(aes(x=fct_rev(condition), y = description, fill = log_q)) +
+  geom_tile(color = "white",
+            size = 0, na.rm = F) + 
+  geom_text(aes(label = signific), size = 6, vjust = 0.8, color = "black") +
+  scale_fill_gradient(low = "white", high = "red") +
+  scale_x_discrete(labels = label_wrap(20)) +
+    theme_minimal() + 
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
+          axis.ticks = element_blank(),
+          # panel.grid = element_blank(), 
+          plot.margin = margin(1, 1, 2, 2, unit = "cm"),
+          legend.direction = "vertical",
+          legend.position = "left") +
+    labs(x = "",
+         y = "",
+         title = "ORA, MSigDB Hallmarks") +
+    scale_y_discrete(position = "right") 
+
+```
+
+GSEA Gene ontologies
+
+```{r fig.height=8, fig.width=8}
+row_clustered = gseGO_all_cov %>% 
+    dplyr::select(condition, description, nes) %>% 
+    # filter(condition == "All genes, no cutoff, only covariance") %>% 
+    distinct() %>% 
+    pivot_wider(names_from = "condition",
+                values_from= "nes") %>%
+    column_to_rownames("description") %>% 
+    as.matrix() %>% 
+    replace(is.na(.), 0) %>% 
+    dist(.) %>% 
+    hclust()
+
+
+gseGO_all_cov %>% 
+  clean_names() %>% 
+  # filter(p_adjust < 0.01) %>% 
+  filter(description %in% c(row_clustered$labels)) %>% 
+  group_by(condition) %>% 
+  arrange(p_adjust) %>% 
+  slice_head(n = 5) %>% 
+  select(condition, description, nes, p_adjust, everything()) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  ggplot(aes(x=condition, y = description, fill = nes)) +
+  geom_tile(color = "white",
+            size = 0, na.rm = F) + 
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  scale_y_discrete(labels = label_wrap(15)) +
+    theme_minimal() + 
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 1, hjust=1),
+          axis.ticks = element_blank(),
+          panel.grid = element_blank(), 
+          plot.margin = margin(1, 1, 1, 4, unit = "cm"),
+          legend.direction = "horizontal",
+          legend.position = "top") +
+    labs(x = "",
+         y = "",
+         title = "Top 5 enriched genes, GSEA, by covariance") +
+    scale_fill_gradient2(
+        low = "#4DBBD5FF",      # azul para -1
+        mid = "white",          # branco para 0
+        high = "#DC0000FF",     # vermelho para +1
+        midpoint = 0, 
+        n.breaks = 3,
+        oob = scales::squish,
+        limits = c(-1, 1),      # fixa o intervalo
+        name = "NES") +
+    scale_y_discrete(position = "right") 
+
+```
+
+
+GSEA Hallmarks
+
+```{r fig.height=10, fig.width=10}
+gsea_hallmarks_all_cov$gsea
+
+
+
+row_clustered = gsea_hallmarks_all_cov$gsea %>% 
+  clean_names() %>% 
+    dplyr::select(condition, description, nes) %>% 
+    # filter(condition == "All genes, no cutoff, only covariance") %>% 
+    distinct() %>% 
+    pivot_wider(names_from = "condition",
+                values_from= "nes") %>%
+    column_to_rownames("description") %>% 
+    as.matrix() %>% 
+    replace(is.na(.), 0) %>% 
+    dist(.) %>% 
+    hclust()
+
+
+gsea_hallmarks_all_cov$gsea %>% 
+  clean_names() %>% 
+  # filter(p_adjust < 0.01) %>% 
+  filter(description %in% c(row_clustered$labels)) %>% 
+  group_by(condition) %>% 
+  arrange(p_adjust) %>% 
+  # slice_head(n = 5) %>% 
+  select(condition, description, nes, p_adjust, everything()) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ "")) %>% 
+  ggplot(aes(x=condition, y = description, fill = nes)) +
+  geom_tile(color = "white",
+            size = 0, na.rm = F) + 
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  scale_y_discrete(labels = label_wrap(15)) +
+    theme_minimal() + 
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 1, hjust=1),
+          axis.ticks = element_blank(),
+          panel.grid = element_blank(), 
+          plot.margin = margin(1, 1, 1, 4, unit = "cm"),
+          legend.direction = "horizontal",
+          legend.position = "top") +
+    labs(x = "",
+         y = "",
+         title = "Top 5 enriched genes, GSEA, by covariance") +
+    scale_fill_gradient2(
+        low = "#4DBBD5FF",      # azul para -1
+        mid = "white",          # branco para 0
+        high = "#DC0000FF",     # vermelho para +1
+        midpoint = 0, 
+        n.breaks = 3,
+        oob = scales::squish,
+        limits = c(-1, 1),      # fixa o intervalo
+        name = "NES") +
+    scale_y_discrete(position = "right") 
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ## Univariate
 
