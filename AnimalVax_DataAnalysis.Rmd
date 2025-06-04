@@ -181,6 +181,71 @@ gseGO_all <- function(df, OrgDb = "org.Hs.eg.db", keyType = "SYMBOL", ontology =
   
   bind_rows(gsea_results)
 }
+
+
+#Function for ORA/ENRICHER custom
+enricher_condition <- function(df, term2gene_df) {
+  df %>%
+    distinct(condition) %>%
+    pull(condition) %>%
+    set_names() %>%
+    map_dfr(function(cond) {
+      genes <- df %>%
+        filter(condition == cond) %>%
+        pull(genes)
+
+      result <- tryCatch({
+        enricher(
+          gene = genes,
+          pvalueCutoff = 0.50,
+          pAdjustMethod = "BH",
+          TERM2GENE = term2gene_df
+        ) %>%
+          as.data.frame() %>%
+          clean_names() %>%
+          mutate(condition = cond)
+      }, error = function(e) {
+        message("Failed on condition: ", cond)
+        return(NULL)
+      })
+
+      return(result)
+    })
+}
+
+# Function for ORA Gene Ontology
+oraGO_condition <- function(df, orgdb = org.Hs.eg.db) {
+  df %>%
+    distinct(condition) %>%
+    pull(condition) %>%
+    set_names() %>%
+    map_dfr(function(cond) {
+      genes <- df %>%
+        filter(condition == cond) %>%
+        pull(genes)
+
+      result <- tryCatch({
+        enrichGO(
+          gene = genes,
+          OrgDb = orgdb,
+          keyType = 'SYMBOL',
+          readable = T,
+          ont = "BP",
+          pAdjustMethod = "BH",
+          qvalueCutoff = 0.50) %>%
+          as.data.frame() %>%
+          clean_names() %>%
+          mutate(condition = cond)
+      }, error = function(e) {
+        message("Failed on condition: ", cond)
+        return(NULL)
+      })
+
+      return(result)
+    })
+}
+
+
 ```
 
 
@@ -4161,11 +4226,12 @@ pairwise_human_fit_test_corr_plots
 ## Number of DEGs
 Lineplot
 ```{r fig.width=10, fig.height=4}
+
+#Total
 degs_mouse = pairwise_human_fit_measures %>% 
   filter(pval_mouse_adj < 0.05)
 degs_human = pairwise_human_fit_measures %>% 
   filter(pval_human_adj < 0.05)
-
 degs_mouse_summarize = degs_mouse %>% 
     group_by(timepoint) %>% 
   summarize(n_genes = n(),
@@ -4174,6 +4240,49 @@ degs_mouse_summarize = degs_mouse %>%
               group_by(timepoint) %>%
               summarize(n_genes = n(),
                         condition = "Human"))
+degs_mouse_summarize
+
+#Overlap
+degs_mouse_genes = degs_mouse %>% 
+  select(human_symbol, timepoint) %>% 
+  distinct()
+
+degs_human_genes = degs_human %>% 
+  select(human_symbol, timepoint) %>% 
+  distinct()
+
+#Inner join
+degs_human_and_mouse_genes = degs_human_genes %>% 
+  inner_join(degs_mouse_genes, 
+             by = join_by("human_symbol", "timepoint")) %>% 
+  mutate(condition = "Mouse and Human")
+#Anti join, Human vs Mouse
+degs_human_Not_mouse_genes = degs_human_genes %>% 
+  anti_join(degs_mouse_genes, 
+             by = join_by("human_symbol", "timepoint")) %>% 
+  mutate(condition = "Human NOT Mouse")
+#Anti join, Mouse vs Human
+degs_mouse_Not_human_genes = degs_mouse_genes %>% 
+  anti_join(degs_human_genes, 
+             by = join_by("human_symbol", "timepoint")) %>% 
+  mutate(condition = "Mouse NOT Human")
+  
+
+#Merge data
+degs_human_mouse_overlap_genes = degs_human_genes %>% 
+  mutate(condition = "Human All DEGs") %>% 
+  bind_rows(degs_mouse_genes %>% 
+              mutate(condition = "Mouse All DEGs")) %>% 
+  bind_rows(degs_human_and_mouse_genes,
+            degs_human_Not_mouse_genes,
+            degs_mouse_Not_human_genes)
+
+degs_human_mouse_overlap_genes_summary = degs_human_mouse_overlap_genes %>% 
+  group_by(condition, timepoint) %>% 
+  summarize(n = n())
+
+
+  
 ```
 
 Plot
@@ -4192,9 +4301,10 @@ classification_degs_ngenes_plot = degs_mouse_summarize %>%
   geom_line(aes(group = condition,
                 color = condition),
             position = position_dodge2(1)) +
-  geom_point(position = position_dodge2(1), 
-             pch = 21,
-             color = "black") +
+  # geom_point(position = position_dodge2(1), 
+  #            pch = 21,
+  #            size = 3,
+  #            color = "black") +
   scale_y_continuous(expand = c(0.01, 0.01),
                      n.breaks = 10) +
   theme_vaxgo() +
@@ -4230,6 +4340,269 @@ classification_degs_ngenes_plot = degs_mouse_summarize %>%
 classification_degs_ngenes_plot
 
 ```
+
+
+Get overlap
+```{r}
+degs_human_mouse_overlap_barplot 
+
+degs_human_mouse_overlap_genes_summary %>% 
+  filter(condition %in% c("Mouse and Human", 
+                          "Human All DEGs",
+                          "Mouse All DEGs"))  %>% 
+  mutate(timepoint = as.character(timepoint)) %>% 
+  ggplot() +
+  aes(x = timepoint,
+      y = n,
+      fill = condition) +
+  # geom_text(aes(label = n,
+  #                 group = condition), 
+  #           position = position_dodge2(0.9),
+  #           vjust = -0.5) +
+  geom_line(aes(group = condition,
+                color = condition),
+            position = position_dodge2(0.9)) +
+    geom_col(position = position_dodge2(0.9),
+             alpha = 0.5) +
+  scale_y_continuous(n.breaks = 10, expand = c(0.01, 0.01)) +
+    scale_fill_manual(values = c("Human All DEGs" = "#4DBBD5FF",
+                               "Mouse All DEGs" = "#90A4AEFF",
+                               "Mouse and Human" = "red"))   +
+  scale_color_manual(values = c("Human All DEGs" = "#4DBBD5FF",
+                               "Mouse All DEGs" = "#90A4AEFF",
+                               "Mouse and Human" = "red"))   +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.text.y = element_text(angle = 0),
+    strip.placement = "outside",
+     strip.background.x = element_rect(fill = "gray95", color = NA), 
+    axis.text.x = element_text(size = 10, angle = 0),
+    axis.text.y = element_text(size = 10),
+    panel.spacing.x = unit(1, "lines"),
+    legend.position = "right",
+    legend.direction = "vertical",
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 10)
+  ) +
+  labs(
+    x = "Timepoint (Day)",
+    y = "Total genes",
+    color = "Organism",
+    fill = "Organism",
+    title = "Total DEGs",
+       subtitle = "Cutoffs: p_adjust < 0.05.") 
+  
+
+degs_human_mouse_overlap_barplot
+```
+
+
+```{r}
+degs_human_mouse_overlap_common = degs_human_mouse_overlap_genes_summary %>% 
+  filter(condition %in% c("Mouse and Human", 
+                          "Human All DEGs",
+                          "Mouse All DEGs")) %>% 
+  pivot_wider(names_from = condition,
+              values_from = "n") %>% 
+  mutate(pct_in_human = (`Mouse and Human`/`Human All DEGs`)*100,
+         pct_in_mouse = (`Mouse and Human`/`Mouse All DEGs`)*100,
+         human_common = `Mouse and Human`,
+         mouse_common = `Mouse and Human`,
+         human_out = (`Human All DEGs` - `Mouse and Human`),
+         mouse_out = (`Mouse All DEGs` - `Mouse and Human`),
+         )  %>% 
+  pivot_longer(cols = -c(timepoint, "pct_in_human",
+                          "pct_in_mouse"), 
+               names_to = "condition", 
+               values_to = "value")  %>% 
+  pivot_longer(cols = c("pct_in_human",
+                          "pct_in_mouse"), names_to = "pct", values_to = "pct_value") %>% 
+  filter((str_detect(condition, "human") & str_detect(pct, "human")) |
+    (str_detect(condition, "mouse") & str_detect(pct, "mouse"))) %>% 
+
+  filter(!condition %in% c("Human All DEGs", 
+                         "Mouse All DEGs",
+                         "Mouse and Human")) %>% 
+  mutate(organism = if_else(str_detect(condition, "human"), "Human", "Mouse"),
+         condition = if_else(str_detect(condition, "_common"), "Common", organism),
+         condition = fct_rev(condition))
+
+degs_human_mouse_overlap_common_plot = degs_human_mouse_overlap_common %>% 
+  ggplot() +
+  aes(x = organism,
+      y = value,
+      fill = interact(condition, organism)) + 
+  geom_col(alpha = 1) +
+  facet_grid2(
+    cols = vars(timepoint),
+    switch = "both",
+    labeller = labeller(
+      timepoint = as_labeller(c("1" = "Day 1", 
+                                "3" = "Day 3", 
+                                "7" = "Day 7")),
+      padj_cutoff = function(x) paste("padj:", x)  
+    )
+  ) +
+  geom_text(aes(y = value,
+                label = if_else(condition == "Common",paste0(round(pct_value, 1), "%"), "")),
+            size = 2.5, vjust = -1, hjust = 0.5, angle = 0, color = "white") +
+  scale_y_continuous(n.breaks = 10, expand = c(0.01, 0.01)) +
+  scale_fill_manual(values = c("Human" = "#4DBBD5FF",
+                               "Mouse" = "#90A4AEFF",
+                               "Common" = "black"))   +
+  scale_color_manual(values = c("Human" = "#4DBBD5FF",
+                               "Mouse" = "#90A4AEFF",
+                               "Common" = "black")) +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.text.y = element_text(angle = 0),
+    strip.placement = "outside",
+     strip.background.x = element_rect(fill = "NA", color = NA), 
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(), 
+    axis.text.y = element_text(size = 10),
+    panel.spacing.x = unit(0, "lines"), panel.grid.major.x = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 10)
+  ) +
+  labs(
+    x = "",
+    y = "Total",
+    color = "",
+    fill = "",
+    title = "Total DEGs",
+       subtitle = "Cutoffs: p_adjust < 0.05.") 
+
+degs_human_mouse_overlap_common_plot
+  
+```
+
+
+Venn Diagram
+
+```{r fig.height=5, fig.width=10}
+library(ggVennDiagram)
+library(sf)
+
+# List of items
+venn_human_mouse_day1 <- list(Human = degs_human_genes %>% 
+            filter(timepoint == 1) %>% 
+            pull(human_symbol), 
+          Mouse = degs_mouse_genes %>% 
+            filter(timepoint == 1) %>% 
+            pull(human_symbol))
+venn_human_mouse_day3 <- list(Human = degs_human_genes %>% 
+            filter(timepoint == 3) %>% 
+            pull(human_symbol), 
+          Mouse = degs_mouse_genes %>% 
+            filter(timepoint == 3) %>% 
+            pull(human_symbol))
+venn_human_mouse_day7 <- list(Human = degs_human_genes %>% 
+            filter(timepoint == 7) %>% 
+            pull(human_symbol), 
+          Mouse = degs_mouse_genes %>% 
+            filter(timepoint == 7) %>% 
+            pull(human_symbol))
+
+venn_data_day1 = Venn(venn_human_mouse_day1) %>% 
+  process_data()
+venn_data_day3 = Venn(venn_human_mouse_day3) %>% 
+  process_data()
+venn_data_day7 = Venn(venn_human_mouse_day7) %>% 
+  process_data()
+
+#Plot
+venn_diag_day1 = ggplot() +
+  # 1. region count layer
+  geom_polygon(aes(X, Y, fill = name, group = id), 
+          data = venn_regionedge(venn_data_day1),
+          show.legend = F) +
+  # 2. set edge layer
+  geom_path(aes(X, Y, group = id), 
+          data = venn_setedge(venn_data_day1), 
+          show.legend = FALSE) +
+  # 3. set label layer
+  geom_text(aes(X, Y, label = name), 
+               data = venn_setlabel(venn_data_day1)) +
+  # 4. region label layer
+  geom_label(aes(X, Y, label = count), 
+                data = venn_regionlabel(venn_data_day1)) +
+  coord_equal() +
+  theme_void() +
+  scale_fill_manual(values = c(Human = "#4DBBD5FF",
+                               Mouse = "#90A4AEFF",
+                               "Human/Mouse" = "red")) +
+  scale_x_continuous(expand = c(0.1, 0.1)) +
+  labs(title = "Day 1") +
+  theme(plot.title = element_text(hjust = 0.55))
+
+venn_diag_day3 = ggplot() +
+  # 1. region count layer
+  geom_polygon(aes(X, Y, fill = name, group = id), 
+          data = venn_regionedge(venn_data_day3),
+          show.legend = F) +
+  # 2. set edge layer
+  geom_path(aes(X, Y, group = id), 
+          data = venn_setedge(venn_data_day3), 
+          show.legend = FALSE) +
+  # 3. set label layer
+  geom_text(aes(X, Y, label = name), 
+               data = venn_setlabel(venn_data_day3)) +
+  # 4. region label layer
+  geom_label(aes(X, Y, label = count), 
+                data = venn_regionlabel(venn_data_day3)) +
+  coord_equal() +
+  theme_void() +
+  scale_fill_manual(values = c(Human = "#4DBBD5FF",
+                               Mouse = "#90A4AEFF",
+                               "Human/Mouse" = "red")) +
+  scale_x_continuous(expand = c(0.1, 0.1)) +
+  labs(title = "Day 3") +
+  theme(plot.title = element_text(hjust = 0.55))
+
+venn_diag_day7 = ggplot() +
+  # 1. region count layer
+  geom_polygon(aes(X, Y, fill = name, group = id), 
+          data = venn_regionedge(venn_data_day7),
+          show.legend = F) +
+  # 2. set edge layer
+  geom_path(aes(X, Y, group = id), 
+          data = venn_setedge(venn_data_day7), 
+          show.legend = FALSE) +
+  # 3. set label layer
+  geom_text(aes(X, Y, label = name), 
+               data = venn_setlabel(venn_data_day7)) +
+  # 4. region label layer
+  geom_label(aes(X, Y, label = count), 
+                data = venn_regionlabel(venn_data_day7)) +
+  coord_equal() +
+  theme_void() +
+  scale_fill_manual(values = c(Human = "#4DBBD5FF",
+                               Mouse = "#90A4AEFF",
+                               "Human/Mouse" = "red")) +
+  scale_x_continuous(expand = c(0.1, 0.1)) +
+  labs(title = "Day 7") +
+  theme(plot.title = element_text(hjust = 0.55))
+
+venn_diag_day1 + venn_diag_day3 +venn_diag_day7 +
+  patchwork::plot_layout(guides = "collect", axes = "collect", axis_titles = "collect")
+
+
+
+```
+
+
+
+
+
+
+
+
+
 
 
 
@@ -4378,7 +4751,7 @@ genes_vary_mouse + genes_vary_human + genes_vary_mouse_human + genes_notvary_mou
 
 By z score
 ```{r fig.height=5, fig.width=10}
-#Positive correlated 
+#Positively correlated 
 positive_correlated = zscore_genes %>%
                     group_by(timepoint) %>%
                     arrange(abs(z_score_human_mouse)) %>% 
@@ -4395,7 +4768,7 @@ positive_correlated %>%
 
 
 ```{r fig.height=5, fig.width=10}
-#Negative correlated
+#Negatively correlated
 a_neg = zscore_genes %>%
   group_by(timepoint) %>% 
   filter(mean_mouse < 0) %>% 
@@ -4434,37 +4807,155 @@ neg_correlated = bind_rows(c_down, c_up) %>%
 
 
 pos_neg_correlated = neg_correlated %>% 
-  mutate(condition = "Negative correlated") %>% 
+  mutate(condition = "Negatively correlated") %>% 
   bind_rows(positive_correlated %>% 
-              mutate(condition = "Positive correlated"))
+              mutate(condition = "Positively correlated"))
 
+
+quantiles <- quantile(abs(degs_pos_neg_all$diff), 
+                    probs = c(0.10, 0.25, 0.5, 0.75, 1), 
+                    na.rm = TRUE)
 degs_pos_neg = pos_neg_correlated%>% 
   filter(human_symbol %in% c(degs_mouse$human_symbol),
          human_symbol %in% c(degs_human$human_symbol)) %>% 
-  filter(abs(diff) < 0.2) %>% 
   arrange(timepoint)  %>% 
-  ungroup()
+  ungroup() %>% 
+  #Split by quantile
+    mutate(
+    Q10 = abs(diff) <= quantiles[1],
+    Q25 = abs(diff) <= quantiles[2],
+    Q50 = abs(diff) <= quantiles[3],
+    Q75 = abs(diff) <= quantiles[4],
+    Q100 = abs(diff) <= quantiles[5]
+  ) %>%
+  #Cumulative
+  pivot_longer(cols = starts_with("Q"),
+               names_to = "quantile_label",
+               values_to = "in_quantile") %>%
+  mutate(quantile_label = fct_relevel(quantile_label, "Q10", "Q25", "Q50", "Q75", "Q100")) %>% 
+  filter(in_quantile) %>%
+  select(-in_quantile)
 
-degs_pos_neg
+
+degs_pos_neg_split = pos_neg_correlated%>% 
+  filter(human_symbol %in% c(degs_mouse$human_symbol),
+         human_symbol %in% c(degs_human$human_symbol)) %>% 
+  arrange(timepoint)  %>% 
+  ungroup() %>% 
+  mutate(quartiles_diff = cut(abs(diff),
+                         breaks = quantile(abs(diff),
+                                           probs = c(0, 0.10, 0.25, 0.5, 0.75, 1),
+                                           na.rm = TRUE),
+                         include.lowest = TRUE,
+                         labels = c("Q10", "Q25", "Q50", "Q75", "Q100")))
 
 
 degs_pos_neg_all_positive = pos_neg_correlated %>% 
   ungroup() %>% 
-  filter(condition == "Positive correlated") %>% 
+  filter(condition == "Positively correlated") %>% 
   anti_join(pos_neg_correlated %>% 
-              filter(condition == "Negative correlated"),
+              filter(condition == "Negatively correlated"),
             by = join_by("human_symbol", "timepoint"))
 
 
 degs_pos_neg_all = degs_pos_neg_all_positive %>% 
   bind_rows(pos_neg_correlated %>% 
-              filter(condition == "Negative correlated"))
+              filter(condition == "Negatively correlated"))
+
+```
+
+N genes by quantile
+```{r fig.height=5, fig.width=10}
+degs_pos_neg_summary_quantiles = degs_pos_neg %>% 
+  group_by(condition, timepoint, quantile_label) %>% 
+  summarize(n = n()) %>% 
+  mutate(condition = str_replace(condition, " ", "\n")) %>% 
+  ungroup() %>% 
+  ggplot() +
+  aes(x = as.character(timepoint),
+      y = n,
+      fill = quantile_label) +
+  facet_wrap(~condition, scales = "free") +
+  geom_col(position = position_dodge2(preserve = "single")) +
+  geom_line(
+    aes(group = interaction(condition, timepoint)),
+    position = position_dodge2(width = 0.9, preserve = "single")
+  ) +
+   scale_fill_manual(values = c(Q10 = "black",
+                                Q25 = "gray25", 
+                                Q50= "gray50",
+                                Q75= "gray75",
+                                Q100 = "gray90")) +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        legend.position = "top",
+        legend.direction = "horizontal",
+        legend.key.width = unit(0.4, 'cm'),
+        legend.key.height = unit(0.6, 'cm'),
+        legend.title = element_text(size = 10, vjust = 0.9),
+        legend.text = element_text(size = 7, vjust = 0.5, hjust = -0.2)) +
+  labs(x = "Timepoint",
+       y = "Total", 
+       fill = "Quantile") +
+  scale_y_continuous(expand = c(0.01, 0.01), n.breaks = 10)
+
+degs_pos_neg_summary_quantiles
+
+```
+
+
+N genes by quantile
+```{r fig.height=5, fig.width=10}
+
+genes_vary_human_all_diff = degs_pos_neg_split %>% 
+  filter(quartiles_diff %in% c("Q10", "Q25", "Q75", "Q100")) %>% 
+  mutate(quartiles_grouped = case_when(
+    quartiles_diff %in% c("Q10", "Q25") ~ "<=Q25",
+    quartiles_diff %in% c("Q75", "Q100") ~ ">=Q75"
+  )) %>% 
+  mutate(
+    condition = if_else(condition == "Positively correlated", "Positive", "Negative"),
+    condition_quantile = paste0(condition, " (D", timepoint, ") ", quartiles_grouped)) %>%
+  select(-condition) %>% 
+  rename(value = diff,
+         genes = human_symbol,
+         condition = condition_quantile)
+
+genes_vary_human_all_diff %>% 
+  group_by(condition, quartiles_grouped) %>% 
+  summarize(n = n()) %>% 
+  # mutate(condition = str_replace(condition, " ", "\n")) %>% 
+  ungroup() %>% 
+  mutate(timepoint = str_extract(condition, "\\(D\\d+\\)")) %>%
+  mutate(timepoint = str_extract(timepoint, "\\d+")) %>% 
+  ggplot() +
+  aes(x = condition,
+      y = n,
+      fill = quartiles_grouped) +
+  facet_wrap(~timepoint, scales = "free") +
+  geom_col(position = position_dodge2(preserve = "single")) +
+  scale_fill_manual(values = c("<=Q25" = "#4DBBD5FF",
+                               ">=Q75" = "gray50")) +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.position = "top",
+        legend.direction = "horizontal",
+        legend.key.width = unit(0.4, 'cm'),
+        legend.key.height = unit(0.6, 'cm'),
+        legend.title = element_text(size = 10, vjust = 0.9),
+        legend.text = element_text(size = 7, vjust = 0.5, hjust = -0.2)) +
+  labs(x = "",
+       y = "Total", 
+       fill = "Quantile") +
+  scale_y_continuous(expand = c(0.01, 0.01), n.breaks = 10)
+
+degs_pos_neg_summary_quantiles
 
 ```
 
 
 ```{r fig.height=4, fig.width=8}
-zscores_correlation_plot = degs_pos_neg_all %>% 
+zscores_correlation_plot_data = degs_pos_neg_all %>% 
   mutate(
     quartiles_diff = cut(abs(diff),
                          breaks = quantile(abs(diff),
@@ -4472,7 +4963,9 @@ zscores_correlation_plot = degs_pos_neg_all %>%
                                            na.rm = TRUE),
                          include.lowest = TRUE,
                          labels = c("Q1", "Q2", "Q3", "Q4")),
-    timepoint_day = paste0("Day ", timepoint)) %>% 
+    timepoint_day = paste0("Day ", timepoint)) 
+
+zscores_correlation_plot = zscores_correlation_plot_data %>% 
 ggplot() +
   aes(x = mean_human,
       y = mean_mouse) +
@@ -4482,7 +4975,7 @@ ggplot() +
              aes(color = abs(diff)),
              # fill = NA,
              # pch = 21,
-             alpha = 0.3
+             alpha = 0.2
              ) +
   #Guide lines
   geom_abline(alpha = 0.5, linetype = 2) +
@@ -4492,22 +4985,26 @@ ggplot() +
   
   #Select Positive
   geom_point(fill = "#4DBBD5FF",
-             color = "#4DBBD5FF",
-             # color = "black",
+             # color = "#4DBBD5FF",
+             color = "white",
              pch = 21,
-             size = 1.5,
+             size = 2, stroke = 0.2,
             data = degs_pos_neg %>% 
+                # filter(abs(diff) < 0.2) %>% 
+              filter(quantile_label == "Q100") %>% 
               mutate(timepoint_day = paste0("Day ", timepoint)) %>% 
-              filter(condition == "Positive correlated")) +
+              filter(condition == "Positively correlated")) +
   #Select Negative
-  geom_point(fill = "#00f0d0",
-             # color = "black",
-             color = "#00f0d0",
+  geom_point(fill = "black",
+             color = "white",
              pch = 21,
-             size = 1.5,
+             size = 2, 
+             stroke = 0.2,
             data = degs_pos_neg %>% 
+                # filter(abs(diff) < 0.2) %>% 
+              filter(quantile_label == "Q100") %>% 
               mutate(timepoint_day = paste0("Day ", timepoint)) %>% 
-              filter(condition == "Negative correlated")) +
+              filter(condition == "Negatively correlated")) +
   
   scale_color_stepsn(
     colours = c("black", "gray20", "gray40", "gray50", "gray60", "gray70", "gray90"),
@@ -4546,8 +5043,70 @@ zscores_correlation_plot
 
 
 
+```{r fig.height=4, fig.width=8}
+degs_pos_neg_split %>% 
+  ungroup() %>% 
+  ggplot() +
+  aes(x = mean_mouse,
+      y = mean_human) +
+  #All points, colored by differences
+  #Select Negative
+  geom_point(aes(fill = quartiles_diff),
+             pch = 21,
+             size = 2, 
+             stroke = 0.2,
+             alpha = 1,
+            data = degs_pos_neg_split %>% 
+              filter(condition == "Positively correlated")) +
+  #Select Negative
+  geom_point(aes(fill = quartiles_diff),
+             pch = 21,
+             size = 2, 
+             stroke = 0.2,
+             alpha = 1,
+            data = degs_pos_neg_split %>% 
+              filter(condition == "Negatively correlated")) +
+  
+  geom_point(fill = "red",
+             pch = 21,
+             size = 2, 
+             stroke = 0.2,
+             alpha = 1,
+            data = degs_pos_neg_split %>% 
+              filter(quartiles_diff == "Q10")) +
 
-```{r fig.height=6, fig.width=6}
+
+  #Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_abline(slope = -1, alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+  scale_fill_manual(values = c("Q10" = "red",
+                               "Q25" = "gray50",
+                               "Q50" = "gray80",
+                               "Q75" = "gray90",
+                               "Q100" = "white")) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(limits = c(-1.5, 1.5)) +
+  facet_wrap(~timepoint) +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        legend.position = "right",
+        legend.direction = "vertical",
+        legend.key.width = unit(0.4, 'cm'),
+        legend.key.height = unit(0.6, 'cm'),
+        legend.title = element_text(size = 10, vjust = 0.9),
+        legend.text = element_text(size = 7, vjust = 0.5, hjust = -0.2)) +
+  labs(title = "Which genes and DEGs vary in both human and mouse?",
+       subtitle = "Differences in mouse to human, by timepoint.In colors, DEGs in human AND mouse, p_adjust < 0.05, |diff| < 0.2. \nPurple = Negatively correlated, Blue = Positively correlated",
+       x = "Human L2FC",
+       y = "Mouse L2FC",
+       fill = "Quantiles")
+```
+
+
+
+```{r fig.height=3, fig.width=10}
 
 zscore_genes_plot_timepoints = zscore_genes %>% 
   mutate(timepoint = as.character(timepoint)) %>% 
@@ -4560,36 +5119,40 @@ zscore_genes_plot_timepoints = zscore_genes %>%
              pch = 21,
              alpha = 0.1) +
   #Select
-  geom_point(aes(fill = as.character(timepoint),
-                 color = as.character(timepoint)),
-             pch = 21,
-            data = degs_pos_neg) +
-    geom_path(aes(group = human_symbol),
+  geom_point(aes(shape = as.character(timepoint)),
+             # pch = 21, 
+             alpha = 1,
+             # stroke = 0.5, 
+             size = 2, 
+             color = "#4DBBD5FF",
+            data =degs_pos_neg %>% 
+              filter(quantile_label %in% c("Q10", "Q50", "Q75"))) +
+  geom_path(aes(group = human_symbol),
             arrow=arrow(length=unit(0.05,"in")), 
             show.legend= FALSE,
             alpha = 0.5,
-            data = degs_pos_neg,
+            data = degs_pos_neg %>% 
+              filter(quantile_label %in% c("Q10", "Q50", "Q75")),
             color = "black") +
-  scale_fill_manual(values = c("1" = "#023e7d",
-                                "3" = "#56cfe1",
-                                "7" = "#80ffdb")) +
-  scale_color_manual(values = c("1" = "#023e7d",
-                                "3" = "#56cfe1",
-                                "7" = "#80ffdb")) +
-  scale_x_continuous(limits = c(-1, 1)) +
-  scale_y_continuous(limits = c(-1, 1)) +
+  # scale_color_manual(values = c("1" = "#4DBBD5",
+  #                               "3" = "#A6DDEA",
+  #                               "7" = "white")) +
+    scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(limits = c(-1.5, 1.5)) +
   geom_abline(alpha = 0.5, linetype = 2) +
   geom_abline(slope = -1, alpha = 0.5, linetype = 2) +
+  facet_wrap(~quantile_label) + 
   theme_vaxgo() +
   theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
          legend.title = element_text(size = 10),
         legend.text = element_text(size = 10)) +
   labs(title = "Are these genes well predicted in most timepoints?",
-       subtitle = "Differences in mouse to human, using DEGs in human AND mouse, p_adjust < 0.05. All timepoints.",
+       subtitle = "Differences in mouse to human, using DEGs in human AND mouse, p_adjust < 0.05.\nAll timepoints. Only Q50 genes.",
        x = "Human L2FC",
        y = "Mouse L2FC",
        fill = "Timepoint",
-       color = "Timepoint")  
+       color = "Timepoint",
+       shape = "Timepoint")  
 
 zscore_genes_plot_timepoints
 
@@ -4644,7 +5207,7 @@ df_selected_degs_time_plot = df_selected_genes_lines_plot %>%
   arrange(human_symbol) %>% 
   select(human_symbol:mean_mouse, n, condition, diff) %>% 
   distinct() %>% 
-  mutate(condition = if_else(sign(mean_human) == sign(mean_mouse), "Positive correlated", "Negative correlated"))
+  mutate(condition = if_else(sign(mean_human) == sign(mean_mouse), "Positively correlated", "Negatively correlated"))
   
 
 df_selected_degs_time_plot
@@ -4850,14 +5413,23 @@ connected_plot_plot
 
 
 
-Connect all plots
+### Connect all plots
 ```{r fig.height=8, fig.width=16}
-((classification_degs_ngenes_plot) | (zscores_correlation_plot/zscore_genes_plot_timepoints) | (df_selected_genes_lines_plot_plot/connected_plot_plot)) +
+mouse_to_human_plots_patch_1 = ((degs_human_mouse_overlap_common_plot) | (zscores_correlation_plot/zscore_genes_plot_timepoints) | (df_selected_genes_lines_plot_plot/connected_plot_plot)) +
   plot_layout(
               widths = c(0.5, 1, 1),
-              guides = "collect",
-              axes = "collect", 
-              axis_titles = "collect")
+              # guides = "collect",
+              # axes = "collect", 
+              # axis_titles = "collect"
+              )
+
+mouse_to_human_plots_patch_1
+
+mouse_to_human_plots_patch_1 %>% 
+  ggsave(filename = here("Figures", "mouse_to_human_plots_patch_1.png"), 
+         width = 16,
+         height = 8)
+
 
 ```
 
@@ -4873,7 +5445,27 @@ organism = "org.Hs.eg.db"
 library(msigdbr)
 library(fgsea)
 
-#All Gene ontologies
+#Scatter plot extracted DEGs
+genes_vary_human_all_diff = degs_pos_neg_split %>% 
+  filter(quartiles_diff %in% c("Q10", "Q25", "Q75", "Q100")) %>% 
+  mutate(quartiles_grouped = case_when(
+    quartiles_diff %in% c("Q10", "Q25") ~ "<=Q25",
+    quartiles_diff %in% c("Q75", "Q100") ~ ">=Q75"
+  )) %>% 
+  mutate(
+    condition = if_else(condition == "Positively correlated", "Positive", "Negative"),
+    condition_quantile = paste0(condition, " (D", timepoint, ") ", quartiles_grouped)) %>%
+  select(-condition) %>% 
+  rename(value = diff,
+         genes = human_symbol,
+         condition = condition_quantile)
+
+#GSEA for GOs
+gseGO_all_diff = gseGO_all(genes_vary_human_all_diff)
+
+
+
+#Covariance extracted
 genes_vary_human_all_cov = genes_vary_human_all %>% 
   select(genes = human_symbol, value = cov) %>% 
   mutate(condition = "Vary in human, mean > 0.1") %>% 
@@ -4904,140 +5496,44 @@ gsea_hallmarks_all_cov= autoGSEA(df = genes_vary_human_all_cov %>% rename(log2fo
          TERM2GENE = msigdbr_df,
          geneset_name = "Hallmarks MSigDB") %>% 
   clean_names()
-```
 
+gsea_hallmarks_all_diff= autoGSEA(df = genes_vary_human_all_diff %>% rename(log2fold_change = value),
+         TERM2GENE = msigdbr_df,
+         geneset_name = "Hallmarks MSigDB") %>% 
+  clean_names()
+```
 
 ```{r fig.width=10, fig.height= 8}
-#ORA Gene ontologies
-oraGO_all_cov_vary_both <- enrichGO(gene = genes_vary_human_all_cov %>% 
-                                      filter(condition == "Vary in Mouse and Human, mean > 0.1") %>% 
-                                      pull(genes),
-                                   OrgDb = org.Hs.eg.db,
-                                   keyType = 'SYMBOL',
-                                   readable = T,
-                                   ont = "BP",
-                                   pAdjustMethod = "BH",
-                                   qvalueCutoff = 0.50) %>% 
-  as_data_frame() %>%
-  clean_names() %>%
-  mutate(log_q = -log10(qvalue),
-         condition = "Vary in Mouse and Human, mean > 0.1") %>%
+
+#ORA DIFF
+oraGO_all_diff_all_conditions <- oraGO_condition(genes_vary_human_all_diff, 
+                                                     orgdb = org.Hs.eg.db) %>%
+  mutate(log_q = -log10(qvalue)) %>%
   arrange(-log_q)
 
-oraGO_all_cov_vary_human <- enrichGO(gene = genes_vary_human_all_cov %>% 
-                                      filter(condition == "Vary in human, mean > 0.1") %>% 
-                                      pull(genes),
-                                   OrgDb = org.Hs.eg.db,
-                                   keyType = 'SYMBOL',
-                                   readable = T,
-                                   ont = "BP",
-                                   pAdjustMethod = "BH",
-                                   qvalueCutoff = 0.50) %>% 
-  as_data_frame() %>%
-  clean_names() %>%
-  mutate(log_q = -log10(qvalue),
-         condition = "Vary in human, mean > 0.1") %>%
-  arrange(-log_q)
+oraGO_all_diff_all_conditions_clean = oraGO_all_diff_all_conditions %>% 
+  mutate(description = str_replace(description, "regulation", "Reg."),
+         description = str_replace(description, "positive", "(+)"),
+         description = str_replace(description, "negative", "(-)")) 
 
-oraGO_all_cov_vary_mouse <- enrichGO(gene = genes_vary_human_all_cov %>% 
-                                      filter(condition == "Vary in Mouse, mean > 0.1") %>% 
-                                      pull(genes),
-                                   OrgDb = org.Hs.eg.db,
-                                   keyType = 'SYMBOL',
-                                   readable = T,
-                                   ont = "BP",
-                                   pAdjustMethod = "BH",
-                                   qvalueCutoff = 0.50) %>% 
-  as_data_frame() %>%
-  clean_names() %>%
-  mutate(log_q = -log10(qvalue),
-         condition = "Vary in mouse, mean > 0.1") %>%
-  arrange(-log_q)
-
-oraGO_all_cov_notvary_human_mouse <- enrichGO(gene = genes_vary_human_all_cov %>% 
-                                      filter(condition == "No variation in Mouse and Human, mean < 0.1") %>% 
-                                      pull(genes),
-                                   OrgDb = org.Hs.eg.db,
-                                   keyType = 'SYMBOL',
-                                   readable = T,
-                                   ont = "BP",
-                                   pAdjustMethod = "BH",
-                                   qvalueCutoff = 0.50) %>% 
-  as_data_frame() %>%
-  clean_names() %>%
-  mutate(log_q = -log10(qvalue),
-         condition = "No variation in Mouse and Human, mean < 0.1") %>%
-  arrange(-log_q)
-
-
-
-oraGO_all_cov_all_conditions = bind_rows(oraGO_all_cov_vary_both, 
-          oraGO_all_cov_vary_human, 
-          oraGO_all_cov_vary_mouse,
-          oraGO_all_cov_notvary_human_mouse)
-
-
-
-#ORA Hallmarks
-
-ora_hallmakrs_vary_both <- enricher(
-  gene = genes_vary_human_all_cov %>% 
-                                      filter(condition == "Vary in Mouse and Human, mean > 0.1") %>% 
-                                      pull(genes), # A vector of your genes of interest
-  pvalueCutoff = 0.50, # Can choose a FDR cutoff
-  pAdjustMethod = "BH", # Method to be used for multiple testing correction
-  TERM2GENE = msigdbr_df) %>% 
-  as.data.frame() %>% 
-  clean_names() %>% 
-  mutate(condition = "Vary in Mouse and Human, mean > 0.1")
-
-ora_hallmakrs_vary_human <- enricher(
-  gene = genes_vary_human_all_cov %>% 
-                                      filter(condition == "Vary in human, mean > 0.1") %>% 
-                                      pull(genes), # A vector of your genes of interest
-  pvalueCutoff = 0.50, # Can choose a FDR cutoff
-  pAdjustMethod = "BH", # Method to be used for multiple testing correction
-  TERM2GENE = msigdbr_df) %>% 
-  as.data.frame() %>% 
-  clean_names() %>% 
-  mutate(condition = "Vary in human, mean > 0.1")
-
-ora_hallmakrs_vary_mouse <- enricher(
-  gene = genes_vary_human_all_cov %>% 
-                                      filter(condition == "Vary in Mouse, mean > 0.1") %>% 
-                                      pull(genes), # A vector of your genes of interest
-  pvalueCutoff = 0.50, # Can choose a FDR cutoff
-  pAdjustMethod = "BH", # Method to be used for multiple testing correction
-  TERM2GENE = msigdbr_df) %>% 
-  as.data.frame() %>% 
-  clean_names() %>% 
-  mutate(condition = "Vary in Mouse, mean > 0.1")
-
-ora_hallmakrs_no_variation <- enricher(
-  gene = genes_vary_human_all_cov %>% 
-                                      filter(condition == "No variation in Mouse and Human, mean < 0.1") %>% 
-                                      pull(genes), # A vector of your genes of interest
-  pvalueCutoff = 0.50, # Can choose a FDR cutoff
-  pAdjustMethod = "BH", # Method to be used for multiple testing correction
-  TERM2GENE = msigdbr_df) %>% 
-  as.data.frame() %>% 
-  clean_names() %>% 
-  mutate(condition = "No variation in Mouse and Human, mean < 0.1")
-
-
-ora_hallmarks_all_cov_all_conditions = bind_rows(ora_hallmakrs_vary_both, 
-          ora_hallmakrs_vary_human, 
-          ora_hallmakrs_vary_mouse,
-          ora_hallmakrs_no_variation) %>% 
-  mutate(log_q = -log(qvalue))
-
+#ORA Hallmarks DIFF
+ora_all_diff_hallmark <- enricher_condition(
+  df = genes_vary_human_all_diff,
+  term2gene_df = msigdbr_df) %>% 
+  mutate(log_p_adjust = -log(p_adjust)) %>% 
+  mutate(description = str_replace_all(description, "_", " ")) %>% 
+  mutate(timepoint = str_extract(condition, "\\(D\\d+\\)")) %>%
+  mutate(timepoint = str_extract(timepoint, "\\d+"))
 
 ```
+
+
+
 
 
 ORA GOs
-```{r fig.height=8, fig.width=8}
-row_clustered = oraGO_all_cov_all_conditions %>% 
+```{r fig.height=5, fig.width=8}
+row_clustered = oraGO_all_diff_all_conditions_clean %>% 
     dplyr::select(condition, description, log_q) %>% 
     distinct() %>% 
     pivot_wider(names_from = "condition",
@@ -5049,54 +5545,69 @@ row_clustered = oraGO_all_cov_all_conditions %>%
     hclust()
 
 
-oraGO_all_cov_all_conditions %>% 
+oraGO_all_diff_all_conditions_clean %>% 
   clean_names() %>% 
-  # filter(p_adjust < 0.01) %>% 
+  # filter(p_adjust <= 0.50) %>%
   filter(description %in% c(row_clustered$labels)) %>% 
-  group_by(condition) %>% 
+  group_by(condition) %>%
   arrange(p_adjust) %>% 
-  slice_head(n = 10) %>% 
+  slice_head(n = 10) %>%
+  ungroup() %>% 
   select(condition, description, log_q, p_adjust, everything()) %>% 
     mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
                               p_adjust <= 0.25 ~ "-",
                               p_adjust <= 0.50 ~ "/",
                               p_adjust <= 0.05 ~ "**",
-                              TRUE ~ "")) %>% 
-  mutate(condition = fct_relevel(condition, "Vary in mouse, mean > 0.1", 
-                                 "Vary in human, mean > 0.1", 
-                                 "Vary in Mouse and Human, mean > 0.1"
-                                 )) %>% 
-  ggplot(aes(x=fct_rev(condition), y = description, fill = log_q)) +
-  geom_point(aes(size = count),
-             pch = 21) +
+                              TRUE ~ ""),
+           condition = fct_relevel(condition,  
+                                   "Positive (D1) <=Q25",
+                                   "Negative (D1) <=Q25",
+                                   "Positive (D1) >=Q75",
+                                   "Negative (D1) <=Q75",
+                                   "Positive (D3) <=Q25",
+                                   "Negative (D3) <=Q25",
+                                   "Positive (D3) >=Q75",
+                                   "Negative (D3) <=Q75",
+                                   "Positive (D7) <=Q25",
+                                   "Negative (D7) <=Q25",
+                                   "Positive (D7) >=Q75",
+                                   "Negative (D7) <=Q75",)) %>% 
+  ggplot(aes(x=condition, y = description, fill = log_q)) +
+  geom_tile(color = "black",
+            size = 0.2, na.rm = F) +
+  # geom_point(aes(size = count),
+  #            pch = 21) +
   geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
-  scale_fill_gradient(low = "white", high = "red") +
+  scale_fill_gradient(low = "white", high = "#4DBBD5FF", ) +
   scale_x_discrete(labels = label_wrap(20)) +
-    theme_minimal() + 
+    theme_vaxgo() +
     theme(axis.text = element_text(color = "black", size = 8) ,
-          axis.line  = element_blank(),
+          axis.line.x  = element_blank(),
+          axis.line.y  = element_blank(),
           axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
           axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
           axis.ticks = element_blank(),
           # panel.grid = element_blank(), 
-          plot.margin = margin(1, 1, 2, 2, unit = "cm"),
-          legend.direction = "vertical",
-          legend.position = "left") +
+          plot.margin = margin(0, 0.5, 0, 2, unit = "cm"),
+          legend.direction = "horizontal",
+          legend.position = "top") +
     labs(x = "",
          y = "",
-         title = "Top 5 enriched genes, ORA") +
+         title = "") +
     scale_y_discrete(position = "right") 
+
+
 
 ```
 
 
 ORA Hallmarks
-```{r fig.height=8, fig.width=8}
-row_clustered = ora_hallmarks_all_cov_all_conditions %>% 
-    dplyr::select(condition, description, log_q) %>% 
+```{r fig.height=8, fig.width=6}
+row_clustered = ora_all_diff_hallmark %>% 
+    dplyr::select(condition, description, log_p_adjust) %>% 
     distinct() %>% 
     pivot_wider(names_from = "condition",
-                values_from= "log_q") %>%
+                values_from= "log_p_adjust") %>%
     column_to_rownames("description") %>% 
     as.matrix() %>% 
     replace(is.na(.), 0) %>% 
@@ -5104,43 +5615,68 @@ row_clustered = ora_hallmarks_all_cov_all_conditions %>%
     hclust()
 
 
-ora_hallmarks_all_cov_all_conditions %>% 
+ora_all_diff_hallmark %>% 
   clean_names() %>% 
-  # filter(p_adjust < 0.01) %>% 
   filter(description %in% c(row_clustered$labels)) %>% 
-  group_by(condition) %>% 
-  arrange(p_adjust) %>% 
-  # slice_head(n = 10) %>% 
-  select(condition, description, log_q, p_adjust, everything()) %>% 
+  ungroup() %>% 
+  select(condition, description, log_p_adjust, p_adjust, everything()) %>% 
     mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
                               p_adjust <= 0.25 ~ "-",
                               p_adjust <= 0.50 ~ "/",
                               p_adjust <= 0.05 ~ "**",
-                              TRUE ~ "")) %>% 
-  mutate(condition = fct_relevel(condition, "Vary in mouse, mean > 0.1", 
-                                 "Vary in human, mean > 0.1", 
-                                 "Vary in Mouse and Human, mean > 0.1"
-                                 )) %>% 
-  ggplot(aes(x=fct_rev(condition), y = description, fill = log_q)) +
-  geom_tile(color = "white",
-            size = 0, na.rm = F) + 
-  geom_text(aes(label = signific), size = 6, vjust = 0.8, color = "black") +
-  scale_fill_gradient(low = "white", high = "red") +
-  scale_x_discrete(labels = label_wrap(20)) +
-    theme_minimal() + 
+                              TRUE ~ ""),
+           condition = fct_relevel(condition,  
+                                   "Positive (D1) <=Q25",
+                                   "Negative (D1) <=Q25",
+                                   "Positive (D1) >=Q75",
+                                   "Negative (D1) <=Q75",
+                                   "Positive (D3) <=Q25",
+                                   "Negative (D3) <=Q25",
+                                   "Positive (D3) >=Q75",
+                                   "Negative (D3) <=Q75",
+                                   "Positive (D7) <=Q25",
+                                   "Negative (D7) <=Q25",
+                                   "Positive (D7) >=Q75",
+                                   "Negative (D7) <=Q75",
+                                   )) %>% 
+  ggplot(aes(x=condition, y = description, fill = log_p_adjust)) +
+  geom_tile(color = "black",
+            size = 0.2, na.rm = F, stat = "identity") +
+  # geom_point(aes(size = count),
+  #            pch = 21) +
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  # scale_fill_gradient(low = "white", high = "#4DBBD5FF") +
+  scale_fill_gradient2(
+        low = "white",     
+        high = "#4DBBD5FF",   
+        n.breaks = 3,
+        oob = scales::squish,
+        limits = c(0, 4),      # fixa o intervalo
+        name = "-Log(q)") +
+  # scale_y_discrete(labels = label_wrap(20)) +
+    theme_vaxgo() +
     theme(axis.text = element_text(color = "black", size = 8) ,
-          axis.line  = element_blank(),
+          # axis.line.x  = element_blank(),
+          axis.line.y  = element_blank(),
           axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
           axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
           axis.ticks = element_blank(),
-          # panel.grid = element_blank(), 
-          plot.margin = margin(1, 1, 2, 2, unit = "cm"),
-          legend.direction = "vertical",
-          legend.position = "left") +
+          strip.background.x = element_rect(fill = "black"),
+          strip.text.x = element_text(color = "white"),
+          panel.grid = element_blank(),
+          plot.margin = margin(0, 0.5, 0, 2, unit = "cm"),
+          legend.direction = "horizontal",
+          legend.position = "top") +
     labs(x = "",
          y = "",
+         title = "") +
+    scale_y_discrete(position = "right") +
+     labs(x = "",
+         y = "",
          title = "ORA, MSigDB Hallmarks") +
-    scale_y_discrete(position = "right") 
+   
+    scale_y_discrete(position = "right")  +
+  facet_grid(~paste("Day", timepoint), scales = "free_x", space = "free")
 
 ```
 
@@ -5208,11 +5744,11 @@ gseGO_all_cov %>%
 GSEA Hallmarks
 
 ```{r fig.height=10, fig.width=10}
-gsea_hallmarks_all_cov$gsea
+gsea_hallmarks_all_diff$gsea
 
 
 
-row_clustered = gsea_hallmarks_all_cov$gsea %>% 
+row_clustered = gsea_hallmarks_all_diff$gsea %>% 
   clean_names() %>% 
     dplyr::select(condition, description, nes) %>% 
     # filter(condition == "All genes, no cutoff, only covariance") %>% 
@@ -5226,7 +5762,7 @@ row_clustered = gsea_hallmarks_all_cov$gsea %>%
     hclust()
 
 
-gsea_hallmarks_all_cov$gsea %>% 
+gsea_hallmarks_all_diff$gsea %>% 
   clean_names() %>% 
   # filter(p_adjust < 0.01) %>% 
   filter(description %in% c(row_clustered$labels)) %>% 
