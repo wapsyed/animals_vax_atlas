@@ -4,7 +4,7 @@ library(here)
 library(ggsci)
 library(janitor)
 library(readr)
-library(explore)
+# library(explore)
 library(maditr)
 library(GEOquery)
 library(Matrix)
@@ -14,29 +14,29 @@ library(celldex)
 library(biomaRt)
 library(org.Hs.eg.db)
 library(plotly)
-library(DESeq2)
+# library(DESeq2)
 library(msigdbr)
-library(ape)
+# library(ape)
 library(GSVA)
 library(sva)
 library(clusterProfiler)
-library(pheatmap)
-library(EnhancedVolcano)
-library(ggbeeswarm)
+# library(pheatmap)
+# library(EnhancedVolcano)
+# library(ggbeeswarm)
 library(tidyverse)
 library(corrr)
 library(ggcorrplot)
-library(FactoMineR)
-library(factoextra)
+# library(FactoMineR)
+# library(factoextra)
 library(esquisse)
-library(corto)
-library(factoextra)
-library(reshape2)
-library(ComplexHeatmap)
+# library(corto)
+# library(factoextra)
+# library(reshape2)
+# library(ComplexHeatmap)
 library(gghighlight)
 library(janitor)
 library(paletteer)
-library(edgeR)
+# library(edgeR)
 library(limma)
 library(mogene10sttranscriptcluster.db)
 library(ggh4x)
@@ -1855,9 +1855,11 @@ GSE120661_metadata = GSE120661_metadata %>%
          condition = paste(treatment, timepoint, tissue, sep = "_"))
 
 
-GSE120661_metadata %>% 
-  saveRDS(here("tables", "GSE120661_metadata.rds"))
+GSE120661_metadata %>% saveRDS(here("tables", "GSE120661_metadata.rds"))
+```
 
+Import
+```{r}
 GSE120661_metadata = readRDS(here("tables", "GSE120661_metadata.rds"))
 
 GSE120661_counts_normalized = read_rds(here("tables", "GSE120661_counts_normalized.rds"))
@@ -1978,27 +1980,60 @@ GSE120661_counts_normalized_matrix = GSE120661_counts_normalized_matrix %>%
 
 GSE120661_counts_normalized_matrix %>% dim()
 
+
+GSE120661_counts_normalized_matrix %>% 
+  saveRDS(here("tables", "GSE120661_counts_normalized_matrix.rds"))
+
+
+GSE120661_samples_pbmc %>% 
+  mutate(sample_id = subject_id,
+         subject_id = str_remove(subject_id, "_\\d+h")) %>% 
+  saveRDS(here("tables", "GSE120661_samples_pbmc.rds"))
+
 ```
 
 
 
 ##Differential gene expression
 ```{r}
-dim(GSE120661_counts_normalized_matrix) #20849   279
 
-dim(AnnotatedDataFrame(GSE120661_samples_pbmc %>% column_to_rownames("geo_sample"))) #279
+#Import
+GSE120661_counts_normalized_matrix = 
+  read_rds(here("tables", "GSE120661_counts_normalized_matrix.rds"))
+GSE120661_samples_pbmc = 
+  read_rds(here("tables", "GSE120661_samples_pbmc.rds"))
+
+
+GSE120661_samples_pbmc_fluad = GSE120661_samples_pbmc %>% 
+  filter(treatment == "Fluad")
+
+GSE120661_counts_normalized_matrix_fluad = GSE120661_counts_normalized_matrix %>% 
+  as.data.frame() %>% 
+  select(c(GSE120661_samples_pbmc_fluad$geo_sample)) %>% 
+  as.matrix()
+
+dim(GSE120661_counts_normalized_matrix_fluad) #20845   35
+
+dim(AnnotatedDataFrame(GSE120661_samples_pbmc_fluad %>% column_to_rownames("geo_sample"))) #35
     
 eset_filtered <- ExpressionSet(
-  assayData = GSE120661_counts_normalized_matrix ,
-  phenoData = AnnotatedDataFrame(GSE120661_samples_pbmc %>% column_to_rownames("geo_sample"))
+  assayData = GSE120661_counts_normalized_matrix_fluad,
+  phenoData = AnnotatedDataFrame(GSE120661_samples_pbmc_fluad %>% column_to_rownames("geo_sample"))
 )
 
-
-design <- model.matrix(~ timepoint * treatment + 0, eset_filtered) # 0 defines the way we compare the samples
+design <- model.matrix(~ condition + 0, eset_filtered) # 0 defines the way we compare the samples
 colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
 
+# Then we estimate the correlation between measurements made on the same subject:
+corfit <- duplicateCorrelation(eset_filtered, 
+                               design = design, 
+                               block = eset_filtered$subject_id)
+corfit$consensus
+# Then this inter-subject correlation is input into the linear model fit:
 #Fit Limma model
-fit <- lmFit(eset_filtered, design)
+fit <- lmFit(eset_filtered, design, 
+             block = eset_filtered$subject_id, 
+             correlation = corfit$consensus)
 colnames(design) %>% 
   as.data.frame() %>% 
   arrange(.)
@@ -2006,16 +2041,19 @@ colnames(design) %>%
 
 ```{r}
 #Test for Fluad
-cont.matrix <- makeContrasts(timepoint4.treatmentFluad - treatmentFluad,
-                             timepoint8.treatmentFluad - treatmentFluad,
-                             timepoint24.treatmentFluad - treatmentFluad,
-                             timepoint48.treatmentFluad - treatmentFluad,
-                             timepoint72.treatmentFluad - treatmentFluad,
-                             timepoint168.treatmentFluad - treatmentFluad,
+cont.matrix <- makeContrasts(conditionFluad_4_PBMC - conditionFluad_0_PBMC,
+                             conditionFluad_8_PBMC - conditionFluad_0_PBMC,
+                             conditionFluad_24_PBMC - conditionFluad_0_PBMC,
+                             conditionFluad_48_PBMC - conditionFluad_0_PBMC,
+                             conditionFluad_72_PBMC - conditionFluad_0_PBMC,
+                             conditionFluad_168_PBMC - conditionFluad_0_PBMC,
                              levels=design)
 
 fit2 <- contrasts.fit(fit, cont.matrix)
 fit2 <- treat(fit2, lfc = 0.0)
+
+
+
 
 #Get DEGs
 ## For one contrast (example)
@@ -2040,12 +2078,12 @@ all_degs = all_contrasts_degs %>%
            str_replace(., "treatment", "")) %>% 
   separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef")) %>% 
   mutate(comparisonRef = str_replace(comparisonRef, "treatment", "Time0")) %>% 
-  mutate(condition = case_when(comparisonA == "Time4.Fluad"	~ "Fluad_4_PBMC",
-                               comparisonA == "Time8.Fluad"	~ "Fluad_8_PBMC",
-                               comparisonA == "Time24.Fluad"	~ "Fluad_24_PBMC",
-                               comparisonA == "Time48.Fluad"	~ "Fluad_48_PBMC",
-                               comparisonA == "Time72.Fluad"	~ "Fluad_72_PBMC",
-                               comparisonA == "Time168.Fluad"	~ "Fluad_168_PBMC",
+  mutate(condition = case_when(comparisonA == "conditionFluad_4_PBMC"	~ "Fluad_4_PBMC",
+                               comparisonA == "conditionFluad_8_PBMC"	~ "Fluad_8_PBMC",
+                               comparisonA == "conditionFluad_24_PBMC"	~ "Fluad_24_PBMC",
+                               comparisonA == "conditionFluad_48_PBMC"	~ "Fluad_48_PBMC",
+                               comparisonA == "conditionFluad_72_PBMC"	~ "Fluad_72_PBMC",
+                               comparisonA == "conditionFluad_168_PBMC"	~ "Fluad_168_PBMC",
                                T~comparisonA)) %>% 
   select(condition, everything())
 	
@@ -2072,12 +2110,12 @@ all_degs_annotated =  all_degs %>%
   clean_names()
 
 #Stats
-## 20,849 probes
+## 20,845 probes
 all_degs_annotated %>% 
   select(probe) %>% 
   distinct()
 
-## 21,408 symbols
+## 21,423 symbols
 all_degs_annotated %>% 
   select(mgi_symbol) %>% 
   distinct()
@@ -2136,10 +2174,10 @@ all_degs_annotated_fit %>%
   distinct()
 
 
-all_degs_annotated %>% 
+all_degs_annotated %>%
   saveRDS(here("tables", "Fluad_all_degs_annotated.rds"))
 
-all_degs_annotated_fit %>% 
+all_degs_annotated_fit %>%
   saveRDS(here("tables", "Fluad_all_degs_annotated_FIT.rds"))
 
 ```
@@ -2193,7 +2231,8 @@ all_degs_annotated_fit %>%
     plot.margin = margin(1, 1, 0, 0, "cm")
   ) +
   labs(x = "Time (h)",
-       y = "LogFold-Change")
+       y = "LogFold-Change",
+       title = "TLR8")
 
 
 all_degs_annotated %>% 
@@ -2335,7 +2374,7 @@ fit_example
 
 
 Check gene by gene
-14,401 entrez IDs
+15613 entrez IDs
 ```{r}
 
 fit_example = readRDS(here("FIT_Mouse2man", "Fluad_24_PBMC_FIT_mouse_results.rds"))
@@ -2406,7 +2445,7 @@ fit_example_geneA %>%
   ggplot() +
   aes(x = human_symbol,
       y = value) +
-  geom_point(aes(color = measure,
+  geom_col(aes(fill = measure,
                  shape = timepoint), position = position_dodge2(width = 0.2)) +
   theme_light() +
   theme(
@@ -2570,7 +2609,7 @@ distributions_df %>%
 
 
 
-###Loops
+### Loop for every time point
 ```{r}
 
 all_degs_fit2 = read_csv(here("tables", "Fluad_PBMC_FIT_mouse_allTimePoints.csv"))
@@ -2649,7 +2688,8 @@ fit_example_results = fit_results_combined %>%
   select(condition, everything()) %>% 
   pivot_longer(cols = c(mouse_effect_size:fit_prediction),
                names_to = "measure", 
-               values_to = "value")
+               values_to = "value") %>% 
+  filter(measure != "mouse_effect_size")
 
 fit_example_mouse = all_degs_annotated_fit %>% 
   rename(mouse_entrez = entrezgene_id_mouse,
@@ -2680,14 +2720,16 @@ fit_example_results_ready = fit_example_mouse %>%
   bind_rows(fit_example_results) %>% 
   arrange(mouse_symbol) %>% 
   select(condition, everything()) %>% 
-  select(!c(adj_p_val, p_value, description)) 
+  select(!c(adj_p_val, p_value, description)) %>% 
+  mutate(ci_size = ci_high - ci_low)
 
-fit_example_results %>% 
+fit_example_results_ready %>% 
   arrange(mouse_entrez)
 ```
 
 
 ```{r fig.height=5, fig.width=5}
+#Get top 5 genes
 fit_example_geneA_top5 = fit_example_results_ready %>% 
            filter(measure == "mouse_effect_size",
                   is.na(fit_percentile)) %>% 
@@ -2703,11 +2745,10 @@ fit_example_geneA_top5
 
 
 ```{r fig.height=4, fig.width=8}
-
 GSE120661_metadata = readRDS(here("tables", "GSE120661_metadata.rds"))
 
 
-fit_example_topgenes_plot = fit_example_results_ready%>% 
+fit_example_topgenes_plot_data = fit_example_results_ready%>% 
   inner_join(GSE120661_metadata %>% 
                mutate(timepoint = as.character(timepoint) %>% 
                         as.integer()) %>% 
@@ -2715,7 +2756,9 @@ fit_example_topgenes_plot = fit_example_results_ready%>%
                select(-animal_replicate) %>% 
                distinct(), by = "condition") %>% 
   filter(human_symbol %in% c(fit_example_geneA_top5)) %>% 
-  mutate(timepoint = timepoint/24) %>% 
+  mutate(timepoint = timepoint/24)
+
+fit_example_topgenes_plot_data %>% 
   ggplot() +
   aes(x = timepoint,
       y = value) +
@@ -2774,9 +2817,8 @@ fit_example_topgenes_plot = fit_example_results_ready%>%
        y = "LogFold-Change",
        title = "Prediction - Influenza, Fluad Vaccine")
 
-fit_example_topgenes_plot
 
-
+#Check whether the value is inside the CI
 fit_example_results_ready %>% 
   filter(measure == "fit_prediction") %>% 
   mutate(value =  value %>% round(3),
@@ -3148,7 +3190,7 @@ gsea_results_immuneGO_Manual_human
 gsea_results_immuneGO_Manual_human %>% 
     saveRDS(here("GSEA_ORA", "gsea_results_immuneGO_BTM_Human_Manual.rds"))
 ```
-
+Import
 ```{r}
 
 gsea_results_immuneGO_Manual_Mouse = read_rds(here("GSEA_ORA", "gsea_results_immuneGO_Manual_Mouse.rds"))
@@ -3213,7 +3255,7 @@ cluster_by_day <- function(df, day_column = "day", condition_column = "condition
 
 
 Specific processes
-```{r fig.height=15, fig.width=12}
+```{r fig.height=15, fig.width=10}
 library(ggdendro)
 library(cowplot)
 
@@ -3295,13 +3337,17 @@ dotplot = df %>%
   geom_tile(color = "white",
             size = 0, na.rm = F) + 
   geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
-  theme_minimal() + 
-  theme(axis.text = element_text(color = "black", size = 8) ,
-        axis.line  = element_blank(),
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-        axis.ticks = element_blank(),
-        legend.direction = "horizontal",
-        legend.position = "bottom") +
+  theme_vaxgo() +
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line.x  = element_line(color = "black"),
+          axis.line.y  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
+          axis.ticks = element_blank(),
+          # panel.grid = element_blank(), 
+          plot.margin = margin(0, 0.5, 0, 0, unit = "cm"),
+          legend.direction = "horizontal",
+          legend.position = "top") +
   labs(x = "",
        y = "") +
   scale_fill_gradient2(
@@ -3424,13 +3470,17 @@ dotplot = df %>%
             size = 0,
             na.rm = F) + 
   geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
-  theme_minimal() + 
-  theme(axis.text = element_text(color = "black", size = 8) ,
-        axis.line  = element_blank(),
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-        axis.ticks = element_blank(),
-        legend.direction = "horizontal",
-        legend.position = "bottom") +
+  theme_vaxgo() +
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line.x  = element_line(color = "black"),
+          axis.line.y  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
+          axis.ticks = element_blank(),
+          # panel.grid = element_blank(), 
+          plot.margin = margin(0, 0.5, 0, 0, unit = "cm"),
+          legend.direction = "horizontal",
+          legend.position = "top") +
   labs(x = "",
        y = "") +
   scale_fill_gradient2(
@@ -3476,7 +3526,7 @@ library(cowplot)
 
 df =  gsea_results_immuneGO_Manual_human %>% 
   clean_names() %>% 
-  filter(p_adjust <= 0.50) %>%
+  filter(p_adjust <= 1) %>%
   filter(!str_detect(description, "\\(M"),#Filter out BTM IDs
          !str_detect(description, "[a-z]"),
          !str_detect(description, "PRR|APP")) %>% #Filter out main processes (Upper case)
@@ -3492,7 +3542,7 @@ df$condition %>% unique()
 ```
 
 
-```{r fig.height=8, fig.width=6}
+```{r fig.height=8, fig.width=7}
 row_clustered = df %>% 
   dplyr::select(condition, id, nes) %>% 
   distinct() %>% 
@@ -3552,20 +3602,24 @@ dotplot = df %>%
          id = fct_rev(id)) %>% 
     mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
                               p_adjust <= 0.25 ~ "-",
-                              # p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.50 ~ "0",
                               p_adjust <= 0.05 ~ "**",
                               TRUE ~ "")) %>% 
   ggplot(aes(x=condition, y = id, fill = nes, size = logq)) +
   geom_tile(color = "white",
             size = 0) + 
   geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
-  theme_minimal() + 
-  theme(axis.text = element_text(color = "black", size = 8) ,
-        axis.line  = element_blank(),
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-        axis.ticks = element_blank(),
-        legend.direction = "horizontal",
-        legend.position = "bottom") +
+  theme_vaxgo() +
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          axis.line.x  = element_line(color = "black"),
+          axis.line.y  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
+          axis.ticks = element_blank(),
+          # panel.grid = element_blank(), 
+          plot.margin = margin(0, 0, 0, 0, unit = "cm"),
+          legend.direction = "horizontal",
+          legend.position = "top") +
   labs(x = "",
        y = "") +
   scale_fill_gradient2(
@@ -3587,7 +3641,7 @@ patch_immune_main_human_ImmuneGO =
   plot_layout(heights = c(0.1, 0.1, 5),
               guides = 'collect') +
   plot_annotation(title = "GSEA ImmuneGO_Human, Main processes",
-                  subtitle = "NES, padj<=0.25",
+                  subtitle = "NES, no p_adj cutoff",
                   theme = theme(legend.position = "bottom",
                                 plot.margin = margin(0.5, 0, 0.5, 1, unit = "cm"),
                                 legend.direction = "horizontal", 
@@ -3610,6 +3664,7 @@ idorder = c(
   "LEUKOCYTES",
   "COMPLEMENT",
   "INNATE IMMUNE SYSTEM",
+  "INNATE IMS",
   "INNATE",
   "INFLAMMATION",
   "SIGNALING",
@@ -3625,17 +3680,21 @@ idorder = c(
   "DENDRITIC CELL",
   "NK CELL",
   "ADAPTIVE IMMUNE SYSTEM",
+  "ADAPTIVE IMS",
   "ADAPTIVE",
   "LYMPHOCYTE",
   "CELLULAR ADAPTIVE IMMUNE SYSTEM",
+  "CELLULAR ADAP. IMS",
   "CELULLAR ADAP.",
   "T CELL",
   "HUMORAL ADAPTIVE IMMUNE SYSTEM",
   "HUMORAL ADAP.",
+  "HUMORAL ADAP. IMS",
   "B CELL",
-  "IMMUNOGLOBULINS (M156.0)"
-  # "IMMUNOGLOBULIN MEDIATED RESPONSE",
-  # "IMMUNOGLOBULIN\nMEDIATED RESPONSE"
+  "IMMUNOGLOBULINS (M156.0)",
+  "IMMUNOGLOBULIN MEDIATED RESPONSE",
+  "IMMUNOGLOBULIN\nMEDIATED RESPONSE",
+  "Ig MEDIATED RESPONSE"
 )
 
 df_day0 = df %>% 
@@ -3647,24 +3706,38 @@ df_day0 = df %>%
 ```
 
 
-```{r fig.height=8, fig.width=10}
-df %>% 
+```{r fig.height=10, fig.width=6}
+lineplot_gsea_timepoint_data = df %>% 
   bind_rows(df_day0) %>%
-  mutate(day = fct_relevel(day, "0", "1","3", "7")) %>% 
-  mutate(id = fct_relevel(id, c(idorder))) %>% 
+  mutate(day = fct_relevel(day, "0", "1","3", "7"),
+         timepoint = as.numeric(as.character(day))) %>% 
+  mutate(id = str_replace(id, "IMMUNE SYSTEM", "IMS"),
+         id = str_replace(id, "IMMUNOGLOBULIN", "Ig"),
+         id = str_replace(id, "ADAPTIVE", "ADAP.")) %>% 
+  mutate(id = fct_relevel(id, c(idorder))) 
+
+lineplot_gsea_timepoint_data %>% 
   ggplot() +
-  aes(x = day, y = nes, group = model) +
+  aes(x = timepoint, y = nes, group = model) +
   geom_line(aes(color = model,
                 group = model),
             size = 1,
-            alpha = 1) +
+            alpha = 1, show.legend = F) +
   geom_point(aes(
                  fill = model,
                  ),
              size = 2,
              pch = 21,
              color = "black",
-             data = df %>% filter(p_adjust <= 0.25)
+             data = lineplot_gsea_timepoint_data %>% filter(p_adjust > 0.10 & p_adjust <= 0.25)
+            ) +  
+  geom_point(aes(
+                 fill = model,
+                 ),
+             size = 2,
+             pch = 22,
+             color = "black",
+             data = lineplot_gsea_timepoint_data %>% filter(p_adjust <= 0.10), show.legend = F
             ) +
   scale_fill_manual(values = c(
     "Human"  = "#4DBBD5FF",
@@ -3677,11 +3750,12 @@ df %>%
     "FIT"   = "#CE1800FF"
   )) +
   scale_y_continuous(n.breaks = 5) +
-  scale_x_discrete(expand = c(0.01, 0.01)) +
-   theme_vaxgo() +
+  scale_x_continuous(expand = c(0.02, 0.02), breaks = c(0, 1, 3, 7)) +
+  theme_vaxgo() +
   theme(axis.text = element_text(color = "black", size = 8) ,
-        axis.text.x = element_text(angle = 0, vjust = 1, hjust=0.5),
-        # axis.ticks = element_blank(),
+        axis.text.x = element_text(angle = 0, vjust = 1, hjust=0.5), 
+        strip.text.x = element_text(size = 10),
+        axis.ticks = element_line(color = "black"), 
         legend.direction = "horizontal",
         legend.position = "bottom") +
   labs(x = "Day",
@@ -3691,83 +3765,14 @@ df %>%
        alpha = "", 
        subtitle = "Processes with <= 0.25 are depicted with points.",
        title = "Temporal dynamics of immunization, GSEA of Main immune processes (BTM + ImmuneGO)") +
-    facet_wrap(~id, 
-               # scales = "free"
-               )
+    facet_wrap(~id, ncol = 3)
 ```
-
-
-```{r}
-scale_color_manual(values = c(ann_vaxsig_colors$type, 
-                                ann_vaxsig_colors$target_pathogen_disease,
-                                ann_vaxsig_colors$dose,
-                                "SARS-COV-2/BBIBP" = "#00A087FF",
-                                "SARS-COV-2/ZF2001" = "#8491B4FF",
-                                "SARS-COV-2/BNT" = "#4DBBD5FF",
-                                "SARS-COV-2/MO" = "#72ddf7",
-                                "SARS-COV-2/CHAD" = "#3C5488FF",
-                                "SARS-COV-2/ChAd (V1)" = "#3C5488FF",
-                               "SARS-COV-2/ChAd (V2)" = "#3C5488FF",
-                               "SARS-COV-2/ChAd-BNT" = "#00A087FF",
-                                "SARS-COV-2/I" = "red",
-                                "SARS-COV-2/I Hospital" = "red",
-                                "SARS-COV-2/I-I" = "purple",
-                                "SARS-COV-2/BNT-I" = "pink",
-                                "SARS-COV-2/BNT-I Hospital" = "pink",
-                                "SARS-COV-2/I-BNT" = "#Af101e")) + 
-  # Manual shape scale
-    scale_shape_manual(values = c("0" = 8, 
-                                "1" = 16, 
-                                "2" = 17, 
-                                "3" = 15)) +
-  theme_minimal()+
-  # ggthemes::theme_few() +
-  scale_x_continuous(breaks = c(0, 3, 7, 14, 21, 28, 30)) +
-  guides(fill=guide_legend(ncol=1),
-         color = guide_legend(ncol = 1)) +
-  theme(legend.position = "right",
-        strip.text.x = element_text(color = "black", 
-                                    size = 10,
-                                    face = "bold"), 
-        strip.text.y = element_text(color = "black", 
-                                    size = 10, 
-                                    hjust = 0,
-                                    angle = 360,
-                                    face = "bold"), 
-        axis.text.x = element_text(color = "black", size = 10),
-        axis.text.y = element_text(vjust = 0.5, size = 10, color = "black"),
-        axis.line = element_line(size = 1, colour = "black", linetype=1),
-        axis.ticks = element_line(size = 0.5, color = "black"),
-        panel.grid.major.y = element_line(size = 0.5, 
-                                    linetype = 2,
-                                    color = "gray75"),
-        panel.grid.minor.y = element_line(size = 0, 
-                                    linetype = 2,
-                                    color = "gray75"),
-        panel.grid.major.x = element_line(size = 0.5, 
-                                    linetype = 2,
-                                    color = "gray75"),
-        panel.grid.minor.x = element_line(size = 0, 
-                                    linetype = 2,
-                                    color = "gray75")) +
-  labs(x = "Day",
-       y = "NES",
-       color = "Pathogen",
-       shape = "Dose",
-       alpha = "COVID-19 or Other",
-       title = "Temporal dynamics of immunization, GSEA of Immune processes (BTM + ImmuneGO)") +
-    facet_grid(~id~type_grouped, 
-               scales = "free_x")
-
-all_together
-```
-
 
 
 
 
 ##### Specific processes
-```{r fig.height=15, fig.width=8}
+```{r fig.height=15, fig.width=6}
 library(ggdendro)
 library(cowplot)
 
@@ -3864,13 +3869,17 @@ dotplot = df %>%
   geom_tile(color = "white",
             size = 0) + 
   geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
-  theme_minimal() + 
+  theme_vaxgo()+
   theme(axis.text = element_text(color = "black", size = 8) ,
-        axis.line  = element_blank(),
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-        axis.ticks = element_blank(),
-        legend.direction = "horizontal",
-        legend.position = "bottom") +
+          axis.line.x  = element_line(color = "black"),
+          axis.line.y  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
+          axis.ticks = element_blank(),
+          # panel.grid = element_blank(), 
+          plot.margin = margin(0, 0, 0, 0, unit = "cm"),
+          legend.direction = "horizontal",
+          legend.position = "top") +
   labs(x = "",
        y = "") +
   scale_fill_gradient2(
@@ -3899,17 +3908,19 @@ patch_immune_main_human_ImmuneGO =
                                 legend.box = "horizontal"))
 
 
+patch_immune_main_human_ImmuneGO
+
 patch_immune_main_human_ImmuneGO %>%
   ggsave(filename = here("Figures", "GSEA_ImmuneGO_Human_Specific.png"),
          width = 8,
          height = 15)
-patch_immune_main_human_ImmuneGO
+
 ```
 
 #### BTM 
 
 ##### Specific processes
-```{r fig.height=12, fig.width=8}
+```{r fig.height=15, fig.width=6}
 library(ggdendro)
 library(cowplot)
 
@@ -3937,10 +3948,6 @@ df_neg = df %>%
 
 df = bind_rows(df_p10,
             df_neg)
-
-
-
-
 
 row_clustered = df %>% 
   dplyr::select(condition, id, nes) %>% 
@@ -4008,13 +4015,17 @@ dotplot = df %>%
   geom_tile(color = "white",
             size = 0) + 
   geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
-  theme_minimal() + 
+  theme_vaxgo()+
   theme(axis.text = element_text(color = "black", size = 8) ,
-        axis.line  = element_blank(),
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-        axis.ticks = element_blank(),
-        legend.direction = "horizontal",
-        legend.position = "bottom") +
+          axis.line.x  = element_line(color = "black"),
+          axis.line.y  = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
+          axis.ticks = element_blank(),
+          # panel.grid = element_blank(), 
+          plot.margin = margin(0, 0, 0, 0, unit = "cm"),
+          legend.direction = "horizontal",
+          legend.position = "top") +
   labs(x = "",
        y = "") +
   scale_fill_gradient2(
@@ -4042,12 +4053,12 @@ patch_immune_main_human_BTM =
                                 legend.direction = "horizontal", 
                                 legend.box = "horizontal"))
 
-
+patch_immune_main_human_BTM
 patch_immune_main_human_BTM %>%
   ggsave(filename = here("Figures", "GSEA_BTM_Human_Specific.png"),
-         width = 8,
-         height = 12)
-patch_immune_main_human_BTM
+         width = 6,
+         height = 15)
+
 ```
 
 
@@ -4119,9 +4130,10 @@ mutate(pval_cuts = case_when(
              color = "#90A4AEFF") +
   geom_smooth(method = 'lm', se = TRUE, color = "black") +
   geom_vline(xintercept = 0, linetype = 1, size = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = 2, size = 0.5, alpha = 0.5) +
   facet_grid(~timepoint~pval_cuts, scales = "free_x") +
-    scale_x_continuous(n.breaks = 4) +
-  scale_y_continuous(n.breaks = 4) +
+    scale_x_continuous(n.breaks = 4, limits = c(-2,2)) +
+  scale_y_continuous(n.breaks = 4, limits =  c(-2, 2)) +
   theme_vaxgo() +
   labs(title ="Mouse vs Human gene expression") +
     theme(
@@ -4154,8 +4166,9 @@ mutate(pval_cuts = case_when(
              color = "#CE1800FF") +
   geom_smooth(method = 'lm', se = TRUE, color = "black") +
     geom_vline(xintercept = 0, linetype = 1, size = 0.5) +
-    scale_x_continuous(n.breaks = 4) +
-  scale_y_continuous(n.breaks = 4) +
+  geom_abline(slope = 1, intercept = 0, linetype = 2, size = 0.5, alpha = 0.5) +
+    scale_x_continuous(n.breaks = 4, limits = c(-2,2)) +
+  scale_y_continuous(n.breaks = 4, limits =  c(-2, 2)) +
   scale_color_brewer(direction = -1, palette = "Greys") +
   scale_fill_brewer(direction = -1, palette = "Greys") +
   theme_vaxgo() +
@@ -4190,11 +4203,12 @@ mutate(pval_cuts = case_when(
              size = 1,
              show.legend = F,
              color = "#3182bd") +
-    geom_vline(xintercept = 0, linetype = 1, size = 0.5) +
+  geom_vline(xintercept = 0, linetype = 1, size = 0.5) + 
+  geom_abline(slope = 1, intercept = 0, linetype = 2, size = 0.5, alpha = 0.5) +
   geom_smooth(method = 'lm', se = TRUE, color = "black") +
   facet_grid(~timepoint~pval_cuts, scales = "free_x") +
-    scale_x_continuous(n.breaks = 4) +
-  scale_y_continuous(n.breaks = 4) +
+    scale_x_continuous(n.breaks = 4, limits = c(-2,2)) +
+  scale_y_continuous(n.breaks = 4, limits =  c(-2, 2)) +
   theme_vaxgo() +
   labs(title ="FIT prediction vs Mouse") +
     theme(
@@ -4213,11 +4227,11 @@ pairwise_human_fit_test_corr_plots = human_vs_mouse_corr /
   plot_layout(guides =  "collect") +
   plot_annotation(theme = theme(legend.position = "top"))
 
-
+pairwise_human_fit_test_corr_plots
 pairwise_human_fit_test_corr_plots %>% 
   ggsave(filename = here("Figures", "pairwise_human_fit_test_corr_plots.png"), width = 6, height = 12)
 
-pairwise_human_fit_test_corr_plots
+
 ```
 
 
@@ -4344,9 +4358,7 @@ classification_degs_ngenes_plot
 
 Get overlap
 ```{r}
-degs_human_mouse_overlap_barplot 
-
-degs_human_mouse_overlap_genes_summary %>% 
+degs_human_mouse_overlap_barplot = degs_human_mouse_overlap_genes_summary %>% 
   filter(condition %in% c("Mouse and Human", 
                           "Human All DEGs",
                           "Mouse All DEGs"))  %>% 
@@ -4616,33 +4628,33 @@ zscore_genes = pairwise_human_fit_test %>%
 ```{r fig.height=8, fig.width=8}
 
 genes_vary_human_all = cov_genes %>% 
-  filter(abs(mean_human_time) >= 0.1,
-        abs(mean_mouse_time) <= 0.1) %>% 
+  filter(abs(mean_human) >= 0.1,
+        abs(mean_mouse) <= 0.1) %>% 
   arrange(-abs(cov))
 
 genes_vary_mouse_all = cov_genes %>% 
-  filter(abs(mean_mouse_time) >= 0.1,
-                abs(mean_human_time) <= 0.1) %>% 
+  filter(abs(mean_mouse) >= 0.1,
+                abs(mean_human) <= 0.1) %>% 
   arrange(-abs(cov))
 
 genes_vary_human_mouse_all = cov_genes %>% 
-  filter(abs(mean_human_time) >= 0.1,
-         abs(mean_mouse_time) >= 0.1) %>% 
+  filter(abs(mean_human) >= 0.1,
+         abs(mean_mouse) >= 0.1) %>% 
   arrange(-abs(cov))
 
 genes_not_vary_human_mouse_all = cov_genes %>% 
-   filter(abs(mean_human_time) <= 0.1, 
-          abs(mean_mouse_time) <= 0.1) %>%  
+   filter(abs(mean_human) <= 0.1, 
+          abs(mean_mouse) <= 0.1) %>%  
   arrange(-abs(cov))
 
-cov_genes %>% filter(abs(mean_human_time) > 0.1) #3,962
+cov_genes %>% filter(abs(mean_human) > 0.1) #3,962
 cov_genes %>% filter(abs(mean_human_time) > 0.2) #2191
 
-cov_genes %>% filter(abs(mean_mouse_time) > 0.1) #3363
-cov_genes %>% filter(abs(mean_mouse_time) > 0.2) #1631
+cov_genes %>% filter(abs(mean_mouse) > 0.1) #3363
+cov_genes %>% filter(abs(mean_mouse) > 0.2) #1631
 
-cov_genes %>% filter(abs(mean_mouse_time) < 0.1) #3,010
-cov_genes %>% filter(abs(mean_mouse_time) < 0.2) #4742
+cov_genes %>% filter(abs(mean_mouse) < 0.1) #3,010
+cov_genes %>% filter(abs(mean_mouse) < 0.2) #4742
 
 
 
@@ -4750,6 +4762,7 @@ genes_vary_mouse + genes_vary_human + genes_vary_mouse_human + genes_notvary_mou
 
 
 By z score
+Get positively and negatively correlated genes and discretize by quantile
 ```{r fig.height=5, fig.width=10}
 #Positively correlated 
 positive_correlated = zscore_genes %>%
@@ -4921,7 +4934,7 @@ genes_vary_human_all_diff = degs_pos_neg_split %>%
          genes = human_symbol,
          condition = condition_quantile)
 
-genes_vary_human_all_diff %>% 
+degs_pos_neg_summary_quantiles_best_worst = genes_vary_human_all_diff %>% 
   group_by(condition, quartiles_grouped) %>% 
   summarize(n = n()) %>% 
   # mutate(condition = str_replace(condition, " ", "\n")) %>% 
@@ -4932,7 +4945,9 @@ genes_vary_human_all_diff %>%
   aes(x = condition,
       y = n,
       fill = quartiles_grouped) +
-  facet_wrap(~timepoint, scales = "free") +
+  facet_wrap(~timepoint, 
+             scales = "free_x"
+             ) +
   geom_col(position = position_dodge2(preserve = "single")) +
   scale_fill_manual(values = c("<=Q25" = "#4DBBD5FF",
                                ">=Q75" = "gray50")) +
@@ -4949,7 +4964,7 @@ genes_vary_human_all_diff %>%
        fill = "Quantile") +
   scale_y_continuous(expand = c(0.01, 0.01), n.breaks = 10)
 
-degs_pos_neg_summary_quantiles
+degs_pos_neg_summary_quantiles_best_worst
 
 ```
 
@@ -5047,10 +5062,10 @@ zscores_correlation_plot
 degs_pos_neg_split %>% 
   ungroup() %>% 
   ggplot() +
-  aes(x = mean_mouse,
-      y = mean_human) +
+  aes(x = mean_human,
+      y = mean_mouse) +
   #All points, colored by differences
-  #Select Negative
+  #Select positive
   geom_point(aes(fill = quartiles_diff),
              pch = 21,
              size = 2, 
@@ -5067,13 +5082,13 @@ degs_pos_neg_split %>%
             data = degs_pos_neg_split %>% 
               filter(condition == "Negatively correlated")) +
   
-  geom_point(fill = "red",
-             pch = 21,
-             size = 2, 
-             stroke = 0.2,
-             alpha = 1,
-            data = degs_pos_neg_split %>% 
-              filter(quartiles_diff == "Q10")) +
+  # geom_point(fill = "red",
+  #            pch = 21,
+  #            size = 2, 
+  #            stroke = 0.2,
+  #            alpha = 1,
+  #           data = degs_pos_neg_split %>% 
+  #             filter(quartiles_diff == "Q10")) +
 
 
   #Guide lines
@@ -5415,7 +5430,7 @@ connected_plot_plot
 
 ### Connect all plots
 ```{r fig.height=8, fig.width=16}
-mouse_to_human_plots_patch_1 = ((degs_human_mouse_overlap_common_plot) | (zscores_correlation_plot/zscore_genes_plot_timepoints) | (df_selected_genes_lines_plot_plot/connected_plot_plot)) +
+mouse_to_human_plots_patch_1 = ((degs_human_mouse_overlap_common_plot/degs_pos_neg_summary_quantiles_best_worst) | (zscores_correlation_plot/zscore_genes_plot_timepoints) | (df_selected_genes_lines_plot_plot/connected_plot_plot)) +
   plot_layout(
               widths = c(0.5, 1, 1),
               # guides = "collect",
@@ -5640,7 +5655,7 @@ ora_all_diff_hallmark %>%
                                    "Negative (D7) <=Q75",
                                    )) %>% 
   ggplot(aes(x=condition, y = description, fill = log_p_adjust)) +
-  geom_tile(color = "black",
+  geom_tile(color = "black", 
             size = 0.2, na.rm = F, stat = "identity") +
   # geom_point(aes(size = count),
   #            pch = 21) +
@@ -5743,7 +5758,7 @@ gseGO_all_cov %>%
 
 GSEA Hallmarks
 
-```{r fig.height=10, fig.width=10}
+```{r fig.height=5, fig.width=5}
 gsea_hallmarks_all_diff$gsea
 
 
@@ -5764,7 +5779,7 @@ row_clustered = gsea_hallmarks_all_diff$gsea %>%
 
 gsea_hallmarks_all_diff$gsea %>% 
   clean_names() %>% 
-  # filter(p_adjust < 0.01) %>% 
+  filter(p_adjust < 0.50) %>%
   filter(description %in% c(row_clustered$labels)) %>% 
   group_by(condition) %>% 
   arrange(p_adjust) %>% 
@@ -5780,14 +5795,17 @@ gsea_hallmarks_all_diff$gsea %>%
             size = 0, na.rm = F) + 
   geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
   scale_y_discrete(labels = label_wrap(15)) +
-    theme_minimal() + 
+    theme_vaxgo() +
     theme(axis.text = element_text(color = "black", size = 8) ,
-          axis.line  = element_blank(),
+          # axis.line.x  = element_blank(),
+          axis.line.y  = element_blank(),
           axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-          axis.text.y = element_text(angle = 0, vjust = 1, hjust=1),
+          axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
           axis.ticks = element_blank(),
-          panel.grid = element_blank(), 
-          plot.margin = margin(1, 1, 1, 4, unit = "cm"),
+          strip.background.x = element_rect(fill = "black"),
+          strip.text.x = element_text(color = "white"),
+          panel.grid = element_blank(),
+          plot.margin = margin(0, 0.5, 0, 2, unit = "cm"),
           legend.direction = "horizontal",
           legend.position = "top") +
     labs(x = "",
