@@ -10464,14 +10464,29 @@ pairwise_human_fit_test_corr_plots_immune
 # Classification model performance
 
 ```{r}
-#Define cutoffs
-padj_cutoffs <- c(0.05, 0.10, 0.20, 0.30, 0.40, 0.50)
-l2fc_cutoffs <- c(0, 0.1, 0.5, 1)
+pairwise_human_fit_genes_wide %>% 
+  ggplot() +
+  aes(x = l2fc, fill = organism) +
+  geom_histogram() + 
+  facet_grid(~organism, scales = "free_x")
+```
 
-# Grid 
-cutoff_grid <- expand_grid(padj_cutoff = padj_cutoffs, l2fc_cutoff = l2fc_cutoffs)
 
-# Get DEGs
+
+```{r}
+# Define cutoffs
+padj_cutoffs <- c(0.05)
+l2fc_cutoffs <- c(0, 0.5, 1.0, 1.5, 2)
+ci_percentiles <- c(0.3, 0.5, 1.0)  # 30%, 50%, 100% (sem filtro)
+
+# Expand grid
+cutoff_grid <- expand_grid(
+  padj_cutoff = padj_cutoffs,
+  l2fc_cutoff = l2fc_cutoffs,
+  ci_percentile = ci_percentiles
+)
+
+# Base df com p-valor
 base_df <- pairwise_human_fit_genes_wide %>%
   select(human_symbol:ci_high, ci_width) %>%
   distinct() %>%
@@ -10481,32 +10496,42 @@ base_df <- pairwise_human_fit_genes_wide %>%
     padj_deg = p.adjust(p_deg, method = "BH")
   )
 
-# Apply function
+# Aplicar classificações para cada combinação
 classified_df <- pmap_dfr(
   cutoff_grid,
-  function(padj_cutoff, l2fc_cutoff) {
+  function(padj_cutoff, l2fc_cutoff, ci_percentile) {
+    
+    ci_cutoff <- quantile(base_df$ci_width, probs = ci_percentile, na.rm = TRUE)
+    
     base_df %>%
+      filter(ci_width <= ci_cutoff) %>%
       mutate(
         padj_cutoff = padj_cutoff,
         l2fc_cutoff = l2fc_cutoff,
+        ci_percentile = ci_percentile,
         classification = case_when(
-          padj_deg < padj_cutoff & mean > l2fc_cutoff  ~ "up",
+          padj_deg < padj_cutoff & mean >= l2fc_cutoff  ~ "up",
           padj_deg < padj_cutoff & mean < -l2fc_cutoff ~ "down",
           TRUE                                          ~ "neutral"
         )
       )
-  })
+  }
+)
 
 
 classified_df %>% 
   saveRDS(here("FIT_Mouse2man", "genes_l2fc_fit_mouse_human_classified_cutoffs.rds"))
 ```
 
+Import
 
 ```{r}
-
 classified_df = read_rds(here("FIT_Mouse2man", "genes_l2fc_fit_mouse_human_classified_cutoffs.rds"))
+```
 
+
+
+```{r}
 #Get only DEGs in humans
 degs_human = classified_df %>% 
   filter(organism == "Human",
@@ -10519,22 +10544,25 @@ length(degs_human)
 #Summarize genes
 classified_df_countgenes_degs_direction = classified_df %>% 
   filter(human_symbol %in% c(degs_human)) %>% 
-  group_by(organism, timepoint, padj_cutoff, l2fc_cutoff, classification) %>% 
+  group_by(organism, timepoint, padj_cutoff, l2fc_cutoff, ci_percentile, classification) %>% 
   summarize(n_genes = n()) %>% 
   ungroup()  %>% 
   mutate(across(c(timepoint, padj_cutoff, l2fc_cutoff), as.character))
+
+classified_df_countgenes_degs_direction
 
 ```
 
 
 ## Number of DEGs
 Lineplot
-```{r fig.width=10, fig.height=4}
+```{r fig.width=5, fig.height=5}
 classification_degs_ngenes_plot = classified_df_countgenes_degs_direction %>%
   filter(classification != "neutral") %>%
-  filter(padj_cutoff <= 0.1) %>% 
+  filter(padj_cutoff <= 0.1, ci_percentile == 1.0, l2fc_cutoff %in% c("0", "0.5")) %>% 
   mutate(row_labels = paste0("padj: ", padj_cutoff),
-         timepoint = paste0("Day ", timepoint)) %>%   # cria label combinada
+         timepoint = paste0("Day ", timepoint),
+         l2fc_cutoff = as.numeric(l2fc_cutoff)) %>%   # cria label combinada
   ggplot() +
   aes(x = l2fc_cutoff,
       y = n_genes) +
@@ -10594,25 +10622,7 @@ classification_degs_ngenes_plot
 
 
 ```{r}
-genes_ci_30 <- classified_df %>%
-    filter(organism != "Human",
-           ci_width > 0) %>% 
-  group_by(organism, human_symbol) %>% 
-  summarise(mean_ci_width = mean(ci_width, na.rm = TRUE)) %>%
-  arrange(mean_ci_width) %>%
-  slice_head(prop = 0.30)  # pega os 10% menores
-
-# Agora filtra o dataframe original com base nesses genes
-genes_ci_30 <- classified_df %>%
-  filter(organism != "Human",
-         human_symbol %in% genes_ci_30$human_symbol) %>% 
-  mutate(organism = paste0(organism, " (CI 30%)"))
-```
-
-
-```{r}
 classified_wide <- classified_df %>%
-  bind_rows(genes_ci_30) %>% 
   select(human_symbol, timepoint, padj_cutoff, l2fc_cutoff, organism, classification) %>%
   pivot_wider(names_from = organism, values_from = classification) %>%
   filter(!is.na(Human) & !is.na(FIT) & !is.na(Mouse)) %>% 
@@ -10640,17 +10650,6 @@ acc_up_vs_all_fit <- classified_eval %>%
   group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
   my_metrics(truth = truth, estimate = estimate) %>%
   mutate(model = "FIT", target = "up")
-
-acc_up_vs_all_fit30 <- classified_eval %>%
-  drop_na() %>% 
-  mutate(
-    truth = factor(ifelse(Human == "up", "up", "not_up"), levels = c("up", "not_up")),
-    estimate = factor(ifelse(`FIT (CI 30%)` == "up", "up", "not_up"), levels = c("up", "not_up"))
-  ) %>%
-  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
-  my_metrics(truth = truth, estimate = estimate) %>%
-  mutate(model = "FIT 30%", target = "up")
-
 # "down" vs all
 acc_down_vs_all_fit <- classified_eval %>%
   mutate(
@@ -10661,16 +10660,7 @@ acc_down_vs_all_fit <- classified_eval %>%
   my_metrics(truth = truth, estimate = estimate) %>%
   mutate(model = "FIT", target = "down")
 
-acc_down_vs_all_fit30 <- classified_eval %>%
-  mutate(
-    truth = factor(ifelse(Human == "down", "down", "not_down"), levels = c("down", "not_down")),
-    estimate = factor(ifelse(`FIT (CI 30%)` == "down", "down", "not_down"), levels = c("down", "not_down"))
-  ) %>%
-  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
-  my_metrics(truth = truth, estimate = estimate) %>%
-  mutate(model = "FIT 30%", target = "down")
-
-acc_fit_results <- bind_rows(acc_up_vs_all_fit, acc_up_vs_all_fit30, acc_down_vs_all_fit, acc_down_vs_all_fit30)
+acc_fit_results <- bind_rows(acc_up_vs_all_fit, acc_down_vs_all_fit)
 
 fit_classification_degs_ngenes <- classified_eval %>%
   mutate(
@@ -10687,22 +10677,8 @@ fit_classification_degs_ngenes <- classified_eval %>%
   ) %>% 
   mutate(model = "FIT")
 
-fit_classification_degs_ngenes_ci30 <- classified_eval %>%
-  mutate(
-    truth = factor(Human, levels = c("up", "down", "neutral")),
-    estimate = factor(`FIT (CI 30%)`, levels = c("up", "down", "neutral")),
-    correct = truth == estimate,
-    incorrect = truth != estimate
-  ) %>% 
-  group_by(timepoint, padj_cutoff, l2fc_cutoff, truth) %>%
-  summarise(
-    num_correct_tp = sum(correct, na.rm = T),
-    num_incorrect_fp = sum(incorrect, na.rm = T),
-    .groups = "drop"
-  ) %>% 
-  mutate(model = "FIT 30%")
 
-fit_classification_degs_ngenes = bind_rows(fit_classification_degs_ngenes, fit_classification_degs_ngenes_ci30)
+fit_classification_degs_ngenes = bind_rows(fit_classification_degs_ngenes)
 
 fit_classification_degs = acc_fit_results %>% 
   rename(truth = target) %>% 
@@ -10727,15 +10703,6 @@ acc_up_vs_all_mouse <- classified_eval %>%
   my_metrics(truth = truth, estimate = estimate) %>%
   mutate(model = "Mouse", target = "up")
 
-acc_up_vs_all_mouse_30 <- classified_eval %>%
-  mutate(
-    truth = factor(ifelse(Human == "up", "up", "not_up"), levels = c("up", "not_up")),
-    estimate = factor(ifelse(`Mouse (CI 30%)` == "up", "up", "not_up"), levels = c("up", "not_up"))
-  ) %>%
-  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
-  my_metrics(truth = truth, estimate = estimate) %>%
-  mutate(model = "Mouse 30%", target = "up")
-
 # "down" vs all
 acc_down_vs_all_mouse <- classified_eval %>%
   mutate(
@@ -10746,16 +10713,7 @@ acc_down_vs_all_mouse <- classified_eval %>%
   my_metrics(truth = truth, estimate = estimate) %>%
   mutate(model = "Mouse", target = "down")
 
-acc_down_vs_all_mouse_30 <- classified_eval %>%
-  mutate(
-    truth = factor(ifelse(Human == "down", "down", "not_down"), levels = c("down", "not_down")),
-    estimate = factor(ifelse(`Mouse (CI 30%)` == "down", "down", "not_down"), levels = c("down", "not_down"))
-  ) %>%
-  group_by(timepoint, padj_cutoff, l2fc_cutoff) %>%
-  my_metrics(truth = truth, estimate = estimate) %>%
-  mutate(model = "Mouse 30%", target = "down")
-
-acc_mouse_results <- bind_rows(acc_down_vs_all_mouse, acc_up_vs_all_mouse, acc_down_vs_all_mouse_30, acc_up_vs_all_mouse_30)
+acc_mouse_results <- bind_rows(acc_down_vs_all_mouse, acc_up_vs_all_mouse)
 
 mouse_classification_degs_ngenes <- classified_eval %>%
   mutate(
@@ -10772,22 +10730,8 @@ mouse_classification_degs_ngenes <- classified_eval %>%
   ) %>% 
   mutate(model = "Mouse")
 
-mouse_classification_degs_ngenes_ci30 <- classified_eval %>%
-  mutate(
-    truth = factor(Human, levels = c("up", "down", "neutral")),
-    estimate = factor(`Mouse (CI 30%)`, levels = c("up", "down", "neutral")),
-    correct = truth == estimate,
-    incorrect = truth != estimate
-  ) %>% 
-  group_by(timepoint, padj_cutoff, l2fc_cutoff, truth) %>%
-  summarise(
-    num_correct_tp = sum(correct, na.rm = T),
-    num_incorrect_fp = sum(incorrect, na.rm = T),
-    .groups = "drop"
-  ) %>% 
-  mutate(model = "Mouse 30%")
+mouse_classification_degs_ngenes = bind_rows(mouse_classification_degs_ngenes)
 
-mouse_classification_degs_ngenes = bind_rows(mouse_classification_degs_ngenes, mouse_classification_degs_ngenes_ci30)
 
 
 mouse_classification_degs = acc_mouse_results %>% 
@@ -10852,7 +10796,81 @@ summary_table_accuracy
 ## Classification metrics 
 ```{r fig.height=8, fig.width=15, message=FALSE, warning=FALSE}
 classification_degs_comparison = read_csv(file = here("FIT_Mouse2man", "classification_degs_comparison.csv"))
+```
 
+
+
+
+```{r fig.height=5, fig.width=8}
+sens_spec_plot = classification_degs_comparison %>%
+  mutate(timepoint = paste0("Day ", timepoint)) %>% 
+  filter(.metric %in% c("sens", "spec")) %>%
+  pivot_wider(names_from = .metric,
+              values_from = .estimate) %>% 
+  mutate(fpr = 1 - spec,
+         truth = str_to_title(truth)) %>% 
+  # filter(l2fc_cutoff == 0) %>%
+  # filter(padj_cutoff == 0.5) %>%
+  ggplot(aes(x = fpr, 
+             y = sens, 
+             # shape = l2fc_cutoff,
+             color = model, 
+             # size = num_correct_tp
+             )) +
+  scale_y_continuous(n.breaks = 4, expand = c(0.01, 0.01)) +
+  scale_x_continuous(n.breaks = 4, expand = c(0.01, 0.01), limits = c(0, 1)) +
+  geom_line(aes(group = model), size = 1) +
+  # geom_point(
+  #   # aes(shape = l2fc_cutoff)
+  #   ) +
+  geom_abline(slope = 1, intercept = 0, linetype =2, alpha = 1) +
+  
+    scale_color_manual(values = c(
+    "Mouse 30%" = "#4DBBD5FF",
+    "Mouse" = "#80a1d4",
+    "FIT 30%"   = "#4361ee",
+    "FIT"   = "#dec0f1"
+  )) +
+    scale_fill_manual(values = c(
+    "Mouse 30%" = "#4DBBD5FF",
+    "Mouse" = "#80a1d4",
+    "FIT 30%"   = "#4361ee",
+    "FIT"   = "#dec0f1"
+  )) +
+  facet_grid(~timepoint~fct_rev(truth), axes = "all") +
+  # coord_equal() +
+  guides(color = guide_legend(override.aes = list(linewidth = 2))) +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.placement = "outside", 
+    legend.position = "top",
+    legend.direction = "horizontal",
+    legend.key = element_blank(), 
+    legend.key.height = unit(0.5, 'cm'),
+    legend.key.width = unit(0.5, 'cm'),
+    # strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(angle = 0),
+    axis.text.x = element_text(angle = 0),
+    panel.spacing.x = unit(0.5, "lines"),
+  ) +
+  labs(
+    # title = "Sensitivity-Specificity",
+    x = "False positive rate",
+    y = "True positives",
+    # shape = "Direction",
+    color = "Model",
+    fill = "Adjusted P-value cutoff",
+    # size = "Correct"
+  )
+sens_spec_plot
+```
+
+
+
+
+
+```{r fig.height=8, fig.width=15, message=FALSE, warning=FALSE}
 classification_degs_accuracy_plot = classification_degs_comparison %>% 
   mutate(l2fc_cutoff = as.character(l2fc_cutoff),
          timepoint = paste0("Day ", timepoint),
@@ -11083,110 +11101,82 @@ precision_recall_plot
 ```
 
 
-```{r fig.height=5, fig.width=8}
-sens_spec_plot = classification_degs_comparison %>%
-  mutate(timepoint = paste0("Day ", timepoint)) %>% 
-  filter(.metric %in% c("sens", "spec")) %>%
-  pivot_wider(names_from = .metric,
-              values_from = .estimate) %>% 
-  mutate(fpr = 1 - spec,
-         truth = str_to_title(truth)) %>% 
-  # filter(l2fc_cutoff == 0) %>%
-  # filter(padj_cutoff == 0.5) %>%
-  ggplot(aes(x = fpr, 
-             y = sens, 
-             # shape = l2fc_cutoff,
-             color = model, 
-             # size = num_correct_tp
-             )) +
-  scale_y_continuous(n.breaks = 4, expand = c(0.01, 0.01)) +
-  scale_x_continuous(n.breaks = 4, expand = c(0.01, 0.01), limits = c(0, 1)) +
-  geom_line(aes(group = model), size = 1) +
-  # geom_point(
-  #   # aes(shape = l2fc_cutoff)
-  #   ) +
-  scale_size(range = c(0.1, 4),
-               breaks = c(10, 100, 500, 1000)) +
-  geom_abline(slope = 1, intercept = 0, linetype =2, alpha = 1) +
-  
-  
-  # scale_shape_manual(values=c("up" = 24,  "down" = 25))+
-  # scale_shape_manual(values = c(
-  #  "Mouse 30%" = 16,
-  #   "Mouse" = 1,
-  #   "FIT"   = 0,
-  #   "FIT 30%"= 15
-  # )) +
-  # scale_colour_stepsn(colours = c("#355070", "#6d597a", "#e56b6f", "#e88c7d", "#eaac8b"),
-  #                     limits = c(0, 0.50), 
-  #                     guide = guide_coloursteps(even.steps = FALSE,
-  #                                               show.limits = TRUE),
-  #                     breaks = c(0, 0.5, 0.10, 0.20, 0.30, 0.40, 0.50)) +
-  
-  
-    scale_color_manual(values = c(
-    "Mouse 30%" = "#4DBBD5FF",
-    "Mouse" = "#80a1d4",
-    "FIT 30%"   = "#4361ee",
-    "FIT"   = "#dec0f1"
-  )) +
-    scale_fill_manual(values = c(
-    "Mouse 30%" = "#4DBBD5FF",
-    "Mouse" = "#80a1d4",
-    "FIT 30%"   = "#4361ee",
-    "FIT"   = "#dec0f1"
-  )) +
-  facet_grid(~timepoint~fct_rev(truth), axes = "all") +
-  # coord_equal() +
-  guides(color = guide_legend(override.aes = list(linewidth = 2))) +
-  theme_vaxgo() +
-  theme(
-    strip.text = element_text(size = 10),
-    strip.placement = "outside", 
-    legend.position = "top",
-    legend.direction = "horizontal",
-    legend.key = element_blank(), 
-    legend.key.height = unit(0.5, 'cm'),
-    legend.key.width = unit(0.5, 'cm'),
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(angle = 0),
-    axis.text.x = element_text(angle = 0),
-    panel.spacing.x = unit(0.5, "lines"),
-  ) +
-  labs(
-    # title = "Sensitivity-Specificity",
-    x = "False positive rate",
-    y = "True positives",
-    # shape = "Direction",
-    color = "Model",
-    fill = "Adjusted P-value cutoff",
-    # size = "Correct"
-  )
-sens_spec_plot
-```
+
+### ROC Curve
 
 
 ```{r fig.height=4, fig.width=8}
- 
+classified_df_probs <- classified_df %>%
+  select(human_symbol, timepoint, organism, padj_cutoff, l2fc_cutoff, ci_percentile, classification) %>%
+  filter(ci_percentile %in% c(0.3, 1.0)) %>% 
+  pivot_wider(names_from = organism, values_from = classification) %>% 
+  fill(Human, .direction = "down") %>%
+  fill(FIT, .direction = "up") %>%
+  fill(Mouse, .direction = "up") %>%
+  rename(truth = Human) %>%
+  drop_na(truth) %>% 
+  mutate(
+    truth = factor(truth),
+    FIT = factor(FIT, levels = levels(truth)),
+    Mouse = factor(Mouse, levels = levels(truth))
+  ) %>%
+  pivot_longer(cols = c(FIT, Mouse), names_to = "base_model", values_to = "predicted") %>%
+  mutate(
+    model = paste(base_model,"CI", paste0(ci_percentile * 100, "%")),
+    down = if_else(predicted == "down", 1, 0),
+    up = if_else(predicted == "up", 1, 0),
+    neutral = if_else(predicted == "neutral", 1, 0)
+  ) %>%
+  select(truth, down, up, neutral, predicted, model, timepoint, l2fc_cutoff, ci_percentile)
 
-a = classification_degs_ngenes_plot + theme(legend.text = element_text(size = 8), legend.title = element_text(size = 10), legend.position = "right", legend.direction = "vertical")
-b = sens_spec_plot + theme(legend.text = element_text(size = 8), legend.title = element_text(size = 10), legend.position = "right", legend.direction = "vertical")
 
 
-classification_model_params_patch = (a | b) +
-  plot_layout(axes = "collect", 
-              ncol = 2,
-              guides = "collect",
-              axis_titles = "collect",
-              widths = c(1,1)) 
+roc_curve_fit_mouse = classified_df_probs %>% 
+  filter(l2fc_cutoff == 0) %>% 
+  group_by(model, timepoint) %>%
+  roc_curve(truth, down, up, neutral) %>%
+  ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
+  geom_path(size = 1) +
+  geom_point() +
+  geom_abline(lty = 3) +
+  # coord_equal() +
+  theme_vaxgo() +
+  facet_grid(~paste("Day", timepoint)~str_to_upper(.level)) + 
+  scale_color_manual(values = c(
+    "Mouse CI 30%" = "#4DBBD5FF",
+    "Mouse CI 100%" = "#80a1d4",
+    "FIT CI 30%"   = "#4361ee",
+    "FIT CI 100%"   = "#dec0f1"
+  )) +
+  labs(
+  title = "ROC Curve by Model and Timepoint",
+  x = "TPR",
+  y = "FPR",
+  color = "Model") + 
+  theme(
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    # strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0),
+    axis.text.x = element_text(size = 8, angle = 90, hjust = 1, vjust = 0.5),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(0.5, "lines"),
+    legend.key = element_blank()
+  ) +
+  scale_x_continuous(n.breaks = 3) +
+  scale_y_continuous(n.break = 3)
 
-classification_model_params_patch
+roc_curve_fit_mouse
 
-classification_model_params_patch %>% 
-  ggsave(filename = here("Figures", "classification_model_params_patch.png"), 
+roc_curve_fit_mouse %>% 
+  ggsave(filename = here("Figures", "roc_curve_fit_mouse.png"), 
          width = 8,
          height = 4)
 ```
+
+
+
+
 
 #Build new models
 
