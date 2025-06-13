@@ -17,9 +17,9 @@ library(celldex)
 library(biomaRt)
 library(org.Hs.eg.db)
 library(plotly)
-# library(DESeq2)
+library(DESeq2)
 library(msigdbr)
-# library(ape)
+library(ape)
 library(GSVA)
 library(sva)
 library(clusterProfiler)
@@ -39,7 +39,7 @@ library(esquisse)
 library(gghighlight)
 library(janitor)
 library(paletteer)
-# library(edgeR)
+library(edgeR)
 library(limma)
 library(mogene10sttranscriptcluster.db)
 library(ggh4x)
@@ -1833,25 +1833,33 @@ eset <- exprs(eset)
 
 # Quick check. Normalization needed? Yes
 eset_12 <- eset[ ,1:12]
-exprs(eset_12) <- exprs(eset_12)[ ,1:12]
-boxplot(exprs(eset_12), las=2, cex.axis = 0.7, boxwex=0.6, outline=FALSE)
+boxplot(eset_12, las=2, cex.axis = 0.7, boxwex=0.6, outline=FALSE)
 
 #Normalize data
-exprs_matrix.norm <- normalizeBetweenArrays(exprs(eset))
+exprs_matrix.norm <- normalizeBetweenArrays(eset, method = "quantile")
 
 #Check
 exprs_matrix.norm_12 <- exprs_matrix.norm[ ,1:12]
 boxplot(exprs_matrix.norm_12, las=2, cex.axis = 0.7, boxwex=0.6, outline=FALSE)
-boxplot(exprs(eset_12), las=2, cex.axis = 0.7, boxwex=0.6, outline=FALSE)
+boxplot(eset_12, las=2, cex.axis = 0.7, boxwex=0.6, outline=FALSE)
 boxplot(exprs_matrix.norm_12, las=2, cex.axis = 0.7, boxwex=0.6, outline=FALSE)
 
-#To dataframe
-GSE120661_counts_normalized = exprs_matrix.norm %>% 
+
+# Not normalized
+GSE120661_counts_not_normalized_log2 = eset %>% 
   as.data.frame() %>% 
   mutate(across(everything(), log2)) #Log transformation
 
-GSE120661_counts_normalized %>% 
-  saveRDS(here("tables", "GSE120661_counts_normalized.rds"))
+GSE120661_counts_not_normalized_log2 %>% 
+  saveRDS(here("tables", "GSE120661_counts_not_normalized_log2.rds"))
+
+# #To dataframe
+# GSE120661_counts_normalized = exprs_matrix.norm %>% 
+#   as.data.frame() %>% 
+#   mutate(across(everything(), log2)) #Log transformation
+# 
+# GSE120661_counts_normalized %>% 
+#   saveRDS(here("tables", "GSE120661_counts_normalized.rds"))
 ```
 
 Differential expression by limma
@@ -1874,9 +1882,11 @@ Import
 ```{r}
 GSE120661_metadata = readRDS(here("tables", "GSE120661_metadata.rds"))
 
-GSE120661_counts_normalized = read_rds(here("tables", "GSE120661_counts_normalized.rds"))
+# GSE120661_counts_normalized = read_rds(here("tables", "GSE120661_counts_normalized.rds"))
+GSE120661_counts_not_normalized_log2 = read_rds(here("tables", "GSE120661_counts_not_normalized_log2.rds"))
 
-GSE120661_counts_normalized %>% rownames() %>% length()
+# GSE120661_counts_normalized %>% rownames() %>% length()
+GSE120661_counts_not_normalized_log2 %>% rownames() %>% length()
 
 #Select and filter
 #Filter PBMC samples
@@ -1889,7 +1899,7 @@ GSE120661_samples_pbmc = GSE120661_metadata %>%
   filter(tissue == "PBMC")
 
 #Select only PBMC samples counts
-GSE120661_counts_normalized_matrix = GSE120661_counts_normalized %>% 
+GSE120661_counts_not_normalized_log2 = GSE120661_counts_not_normalized_log2 %>% 
   select(c(GSE120661_samples_pbmc_vector)) %>% 
   as.matrix()
 ```
@@ -1903,7 +1913,7 @@ ensembl_mart <- useMart("ensembl")
 ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
 
 ## this is the MGI symbol for the gene we're interested in
-gene_id <- GSE120661_counts_normalized %>% rownames()
+gene_id <- GSE120661_counts_not_normalized_log2 %>% rownames()
 
 listAttributes(ensembl_mart)
 
@@ -1935,7 +1945,7 @@ annot <- getBM(
 
 #Get annotations for each probe 
 
-GSE120661_counts_normalized_summary = GSE120661_counts_normalized_matrix %>% 
+GSE120661_counts_not_normalized_log2_summary = GSE120661_counts_not_normalized_log2 %>% 
   as.data.frame() %>% 
   rownames_to_column("probe") %>% 
   pivot_longer(cols = -probe,
@@ -1950,26 +1960,26 @@ GSE120661_counts_normalized_summary = GSE120661_counts_normalized_matrix %>%
 
 # Stats
 ## 39430 probes in the microarray
-GSE120661_counts_normalized_matrix %>% dim()
+GSE120661_counts_not_normalized_log2_summary %>% dim()
 ## 37,983 probes with mgi_symbol
-GSE120661_counts_normalized_summary %>% 
+GSE120661_counts_not_normalized_log2_summary %>% 
   drop_na(mgi_symbol) %>% 
   filter(mgi_symbol != "")
 ## 31,140 probes with Entrez gene id
-GSE120661_counts_normalized_summary %>% 
+GSE120661_counts_not_normalized_log2_summary %>% 
   drop_na(entrezgene_id)
 ## 30,787 of these probes with mgi_symbol also had a correspondent entrez gene id
-GSE120661_counts_normalized_summary %>% 
+GSE120661_counts_not_normalized_log2_summary %>% 
   drop_na(mgi_symbol) %>% 
   filter(mgi_symbol != "") %>% 
   drop_na(entrezgene_id)
 ## 30,787 probes with entrez id also had a correspondent mgi_symbol
-GSE120661_counts_normalized_summary %>% 
+GSE120661_counts_not_normalized_log2_summary %>% 
   drop_na(entrezgene_id) %>% 
   filter(mgi_symbol != "") 
 
 #Get the probes with the highest median across samples for each entrez_id
-GSE120661_expression_highest_median_probes = GSE120661_counts_normalized_summary %>% 
+GSE120661_expression_highest_median_probes = GSE120661_counts_not_normalized_log2_summary %>% 
   drop_na(entrezgene_id) %>% 
   group_by(entrezgene_id) %>% 
   slice_max(median) %>% 
@@ -1983,18 +1993,18 @@ GSE120661_expression_highest_median_probes %>%
   get_dupes(entrezgene_id)
 
 #Modify expression matrix
-GSE120661_counts_normalized_matrix = GSE120661_counts_normalized_matrix %>% 
+GSE120661_counts_not_normalized_log2 = GSE120661_counts_not_normalized_log2 %>% 
   as.data.frame() %>% 
   rownames_to_column("probe") %>% 
   filter(probe %in% c(GSE120661_expression_highest_median_probes$probe)) %>% 
   column_to_rownames("probe") %>% 
   as.matrix()
 
-GSE120661_counts_normalized_matrix %>% dim()
+GSE120661_counts_not_normalized_log2 %>% dim()
 
 
-GSE120661_counts_normalized_matrix %>% 
-  saveRDS(here("tables", "GSE120661_counts_normalized_matrix.rds"))
+GSE120661_counts_not_normalized_log2 %>% 
+  saveRDS(here("tables", "GSE120661_counts_not_normalized_log2.rds"))
 
 
 GSE120661_samples_pbmc %>% 
@@ -2010,8 +2020,8 @@ GSE120661_samples_pbmc %>%
 ```{r}
 
 #Import
-GSE120661_counts_normalized_matrix = 
-  read_rds(here("tables", "GSE120661_counts_normalized_matrix.rds"))
+GSE120661_counts_not_normalized_log2 = 
+  read_rds(here("tables", "GSE120661_counts_not_normalized_log2.rds"))
 GSE120661_samples_pbmc = 
   read_rds(here("tables", "GSE120661_samples_pbmc.rds"))
 
@@ -2019,10 +2029,13 @@ GSE120661_samples_pbmc =
 GSE120661_samples_pbmc_fluad = GSE120661_samples_pbmc %>% 
   filter(treatment == "Fluad")
 
-GSE120661_counts_normalized_matrix_fluad = GSE120661_counts_normalized_matrix %>% 
+GSE120661_counts_not_normalized_log2_matrix_fluad = GSE120661_counts_not_normalized_log2 %>% 
   as.data.frame() %>% 
   select(c(GSE120661_samples_pbmc_fluad$geo_sample)) %>% 
   as.matrix()
+
+GSE120661_counts_normalized_matrix_fluad <- normalizeBetweenArrays(GSE120661_counts_not_normalized_log2_matrix_fluad, 
+                                                                   method = "quantile")
 
 dim(GSE120661_counts_normalized_matrix_fluad) #20845   35
 
@@ -2842,14 +2855,18 @@ fit_example_results_ready %>%
 
 
 ## Compare with human log2fc
+### New
+
 ```{r}
 cleandata_nonorm_flu <- readRDS(here("HumanFluData", "cleandata_nonorm_flu.rds")) 
 
 flu_expFC <- readRDS(here("HumanFluData", "expFC.rds"))
-flu_expression_fc = flu_expFC[["exp_fc"]] %>% 
-  as.data.frame()
+flu_expression_fc = flu_expFC[["exp_fc"]] %>% as.data.frame()
 
 flu_metadata = flu_expFC$cur_phenoData
+
+flu_metadata %>% filter(exposure_material_reported == "FLUADD")
+
 
 flu_expression_fc_long = flu_expression_fc %>%
   rownames_to_column("genes") %>% 
@@ -2857,13 +2874,106 @@ flu_expression_fc_long = flu_expression_fc %>%
                names_to = "uid",
                values_to = "fold_change") 
 
-flu_metadata %>% 
-  select(study_time_collected) %>%
-  group_by(study_time_collected) %>% 
-  summarize(n = n())
+human_samples_pbmc_fluad = flu_metadata %>% 
+  filter(exposure_material_reported == "FLUADD")
 
-flu_expression_fc_long_metadata = flu_expression_fc_long %>% 
-  inner_join(flu_metadata, by = "uid") 
+human_fluadd_not_normalized_log2_long = flu_expression_fc_long %>% 
+  inner_join(human_samples_pbmc_fluad %>% select(uid), by = "uid") 
+
+human_fluadd_not_normalized_log2_wide = human_fluadd_not_normalized_log2_long %>% 
+  pivot_wider(names_from = uid,
+              values_from = fold_change) %>% 
+  column_to_rownames("genes")
+
+```
+
+
+
+Plot sample size by vaccines and timepoint
+```{r}
+flu_metadata %>% 
+  dplyr::count(study_time_collected, exposure_process_preferred, exposure_material_reported) %>% 
+  ggplot() +
+  aes(x = study_time_collected,
+      y = exposure_material_reported) +
+  geom_point(aes(size = n, fill = exposure_material_reported),
+             pch = 21, color = "black") +
+  ggsci::scale_fill_cosmic() +
+  guides(fill = "none") +
+  theme_vaxgo() + 
+  labs(x = "Timepoint",
+       title = "Human Influenza Vaccines",
+       y = "",
+       size = "Sample size",
+       fill = "Vaccine")
+```
+
+
+```{r}
+human_samples_pbmc_fluad_clean = human_samples_pbmc_fluad %>% 
+  arrange(uid) %>% 
+  separate(participant_id, into = c("del", "participant_id")) %>% 
+  select(-del) %>% 
+  select(sample_id = uid, participant_id, timepoint = study_time_collected, age = age_imputed, sex = gender, race, vaccine = exposure_material_reported, sample_type = cell_type, array = featureSetName2, type = vaccine_type, adjuvant) %>% 
+  mutate(timepoint = as.numeric(timepoint),
+         age = as.numeric(age),
+         sex = as.factor(sex), 
+         race = as.factor(race),
+         condition = paste(vaccine, "Day", timepoint)) %>%
+  filter(sample_id %in% c(human_fluadd_not_normalized_log2_wide %>% colnames())) %>% 
+  arrange(sample_id)
+  
+#Normalize data
+human_fluadd_counts_normalized <- normalizeBetweenArrays(human_fluadd_not_normalized_log2_wide %>% 
+                                                                     as.matrix(), method = "quantile")
+
+human_fluadd_counts_normalized_ready = human_fluadd_counts_normalized %>% 
+  as.data.frame() %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column("sample_id") %>%
+  arrange(sample_id) %>% 
+  column_to_rownames("sample_id") %>% 
+  t() 
+
+dim(human_fluadd_counts_normalized_ready) #7047, 340 samples
+    
+eset_filtered <- ExpressionSet(
+  assayData = human_fluadd_counts_normalized_ready,
+  phenoData = AnnotatedDataFrame(human_samples_pbmc_fluad_clean %>% 
+                                   column_to_rownames("sample_id"))
+)
+
+design <- model.matrix(~ sex + race + age + condition + 0, eset_filtered) # 0 defines the way we compare the samples
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+design %>% 
+  view()
+
+# Then we estimate the correlation between measurements made on the same subject:
+corfit <- duplicateCorrelation(eset_filtered, 
+                               design = design, 
+                               block = eset_filtered$subject_id)
+corfit$consensus
+# Then this inter-subject correlation is input into the linear model fit:
+#Fit Limma model
+fit <- lmFit(eset_filtered, design, 
+             block = eset_filtered$subject_id, 
+             correlation = corfit$consensus)
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+
+```
+
+
+
+
+### Old
+```{r}
+
+
 
 flu_expression_fc_summary = flu_expression_fc_long_metadata %>% 
   mutate(l2fc = sign(fold_change) * log2(abs(fold_change))) %>% 
@@ -3125,6 +3235,16 @@ pairwise_human_fit_measures %>%
   geom_point(aes(y = mean_fit))
   
 ```
+
+
+
+
+
+
+
+
+
+
 
 # Gene set enrichment analysis (GSEA)
 
@@ -4110,6 +4230,7 @@ pairwise_human_fit_measures = readRDS(here("FIT_Mouse2man", "pairwise_human_fit_
 
 pairwise_human_fit_test = pairwise_human_fit_measures %>%
   mutate(
+    
     # Estimate SE from CIs
     se_fit = (ci_high_fit - ci_low_fit) / (2 * 1.96),
     se_mouse = (ci_high_mouse - ci_low_mouse) / (2 * 1.96),
@@ -4134,12 +4255,33 @@ pairwise_human_fit_test = pairwise_human_fit_measures %>%
     effect_size_h2fit = human_2_fit / se_diff_human_fit,
     effect_size_h2m = human_2_mouse / se_diff_human_mouse
   ) %>%
-  arrange(p_value_fit)
+  arrange(p_value_fit) %>% 
+   group_by(timepoint) %>%
+  group_modify(~ {
+    mat <- as.matrix(select(.x, mean_human, mean_mouse, mean_fit))
+    mat_norm <- normalize.quantiles(mat)
+    
+    # Retorna o data frame com os valores normalizados
+    .x$mean_human_qn <- mat_norm[, 1]
+    .x$mean_mouse_qn <- mat_norm[, 2]
+    .x$mean_fit_qn <- mat_norm[, 3]
+    .x
+  }) %>%
+  ungroup()
 
-pairwise_human_fit_test 
+pairwise_human_fit_test =pairwise_human_fit_test %>% 
+  mutate(human_2_fit_qn = mean_human_qn - mean_fit_qn,
+    human_2_mouse_qn = mean_human_qn - mean_mouse_qn)
 
 pairwise_human_fit_test %>% saveRDS(here("FIT_Mouse2man", "pairwise_human_fit_test.rds"))
 ```
+
+
+
+
+
+
+
 
 ## Mouse vs Human
 ### Which genes have the least zscore?
@@ -4607,7 +4749,7 @@ zscore_genes = pairwise_human_fit_test %>%
 
 
 
-### By correlation of z score
+### By positively correlated z score
 Get positively and negatively correlated genes and discretize by quantile
 ```{r fig.height=5, fig.width=10}
 
@@ -5287,14 +5429,136 @@ abs_diff_correlation_plot_data_split %>%
 
 
 
+#### Quantile normalization
+
+```{r fig.height=4, fig.width=8}
+
+quantile_diff_genes = pairwise_human_fit_test 
+
+abs_diff_correlation_plot_data_split_qn = quantile_diff_genes %>% 
+  mutate(
+    quartile_label = cut(abs(human_2_mouse_qn),
+                         breaks = quantile(abs(human_2_mouse_qn),
+                                           probs = c(0, 0.10, 0.25, 0.5, 0.75, 1),
+                                           na.rm = TRUE),
+                         include.lowest = TRUE,
+                         labels = c("Q10", "Q25", "Q50", "Q75", "Q100")),
+    timepoint_day = paste0("Day ", timepoint)) %>% 
+  mutate(pval_mouse_adj = if_else(pval_mouse_adj <= 0.05, "DEG", "Not DEG"),
+         pval_human_adj = if_else(pval_human_adj <= 0.05, "DEG", "Not DEG"))
+
+abs_diff_correlation_plot_data_split_qn %>% dplyr::count(timepoint)
+
+#Get all genes
+quantiles <- quantile(abs(quantile_diff_genes$human_2_mouse_qn), 
+                    probs = c(0.10, 0.25, 0.5, 0.75, 1), 
+                    na.rm = TRUE)
+
+diff_correlation_plot_data_qn = quantile_diff_genes %>% 
+  arrange(timepoint)  %>% 
+  ungroup() %>% 
+  #Split by quantile
+    mutate(
+    Q10 = abs(human_2_mouse_qn) <= quantiles[1],
+    Q25 = abs(human_2_mouse_qn) <= quantiles[2],
+    Q50 = abs(human_2_mouse_qn) <= quantiles[3],
+    Q75 = abs(human_2_mouse_qn) <= quantiles[4],
+    Q100 = abs(human_2_mouse_qn) <= quantiles[5]
+  ) %>%
+  #Cumulative
+  pivot_longer(cols = starts_with("Q"),
+               names_to = "quartile_label",
+               values_to = "in_quantile") %>%
+  mutate(quartile_label = fct_relevel(quartile_label, "Q10", "Q25", "Q50", "Q75", "Q100")) %>% 
+  filter(in_quantile) %>%
+  select(-in_quantile)
+```
+
+
+```{r fig.height=4, fig.width=8}
+abs_diff_correlation_plot_data_split_qn_plot = abs_diff_correlation_plot_data_split_qn %>% 
+  ungroup() %>% 
+  ggplot() +
+  aes(x = mean_mouse_qn,
+      y = mean_human_qn) +
+  facet_wrap(~paste("Day", timepoint)) +
+  #All points, colored by differences
+  geom_point(
+             aes(color = quartile_label,
+                 # alpha = quartile_label,
+                 fill = quartile_label),
+             # fill = NA,
+             # alpha = 1,
+             pch = 21) +
+
+  #Same DEGs (WORST)
+  geom_point(color = "#4DBBD5FF",
+             fill = "#4DBBD5FF",
+             alpha = 1,
+             size = 0.5,
+             pch = 21,
+             data = abs_diff_correlation_plot_data_split_qn %>%
+               filter(pval_mouse_adj == pval_human_adj,
+                      pval_mouse_adj == "DEG") %>%
+               filter(quartile_label %in% c("Q50", "Q75", "Q100"))) +
+  #Same DEGs (BEST)
+  geom_point(color = "black",
+             fill = "#4DBBD5FF",
+             alpha = 1,
+             size = 2,
+             pch = 21,
+             data = abs_diff_correlation_plot_data_split_qn %>%
+               filter(pval_mouse_adj == pval_human_adj,
+                      pval_mouse_adj == "DEG") %>%
+               filter(quartile_label %in% c(
+                 "Q10",
+                 "Q25"
+                 ))) +
+   #Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_abline(slope = -1, alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  
+  scale_color_manual(values = c("Q10" = "black",
+                               "Q25" = "gray25",
+                               "Q50" = "gray50",
+                               "Q75" = "gray75",
+                               "Q100" = "gray90")) +
+  scale_fill_manual(values = c("Q10" = "black",
+                               "Q25" = "gray25",
+                               "Q50" = "gray50",
+                               "Q75" = "gray75",
+                               "Q100" = "gray90")) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(limits = c(-1.5, 1.5)) +
+  
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        legend.position = "right",
+        legend.direction = "vertical",
+        legend.key.width = unit(0.4, 'cm'),
+        legend.key.height = unit(0.4, 'cm'),
+        legend.key = element_blank(),
+        legend.title = element_text(size = 10, vjust = 0.9),
+        legend.text = element_text(size = 7, vjust = 0.5, hjust = -0.2)) +
+  labs(title = "Which genes and DEGs vary in both human and mouse?",
+       subtitle = "Differences in mouse to human, by timepoint.In colors, DEGs in human AND mouse, p_adjust < 0.05, |diff| < 0.2. \nPurple = Negatively correlated, Blue = Positively correlated",
+       x = "Mouse L2FC",
+       y = "Human L2FC",
+       alpha = "Quantiles",
+       fill = "Quantiles",
+       color = "|Z|")
+
+abs_diff_correlation_plot_data_split_qn_plot
+```
 
 
 
 
 
 
-
-Plot regression lines
+#### Plot regression lines
 ```{r fig.height=4, fig.width=8}
 
 degs_pos_neg_mouse_split %>% 
@@ -5567,6 +5831,11 @@ zscore_genes_plot_timepoints_bar = degs_segments %>%
 
 #### Lineplot of selected genes
 ```{r}
+
+
+
+
+#Zscore
 selected_genes_lines_mouse = zscore_genes %>% 
   inner_join(degs_pos_neg %>% 
                ungroup() %>% 
@@ -5801,7 +6070,7 @@ selected = abs_diff_correlation_plot_data_split %>%
 
 
 ```{r fig.height=4, fig.width=4}
-abs_diff_correlation_plot_data_split %>% 
+df_selected_genes_lines_plot_plot = abs_diff_correlation_plot_data_split %>% 
   mutate(timepoint = fct_relevel(as.character(timepoint), "0", "1", "3", "7")) %>% 
   select(human_symbol, timepoint, mean_human, mean_mouse, quartile_label) %>% 
   filter(quartile_label %in% c("Q10", "Q25")) %>% 
@@ -5875,150 +6144,82 @@ abs_diff_correlation_plot_data_split %>%
   
 
 
-
+df_selected_genes_lines_plot_plot
 ```
 
 
-```{r fig.height=4, fig.width=8}
-df_selected_genes_lines_plot_plot = df_selected_genes_lines_plot_mouse %>% 
+
+
+##### Quantile diff
+```{r}
+quantile_diff_genes
+abs_diff_correlation_plot_data_split_qn
+```
+
+
+
+```{r fig.height=4, fig.width=4}
+abs_diff_correlation_plot_data_split_qn_plot = abs_diff_correlation_plot_data_split_qn %>% 
+  mutate(timepoint = fct_relevel(as.character(timepoint), "0", "1", "3", "7")) %>% 
+  filter(quartile_label %in% c("Q10", "Q25")) %>% 
+  ungroup() %>% 
   ggplot() +
   aes(x = timepoint,
-      y = mean_mouse,
-      group = human_symbol) +
-    geom_hline(yintercept = 0, alpha = 0.5, linetype = 2) +
-  #All mouse genes
-  geom_point(color = "gray90",
-             alpha = 0.1,
-             mapping = aes(x = timepoint,
-                           y = mean_mouse),
-             data = df_selected_genes_lines_plot_mouse) +
-  geom_line(color = "gray90",
-            alpha = 0.1,
-             mapping = aes(x = timepoint,
-                           y = mean_mouse),
-             data = df_selected_genes_lines_plot_mouse) +
-  
-  #All human genes
-  geom_point(color = "gray90",
-             alpha = 0.1,
-             mapping = aes(x = timepoint,
-                           y = mean_human),
-             data = df_selected_genes_lines_plot_mouse) +
-  geom_line(color = "gray90",
-            alpha = 0.1,
-             mapping = aes(x = timepoint,
-                           y = mean_human),
-             data = df_selected_genes_lines_plot_mouse) +
-  
-  #Selected genes
-  
-    #Human
-  geom_point(aes(x = timepoint,
-                 y = mean_human,
-                 color = organism),
-             # color = "#90A4AEFF",
-             fill = NA,
-             pch = 21,
+      y = mean_human_qn) +
+    facet_grid(~quartile_label)+
+  geom_point(aes(group = human_symbol),
              alpha = 0.5,
-             data = df_selected_genes_lines_plot_mouse %>% 
-               mutate(organism = "Human") %>% 
-               filter(quartiles_diff == "Q10") %>% 
-              select(-quartiles_diff, -condition) %>% 
-              distinct() 
-              # filter(human_symbol %in% c(selected_genes_quartile_25))
-             ) +
-  geom_line(aes(x = timepoint,
-                 y = mean_human,
-                color = organism),
-             # color = "#90A4AEFF",
-             fill = NA,
-            alpha = 0.5,
-             pch = 21, show.legend = T,
-             data = df_selected_genes_lines_plot_mouse %>% 
-              filter(quartiles_diff == "Q10") %>% 
-              mutate(organism = "Human") %>% 
-              select(-quartiles_diff, -condition) %>% 
-              distinct()
-              # filter(human_symbol %in% c(selected_genes_quartile_25))
-            ) +
-  
-  
-  #Mouse
-  geom_point(mapping = aes(x = timepoint,
-                 y = mean_mouse,
-                 color = organism),
-             fill = NA,
+             color = "gray90") +
+  geom_line(aes(group = human_symbol),
+             alpha = 0.5,
+            color = "gray90") +
+  geom_line(aes(group = human_symbol,
+                y = mean_human_qn),
+             alpha = 1,
+             color = "#90A4AEFF",
+             data = abs_diff_correlation_plot_data_split_qn %>% 
+              mutate(timepoint = fct_relevel(as.character(timepoint), "0", "1", "3", "7")) %>% 
+               select(human_symbol, timepoint, mean_human_qn) %>% 
+               ungroup() %>% 
+              inner_join(selected, by = join_by("human_symbol"))) +
+  geom_point(aes(group = human_symbol,
+                 y = mean_human_qn),
+             alpha = 1,
+             size = 2,
              pch = 21,
-             data = df_selected_genes_lines_plot_mouse %>% 
-               filter(quartiles_diff == "Q10") %>% 
-               mutate(organism = "Mouse") %>% 
-              select(-quartiles_diff, -condition) %>% 
-              distinct()
-              # filter(human_symbol %in% c(selected_genes_quartile_25)
-                     ) +
-  geom_line(aes(x = timepoint,
-                 y = mean_mouse,
-                 color = organism),
-            fill = NA,
+             color = "black",
+             fill = "#90A4AEFF",
+             data = abs_diff_correlation_plot_data_split_qn %>% 
+               mutate(timepoint = fct_relevel(as.character(timepoint), "0", "1", "3", "7")) %>% 
+               select(human_symbol, timepoint, mean_human_qn) %>% 
+               ungroup() %>% 
+              inner_join(selected, by = join_by("human_symbol"))) +
+  geom_line(aes(group = human_symbol,
+                y = mean_mouse_qn),
+             alpha = 1,
+             color = "#4DBBD5FF",
+             data = abs_diff_correlation_plot_data_split_qn %>% 
+              mutate(timepoint = fct_relevel(as.character(timepoint), "0", "1", "3", "7")) %>% 
+               select(human_symbol, timepoint, mean_mouse_qn) %>% 
+               ungroup() %>% 
+              inner_join(selected, by = join_by("human_symbol"))) +
+  geom_point(aes(group = human_symbol,
+                 y = mean_mouse_qn),
+             alpha = 1,
+             size = 2,
              pch = 21,
-             data = df_selected_genes_lines_plot_mouse %>%
-              filter(quartiles_diff == "Q10") %>% 
-              mutate(organism = "Mouse") %>% 
-              select(-quartiles_diff, -condition) %>% 
-              distinct()
-              # filter(human_symbol %in% c(selected_genes_quartile_25)
-                     ) +
-
-  
-  scale_color_manual(values = c(
-    "Human"  = "#90A4AEFF",
-    "Mouse" = "#4DBBD5FF"
-  )) +
-    # geom_label_repel(aes(label = human_symbol,
-    #                      y = mean_mouse,
-    #                      x = "7"),
-    #               fill = NA,
-    #               # fill = "#90A4AEFF",
-    #               color = "#90A4AEFF",
-    #               # color = "white",
-    #               segment.color = "#90A4AEFF",
-    #               max.overlaps = 20,
-    #               force = 4,
-    #               size = 3,
-    #               min.segment.length = 0,
-    #               segment.size = 0.1,
-    #               nudge_x = -0.2,
-    #               data = df_selected_degs_time_plot %>%
-    #             filter(quartiles_diff == "Q01",
-    #                    timepoint == "7") %>%
-    #               distinct()) +
-      # geom_label_repel(aes(label = human_symbol,
-      #                      y = mean_human,
-      #                      x = "7"),
-      #                  # fill = NA,
-      #             fill = "#4DBBD5FF",
-      #             color = "white",
-      #             # color = "white",
-      #             segment.color = "#4DBBD5FF",
-      #             max.overlaps = 5,
-      #             # force = 4,
-      #             size = 3,
-      #             min.segment.length = 0,
-      #             # segment.size = 0.1,
-      #             nudge_x = 0.2,
-      #             hjust = 0,
-      #             direction = "x", 
-                #   # hjust = "right",
-                #   xlim = c(1, NA),  # <--- here
-                #   segment.curvature = -1e-20,
-                #   max.iter = 1e4, 
-                #   max.time = 1,
-                #   force_pull = 0, force = 1,
-                #   data = df_selected_degs_time_plot %>%
-                # filter(quartiles_diff == "Q01",
-                #        timepoint == 7) %>%
-                #   distinct()) + 
-  scale_x_continuous(breaks = c(0, 1, 3, 7),
+             color = "black",
+             fill = "#4DBBD5FF",
+             data = abs_diff_correlation_plot_data_split_qn %>% 
+               mutate(timepoint = fct_relevel(as.character(timepoint), "0", "1", "3", "7")) %>% 
+               select(human_symbol, timepoint, mean_mouse_qn) %>% 
+               ungroup() %>% 
+              inner_join(selected, by = join_by("human_symbol"))) +
+  geom_hline(yintercept = 0, lty = 2, color = "black") +
+  # scale_x_continuous(breaks = c(0, 1, 3, 7),
+  #                    expand = c(0.01, 0.01)) +
+  scale_x_discrete(expand = c(0.02, 0.02)) +
+  scale_y_continuous(limits = c(-1, 1),
                      expand = c(0.01, 0.01)) +
   theme_vaxgo() +
   theme(axis.text.x = element_text(angle = 0, hjust = 0.5), legend.key = element_blank())+
@@ -6028,9 +6229,10 @@ df_selected_genes_lines_plot_plot = df_selected_genes_lines_plot_mouse %>%
        title = "Which genes and DEGs vary in both human and mouse? And in which timepoints?",
        subtitle = "Genes that are conserved in all timepoints are shown (Q01). DEGs in human AND mouse, p_adjust < 0.05. \nBlue = Human, gray = Mouse.")
 
-
-df_selected_genes_lines_plot_plot
+abs_diff_correlation_plot_data_split_qn_plot
 ```
+
+
 
 
 
@@ -6209,14 +6411,8 @@ b = degs_pos_neg_summary_quantiles_best_worst + theme(plot.title = element_blank
                                                       plot.subtitle = element_blank(), 
                                                       # legend.position = "top"
                                                       )
-c = zscores_correlation_plot + theme(plot.title = element_blank(), plot.subtitle = element_blank())
-d = zscore_genes_plot_timepoints + theme(plot.title = element_blank(), plot.subtitle = element_blank())
-e = zscore_genes_plot_timepoints_bar + theme(plot.title = element_blank(), plot.subtitle = element_blank(), strip.text.x = element_blank())
-f = df_selected_genes_lines_plot_plot + theme(plot.title = element_blank(), plot.subtitle = element_blank())
-g = ora_all_diff_hallmark_heatmap + theme(plot.title = element_blank(), 
-                                                   legend.position = "none",legend.direction = "vertical")
-h = oraGO_all_diff_all_conditions_heatmap  + theme(plot.title = element_blank(), 
-                                                   legend.position = "none",legend.direction = "vertical")
+c = abs_diff_correlation_plot_data_split_qn_plot + theme(plot.title = element_blank(), plot.subtitle = element_blank())
+f = df_selected_genes_lines_qn_plot_plot + theme(plot.title = element_blank(), plot.subtitle = element_blank())
 
 mouse_to_human_plots_patch_3 = (((a + b + plot_layout(axes = "collect")) | (c) | (f)) + 
   plot_layout(widths = c(0.8, 1, 0.4), nrow = 1))
@@ -6242,17 +6438,15 @@ library(msigdbr)
 library(fgsea)
 
 #Scatter plot extracted DEGs
-genes_vary_human_all_diff = degs_pos_neg_mouse_split %>% 
-  filter(quartiles_diff %in% c("Q10", "Q25", "Q75", "Q100")) %>% 
+genes_vary_human_all_diff = abs_diff_correlation_plot_data_split_qn %>% 
+  filter(quartile_label %in% c("Q10", "Q25", "Q75", "Q100")) %>% 
   mutate(quartiles_grouped = case_when(
-    quartiles_diff %in% c("Q10", "Q25") ~ "<=Q25",
-    quartiles_diff %in% c("Q75", "Q100") ~ ">=Q75"
+    quartile_label %in% c("Q10", "Q25") ~ "<=Q25",
+    quartile_label %in% c("Q75", "Q100") ~ ">=Q75"
   )) %>% 
   mutate(
-    condition = if_else(condition == "Positively correlated", "Positive", "Negative"),
-    condition_quantile = paste0(condition, " (D", timepoint, ") ", quartiles_grouped)) %>%
-  select(-condition) %>% 
-  rename(value = diff,
+    condition_quantile = paste0(quartiles_grouped, " (Day ",timepoint, ")")) %>%
+  rename(value = human_2_mouse_qn,
          genes = human_symbol,
          condition = condition_quantile)
 
@@ -6261,8 +6455,10 @@ genes_vary_human_all_diff = degs_pos_neg_mouse_split %>%
 
 #Hallmarks
 #Retrieve human H (hallmark) gene set
-msigdbr_df <- msigdbr(species = "human", category = "H") %>% 
-  select(process = gs_name, genes = human_gene_symbol) %>% 
+msigdbr_raw <- msigdbr(species = "human", category = "H") 
+  
+msigdbr_df = msigdbr_raw %>% 
+  select(process = gs_name, genes = gene_symbol) %>% 
   mutate(process = str_remove(process, "HALLMARK_"))
 
 # gsea_hallmarks_all_diff= autoGSEA(df = genes_vary_human_all_diff %>% 
@@ -6271,20 +6467,20 @@ msigdbr_df <- msigdbr(species = "human", category = "H") %>%
 #          geneset_name = "Hallmarks MSigDB") %>% 
 #   clean_names()
 
-#ORA DIFF
-oraGO_all_diff_all_conditions <- oraGO_condition(genes_vary_human_all_diff,
-                                                     orgdb = org.Hs.eg.db) %>%
-  mutate(log_q = -log10(qvalue)) %>%
-  arrange(-log_q)
-
-oraGO_all_diff_all_conditions_clean = oraGO_all_diff_all_conditions %>%
-  mutate(description = str_replace(description, "regulation", "Reg."),
-         description = str_replace(description, "positive", "(+)"),
-         description = str_replace(description, "negative", "(-)")) %>% 
-  mutate(log_p_adjust = -log(p_adjust)) %>% 
-  mutate(description = str_replace_all(description, "_", " ")) %>% 
-  mutate(timepoint = str_extract(condition, "\\(D\\d+\\)")) %>%
-  mutate(timepoint = str_extract(timepoint, "\\d+"))
+# #ORA DIFF
+# oraGO_all_diff_all_conditions <- oraGO_condition(genes_vary_human_all_diff,
+#                                                      orgdb = org.Hs.eg.db) %>%
+#   mutate(log_q = -log10(qvalue)) %>%
+#   arrange(-log_q)
+# 
+# oraGO_all_diff_all_conditions_clean = oraGO_all_diff_all_conditions %>%
+#   mutate(description = str_replace(description, "regulation", "Reg."),
+#          description = str_replace(description, "positive", "(+)"),
+#          description = str_replace(description, "negative", "(-)")) %>% 
+#   mutate(log_p_adjust = -log(p_adjust)) %>% 
+#   mutate(description = str_replace_all(description, "_", " ")) %>% 
+#   mutate(timepoint = str_extract(condition, "\\(D\\d+\\)")) %>%
+#   mutate(timepoint = str_extract(timepoint, "\\d+"))
 
 #ORA Hallmarks DIFF
 ora_all_diff_hallmark <- enricher_condition(
@@ -6292,8 +6488,7 @@ ora_all_diff_hallmark <- enricher_condition(
   term2gene_df = msigdbr_df) %>% 
   mutate(log_p_adjust = -log(p_adjust)) %>% 
   mutate(description = str_replace_all(description, "_", " ")) %>% 
-  mutate(timepoint = str_extract(condition, "\\(D\\d+\\)")) %>%
-  mutate(timepoint = str_extract(timepoint, "\\d+"))
+  mutate(timepoint = str_extract(condition, "(?<=\\(Day )\\d+"))
 
 ```
 
@@ -6397,8 +6592,8 @@ ora_all_diff_hallmark_heatmap = ora_all_diff_hallmark %>%
                               p_adjust <= 0.05 ~ "**",
                               TRUE ~ ""),
            quantile = str_extract(condition, "[<>]=Q\\d+"),  
-        condition = if_else(str_detect(condition, "Negative"), "Negative", "Positive"),
-        condition = paste(condition, quantile)) %>% 
+        # condition = if_else(str_detect(condition, "Negative"), "Negative", "Positive"),
+        condition = paste(quantile)) %>% 
   ggplot(aes(x=condition, y = str_to_upper(description), fill = log_p_adjust)) +
   geom_tile(color = "black", 
             size = 0.2, na.rm = F, stat = "identity") +
@@ -6417,6 +6612,10 @@ ora_all_diff_hallmark_heatmap = ora_all_diff_hallmark %>%
     theme_vaxgo() +
     theme(axis.text = element_text(color = "black", size = 8) ,
           # axis.line.x  = element_blank(),
+          legend.text = element_text(size = 8),
+          legend.title = element_text(size = 8),
+          legend.key.width = unit(0.4, 'cm'),
+          legend.key.height = unit(0.4, 'cm'),
           axis.line.y  = element_blank(),
           axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
           axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
@@ -6427,15 +6626,10 @@ ora_all_diff_hallmark_heatmap = ora_all_diff_hallmark %>%
           plot.margin = margin(0, 0.5, 0, 2, unit = "cm"),
           legend.direction = "horizontal",
           legend.position = "top") +
-    labs(x = "",
-         y = "",
-         title = "") +
     scale_y_discrete(position = "right") +
      labs(x = "",
          y = "",
          title = "ORA, MSigDB Hallmarks") +
-   
-    scale_y_discrete(position = "right")  +
   facet_grid(~paste("Day", timepoint), scales = "free_x", space = "free")
 
 ora_all_diff_hallmark_heatmap
@@ -11181,7 +11375,7 @@ classified_df = read_rds(here("FIT_Mouse2man", "genes_l2fc_fit_mouse_human_class
 #Get only DEGs in humans
 degs_human = classified_df %>% 
   filter(organism == "Human",
-         padj_deg < 0.10) %>% 
+         padj_deg < 0.05) %>% 
   pull(human_symbol) %>% 
   unique()
 
@@ -11270,7 +11464,9 @@ classification_degs_ngenes_plot
 ```{r}
 classified_wide <- classified_df %>%
   select(human_symbol, timepoint, padj_cutoff, l2fc_cutoff, organism, classification) %>%
-  pivot_wider(names_from = organism, values_from = classification) %>%
+  filter(l2fc_cutoff == 0, padj_cutoff == 0.05) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "organism", values_from = "classification") %>%
   filter(!is.na(Human) & !is.na(FIT) & !is.na(Mouse)) %>% 
   mutate(
     fit_correct = FIT == Human,
@@ -11397,6 +11593,8 @@ classification_degs_comparison %>%
 classification_degs_comparison %>% 
   glimpse()
 
+classification_degs_comparison
+
 ```
 
 Table
@@ -11443,13 +11641,6 @@ summary_table_accuracy
 ```{r fig.height=8, fig.width=15, message=FALSE, warning=FALSE}
 classification_degs_comparison = read_csv(file = here("FIT_Mouse2man", "classification_degs_comparison.csv"))
 ```
-
-
-
-
-
-
-
 
 #### Accuracy
 ```{r fig.height=8, fig.width=15, message=FALSE, warning=FALSE}
@@ -11696,7 +11887,7 @@ precision_recall_plot
 
 ```{r fig.height=4, fig.width=8}
 classified_df_probs <- classified_df %>%
-  select(human_symbol, timepoint, organism, padj_cutoff, l2fc_cutoff, ci_percentile, classification) %>%
+  select(human_symbol, timepoint, organism, padj_cutoff, l2fc_cutoff, ci_percentile, classification, padj_deg) %>%
   filter(ci_percentile %in% c(0.3, 1.0)) %>% 
   pivot_wider(names_from = organism, values_from = classification) %>% 
   fill(Human, .direction = "down") %>%
@@ -11716,17 +11907,29 @@ classified_df_probs <- classified_df %>%
     up = if_else(predicted == "up", 1, 0),
     neutral = if_else(predicted == "neutral", 1, 0)
   ) %>%
-  select(truth, down, up, neutral, predicted, model, timepoint, l2fc_cutoff, ci_percentile)
+  select(model, timepoint, truth, down, up, neutral, predicted, padj_deg, l2fc_cutoff, ci_percentile)  %>% 
+  mutate(down = if_else(down == 1, 1-padj_deg, down),
+         up = if_else(up == 1, 1-padj_deg, up),
+         neutral = if_else(neutral == 1, 1-padj_deg, neutral)) %>% 
+  mutate(down = round(down, 3),
+         up = round(up, 3),
+         neutral = round(neutral,3))
+
+classified_df_probs
+```
 
 
+```{r fig.height=4, fig.width=6}
 
 roc_curve_fit_mouse = classified_df_probs %>% 
   filter(l2fc_cutoff == 0) %>% 
   group_by(model, timepoint) %>%
-  roc_curve(truth, down, up, neutral) %>%
+  roc_curve(truth, 
+            down,
+            up, 
+            neutral) %>%
   ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
-  geom_path(size = 1) +
-  geom_point() +
+  geom_path(size = 1, alpha = 1) +
   geom_abline(lty = 3) +
   # coord_equal() +
   theme_vaxgo() +
@@ -11739,12 +11942,14 @@ roc_curve_fit_mouse = classified_df_probs %>%
   )) +
   labs(
   title = "ROC Curve by Model and Timepoint",
-  x = "TPR",
-  y = "FPR",
+  x = "FPR",
+  y = "TPR",
   color = "Model") + 
   theme(
     strip.text = element_text(size = 10),
     strip.placement = "outside",
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
     # strip.background.x = element_rect(fill = "gray95", color = NA), 
     strip.text.y = element_text(size = 10, angle = 0),
     axis.text.x = element_text(size = 8, angle = 90, hjust = 1, vjust = 0.5),
