@@ -2645,6 +2645,202 @@ eset_human_mouse <- ExpressionSet(
 eset_human_mouse %>% saveRDS(file = here("tables", "eset_human_mouse.rds"))
 ```
 
+#### Check distributions
+
+##### From raw counts
+```{r}
+human_mouse_fluad_not_normalized = GSE124689_expression_not_normalized_log2_raw_symbol %>% 
+  rownames_to_column("symbol") %>% 
+  pivot_longer(-symbol,
+               names_to = "sample_id",
+               values_to = "value_raw") %>% 
+  bind_rows(GSE120661_counts_not_normalized_log2_symbol %>% 
+              pivot_longer(-symbol,
+                names_to = "sample_id",
+                values_to = "value_raw"))
+  
+human_mouse_fluad_raw_qn = human_mouse_fluad_matrix %>% 
+  as.data.frame() %>% 
+  rownames_to_column("symbol") %>% 
+  pivot_longer(-symbol,
+               names_to = "sample_id",
+               values_to = "value_qn") %>% 
+  inner_join(human_mouse_fluad_not_normalized, 
+               by = join_by("symbol", "sample_id")) %>% 
+  inner_join(human_mouse_fluad_metadata,
+             by = "sample_id") %>% 
+  pivot_longer(cols = c(value_qn, value_raw),
+               names_to = "measure",
+               values_to = "value")
+
+human_mouse_fluad_raw_qn_avg = human_mouse_fluad_raw_qn %>% 
+  group_by(symbol, organism, timepoint, measure) %>% 
+  summarize(avg = mean(value),
+            n_subjects = n(),
+            sd = sd(value),
+            se = sd/sqrt(n_subjects)) %>% 
+  ungroup()
+  
+```
+
+Averaged
+```{r fig.height=5, fig.width=10}
+distribution_check_avg_raw_qn_plot = human_mouse_fluad_raw_qn_avg %>% 
+  filter(timepoint %in% c(0, 1, 3, 7)) %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) %>% 
+  ggplot() +
+  aes(x = avg) +
+  geom_density(aes(y = after_stat(count),
+                   fill = organism), 
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 0.5) +
+  facet_grid(~fct_rev(measure)~paste("Day", timepoint), scales = "fixed", axes = "all") +
+  scale_y_continuous(expand = c(0.01, 0.01))+
+  scale_fill_manual(values = c(FIT = "#4361ee",
+                               Mouse = "#4DBBD5FF",
+                               Human = "#546E7AFF"))+
+  scale_color_manual(values = c(FIT = "#4361ee",
+                                Mouse = "#4DBBD5FF",
+                                Human = "#546E7AFF")) +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        legend.key = element_blank(),
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "",
+       x = "Expression",
+       y = "Frequency")
+
+distribution_check_avg_raw_qn_plot
+
+```
+
+Boxplot by organism, averaged
+```{r}
+distribution_check_avg_raw_qn_boxplot = human_mouse_fluad_raw_qn_avg %>% 
+  filter(timepoint %in% c(0)) %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) %>% 
+  ggplot() +
+  aes(y = avg,
+      x = organism,
+      label = organism) +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+  facet_grid(~measure~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 5))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Expression")
+distribution_check_avg_raw_qn_boxplot
+```
+
+
+
+
+By subject
+```{r fig.height=7, fig.width=18}
+distribution_check_subject_raw_qn = human_mouse_fluad_raw_qn %>% 
+  filter(timepoint %in% c(0, 1, 3, 7)) %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) 
+
+distribution_check_subject_raw_qn_plot = distribution_check_subject_raw_qn %>% 
+  filter(timepoint == 0) %>% 
+  # filter(participant_id %in% c("TriFLU-MF59_BL_1", "CRC305DGENT1581031", "CRC305DGENT1773058")) %>% 
+  ggplot() +
+  aes(y = value,
+      x = participant_id,
+      label = participant_id) +
+  geom_boxplot(aes(fill = organism), outliers = F) +
+  facet_grid(~measure~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0.01, 0.01), limits = c(0, 5))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Expression")
+
+distribution_check_subject_raw_qn_plot
+```
+
+
+
+
+Combine boxplots
+```{r fig.height=5, fig.width=18}
+distribution_check_subject_raw_qn_all = (distribution_check_subject_raw_qn_plot + theme(strip.text.y = element_blank())) +
+  (distribution_check_avg_raw_qn_boxplot + theme(axis.title.y = element_blank(), legend.position = "none")) +
+  plot_layout(guides = "collect",
+              axes = "collect",
+              axis_titles = "collect",
+              widths = c(1, 0.1)) +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+distribution_check_subject_raw_qn_all %>% 
+  ggsave(filename = here("Figures", "distribution_check_subject_raw_qn_all.png"),
+         width = 18,
+         height = 5)
+
+distribution_check_subject_raw_qn_all
+```
+
+##### From Log2FC
+```{r}
+human_mouse_fluad_raw_qn %>% 
+  group_by(symbol, organism, timepoint, measure) %>% 
+  summarize(avg = mean(value),
+            n_subjects = n(),
+            sd = sd(value),
+            se = sd/sqrt(n_subjects)) %>% 
+  ungroup()
+
+
+human_mouse_fluad_raw_qn %>% 
+  glimpse()
+  
+```
+
+
+
+
+
+
+
+
+
 #### DGE (Mouse normalized with human)
 ```{r}
 
@@ -3520,6 +3716,8 @@ lineplot_gsea_timepoint_data_plot
 # Get best and worst predicted genes
 ```{r fig.height=5, fig.width=5}
 pairwise_human_fit_measures = readRDS(here("FIT_Mouse2man", "pairwise_human_fit_measures.rds"))
+
+pairwise_human_fit_test = pairwise_human_fit_measures
 ```
 
 ### Which genes have the least zscore?
@@ -3761,18 +3959,18 @@ degs_human_mouse_overlap_common_plot
 Get positively and negatively correlated genes and discretize by quantile
 ```{r fig.height=5, fig.width=10}
 zscore_genes_mouse = pairwise_human_fit_test %>% 
-  select(human_symbol,timepoint,  mean_human, mean_mouse, pval_mouse_adj, pval_human_adj, z_score_human_mouse) %>% 
-  arrange(z_score_human_mouse, human_symbol) %>% 
+  select(human_symbol,timepoint,  mean_human, mean_mouse, pval_adj_mouse, pval_adj_human, z_score_h2m) %>% 
+  arrange(z_score_h2m, human_symbol) %>% 
   group_by(timepoint) %>%
-                    arrange(abs(z_score_human_mouse)) %>% 
+                    arrange(abs(z_score_h2m)) %>% 
   mutate(diff = mean_human - mean_mouse,
          diff = round(diff, 3),
          mean_human = round(mean_human, 3),
          mean_mouse = round(mean_mouse, 3),
          comparison = "Human vs Mouse") %>% 
-  rename(zscore = z_score_human_mouse,
+  rename(zscore = z_score_h2m,
          mean_model = mean_mouse,
-         pval_model_adj = pval_mouse_adj) %>% 
+         pval_model_adj = pval_adj_mouse) %>% 
   #Discretize by quantile (zscore)
   mutate(
     quartile_label = cut(abs(zscore),
@@ -3783,19 +3981,19 @@ zscore_genes_mouse = pairwise_human_fit_test %>%
                          labels = c("Q10", "Q25", "Q50", "Q75", "Q100")),
     timepoint_day = paste0("Day ", timepoint)) %>% 
   mutate(pval_model_adj = if_else(pval_model_adj <= 0.05, "DEG", "Not DEG"),
-         pval_human_adj = if_else(pval_human_adj <= 0.05, "DEG", "Not DEG")) 
+         pval_human_adj = if_else(pval_adj_human <= 0.05, "DEG", "Not DEG")) 
 
 zscore_genes_fit = pairwise_human_fit_test %>% 
-  select(human_symbol,timepoint,  mean_human, mean_fit, pval_fit_adj, pval_human_adj, z_score_human_fit) %>% 
-  arrange(z_score_human_fit, human_symbol) %>% 
+  select(human_symbol,timepoint,  mean_human, mean_fit, pval_adj_fit, pval_adj_human, z_score_h2fit) %>% 
+  arrange(z_score_h2fit, human_symbol) %>% 
   group_by(timepoint) %>%
-  arrange(abs(z_score_human_fit)) %>% 
+  arrange(abs(z_score_h2fit)) %>% 
   mutate(diff = mean_human - mean_fit,
          diff = round(diff, 3),
          mean_human = round(mean_human, 3),
          mean_fit = round(mean_fit, 3),
          comparison = "Human vs FIT") %>% 
-  rename(zscore = z_score_human_fit,
+  rename(zscore = z_score_h2fit,
          mean_model = mean_fit,
          pval_model_adj = pval_fit_adj) %>%
   #Discretize by quantile (zscore)
@@ -4793,12 +4991,12 @@ best_fit_plot = pairwise_human_fit_genes_wide %>%
   scale_y_continuous(n.breaks = 3) +
   scale_color_manual(
   values = c(
-    "FIT" = "#45efc6", 
+    "FIT" = "#4361ee", 
     "Mouse" = "#546E7AFF",
     "Human" = "#4DBBD5FF"))+
   scale_fill_manual(
   values = c(
-    "FIT" = "#45efc6", 
+    "FIT" = "#4361ee", 
     "Mouse" = "#546E7AFF",
     "Human" = "#4DBBD5FF"))+
     theme_vaxgo() +
@@ -4842,12 +5040,12 @@ worst_fit_plot = pairwise_human_fit_genes_wide %>%
   scale_y_continuous(n.breaks = 3) +
   scale_color_manual(
   values = c(
-    "FIT" = "#45efc6", 
+    "FIT" = "#4361ee", 
     "Mouse" = "#546E7AFF",
     "Human" = "#4DBBD5FF"))+
   scale_fill_manual(
   values = c(
-    "FIT" = "#45efc6", 
+    "FIT" = "#4361ee", 
     "Mouse" = "#546E7AFF",
     "Human" = "#4DBBD5FF"))+
     theme_vaxgo() +
@@ -4891,12 +5089,12 @@ best_mouse_plot = pairwise_human_fit_genes_wide %>%
   scale_y_continuous(n.breaks = 3) +
   scale_color_manual(
   values = c(
-    "FIT" = "#45efc6", 
+    "FIT" = "#4361ee", 
     "Mouse" = "#546E7AFF",
     "Human" = "#4DBBD5FF"))+
   scale_fill_manual(
   values = c(
-    "FIT" = "#45efc6", 
+    "FIT" = "#4361ee", 
     "Mouse" = "#546E7AFF",
     "Human" = "#4DBBD5FF"))+
     theme_vaxgo() +
@@ -4939,12 +5137,12 @@ worst_mouse_plot = pairwise_human_fit_genes_wide %>%
   scale_y_continuous(n.breaks = 3) +
   scale_color_manual(
   values = c(
-    "FIT" = "#45efc6", 
+    "FIT" = "#4361ee", 
     "Mouse" = "#546E7AFF",
     "Human" = "#4DBBD5FF"))+
   scale_fill_manual(
   values = c(
-    "FIT" = "#45efc6", 
+    "FIT" = "#4361ee", 
     "Mouse" = "#546E7AFF",
     "Human" = "#4DBBD5FF"))+
     theme_vaxgo() +
@@ -4989,12 +5187,12 @@ worst_fit_mouse_plot = pairwise_human_fit_genes_wide %>%
   scale_y_continuous(n.breaks = 3) +
   scale_color_manual(
   values = c(
-    "FIT" = "#45efc6", 
+    "FIT" = "#4361ee", 
     "Mouse" = "#546E7AFF",
     "Human" = "#4DBBD5FF"))+
   scale_fill_manual(
   values = c(
-    "FIT" = "#45efc6", 
+    "FIT" = "#4361ee", 
     "Mouse" = "#546E7AFF",
     "Human" = "#4DBBD5FF"))+
     theme_vaxgo() +
@@ -5038,12 +5236,12 @@ worst_mouse_fit_plot = pairwise_human_fit_genes_wide %>%
   scale_y_continuous(n.breaks = 3) +
   scale_color_manual(
   values = c(
-    "FIT" = "#45efc6", 
+    "FIT" = "#4361ee", 
     "Mouse" = "#546E7AFF",
     "Human" = "#4DBBD5FF"))+
   scale_fill_manual(
   values = c(
-    "FIT" = "#45efc6", 
+    "FIT" = "#4361ee", 
     "Mouse" = "#546E7AFF",
     "Human" = "#4DBBD5FF"))+
     theme_vaxgo() +
@@ -5083,9 +5281,9 @@ pairwise_human_fit_genes_wide %>%
               distinct() %>% 
               slice_head(n = 100),
              mapping = aes(x = l2fc, y = -300),
-             fill = "#45efc6",
+             fill = "#4361ee",
              pch = 21,
-             color = "#45efc6"
+             color = "#4361ee"
              ) +
   geom_point(data = worst_fit %>% 
               select(human_symbol, timepoint, l2fc) %>%
@@ -5096,7 +5294,7 @@ pairwise_human_fit_genes_wide %>%
                            label = human_symbol),
              fill = NA,
              pch = 21,
-             color = "#45efc6"
+             color = "#4361ee"
              ) +
   geom_point(data = best_mouse %>% 
               select(human_symbol, timepoint, l2fc) %>%
@@ -5133,12 +5331,12 @@ pairwise_human_fit_genes_wide %>%
   scale_y_continuous(expand = c(0.05, 0.05), n.breaks = 3) +
     scale_fill_manual(
   values = c(
-    FIT = "#45efc6", 
+    FIT = "#4361ee", 
     Mouse = "#546E7AFF",
     Human = "#4DBBD5FF"))+
     scale_color_manual(
   values = c(
-    FIT = "#45efc6", 
+    FIT = "#4361ee", 
     Mouse = "#546E7AFF",
     Human = "#4DBBD5FF"))+
     theme_vaxgo() +
@@ -5293,7 +5491,7 @@ ranks_percentile_best_fit_and_mouse_long_plot = ranks_best_fit_and_mouse_long %>
                            x = model,
                            y = percentile),
              color = "black",
-             segment.color = "#45efc6",
+             segment.color = "#4361ee",
              direction = c("y"),
              size = 3, 
             min.segment.length = 0.5,
@@ -5323,7 +5521,7 @@ geom_text_repel(data = selected_genes %>%
        # title = "Best 10% versus worst 100%"
        ) +
     scale_color_manual(values = c(
-    "Top FIT vs Mouse" = "#45efc6", 
+    "Top FIT vs Mouse" = "#4361ee", 
     "Top Mouse vs FIT" = "#4DBBD5FF")) +
   scale_x_discrete(expand = c(0.05, 0.05)) +
   scale_y_continuous(expand = c(0.01, 0.01), limits = c(0, 110)) +
@@ -5372,7 +5570,7 @@ ranks_best_worst_fit_and_mouse_long_zscore_plot = ranks_best_fit_and_mouse_long_
              size = 3, 
              direction = c("y"),
              color = "black",
-             segment.color = "#45efc6", 
+             segment.color = "#4361ee", 
              max.overlaps = 10000, 
              # force = 2,
              force_pull = 5,
@@ -5401,7 +5599,7 @@ ranks_best_worst_fit_and_mouse_long_zscore_plot = ranks_best_fit_and_mouse_long_
        # title = "Top 20 genes with least zscore, and their zscores in the other model"
        ) +
     scale_color_manual(values = c(
-    "Top FIT vs Mouse" = "#45efc6", 
+    "Top FIT vs Mouse" = "#4361ee", 
     "Top Mouse vs FIT" = "#4DBBD5FF")) +
   guides(color = guide_legend(override.aes = list(linewidth = 2))) +
   scale_x_discrete(expand = c(0.05, 0.05)) +
@@ -6337,11 +6535,11 @@ fit_vs_human_corr = corr_plots_data %>%
   aes(x = mean_fit,
       y = mean_human) +
   geom_point(alpha = 0.5,
-             fill = "#45efc6",
+             fill = "#4361ee",
              pch = 21,
              size = 1,
              show.legend = F,
-             color = "#45efc6") +
+             color = "#4361ee") +
   geom_smooth(method = 'lm', se = TRUE, color = "black") +
   geom_vline(xintercept = 0, linetype = 2, size = 0.5, alpha = 0.5) +
   geom_hline(yintercept = 0, linetype = 2, size = 0.5, alpha = 0.5) +
@@ -6573,12 +6771,12 @@ classification_degs_ngenes_plot = classified_df_countgenes_degs_direction %>%
   scale_color_manual(values = c(
     "Human"  = "#90A4AEFF",
     "Mouse" = "#4DBBD5FF",
-    "FIT"   = "#45efc6"
+    "FIT"   = "#4361ee"
   )) +
   scale_fill_manual(values = c(
     "Human"  = "#90A4AEFF",
     "Mouse" = "#4DBBD5FF",
-    "FIT"   = "#45efc6"
+    "FIT"   = "#4361ee"
   )) 
 
 
@@ -7005,20 +7203,30 @@ precision_recall_plot
 
 
 ### ROC Curve
-
+Do for one direction (up and then down)
+Do one sided t test limma for mouse, fit, and human
 ```{r}
 dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds"))
 
 truth_human_p05_l2fc0 = dge_long_genes %>% 
   select(human_symbol, organism, timepoint, l2fc = value, adj_p_val) %>% 
   filter(organism == "Human",
-         adj_p_val <= 0.05) %>% 
-  mutate(direction = case_when(l2fc < -0.01 ~ "down",
-                               l2fc > 0.01 ~ "up",
+         # adj_p_val <= 0.05
+         ) %>% 
+  #Use one cutoff (padj_value)
+  
+  
+  
+  #Those that passes are assigned as up or down based on log2fc
+  mutate(direction = case_when(l2fc < -0.0 ~ "down",
+                               l2fc > 0.0 ~ "up",
                                T ~ "neutral")) %>% 
   pivot_wider(names_from = "organism",
               values_from = "direction") %>% 
   rename(truth = Human)
+
+truth_human_p05_l2fc0 %>% 
+  filter(truth == "neutral")
 
 
 models_p05_l2fc0 = dge_long_genes %>% 
@@ -7034,7 +7242,9 @@ classified_df_probs = truth_human_p05_l2fc0 %>%
   inner_join(models_p05_l2fc0 %>% 
                select(human_symbol, timepoint, pred, adj_p_val, model = organism, l2fc),
              by = join_by("human_symbol", "timepoint")) %>% 
-  mutate(prob = 1 -  adj_p_val) %>% 
+  mutate(prob = 1 -  adj_p_val, #TRY THIS
+         # notup = 1 - Up
+         ) %>% 
   distinct() %>% 
   pivot_wider(names_from = "pred",
               values_from = "prob")  %>% 
@@ -7050,6 +7260,13 @@ classified_df_probs
 ```
 
 
+
+```{r}
+two_class_example %>% 
+  mutate(sum = Class1 + Class2)
+```
+
+
 ```{r fig.height=4, fig.width=5}
 #PLOT ROC Curve
 roc_curve_fit_mouse = classified_df_probs %>% 
@@ -7057,7 +7274,8 @@ roc_curve_fit_mouse = classified_df_probs %>%
   roc_curve(truth, 
             down,
             up,
-            neutral) %>%
+            neutral
+            ) %>%
   ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
   geom_path(size = 1, alpha = 1) +
   geom_abline(lty = 3) +
@@ -7065,7 +7283,7 @@ roc_curve_fit_mouse = classified_df_probs %>%
   facet_grid(~paste("Day", timepoint)~str_to_upper(.level)) + 
   scale_color_manual(values = c(
     "Mouse" = "#4DBBD5FF",
-    "FIT"   = "#45efc6")) +
+    "FIT"   = "#4361ee")) +
   labs(
   x = "FPR",
   y = "TPR",
