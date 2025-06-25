@@ -7,6 +7,7 @@ library(here)
 library(ggsci)
 library(janitor)
 library(readr)
+library(preprocessCore)
 # library(explore)
 library(maditr)
 library(GEOquery)
@@ -2647,7 +2648,7 @@ eset_human_mouse %>% saveRDS(file = here("tables", "eset_human_mouse.rds"))
 
 #### Check distributions
 
-##### From raw counts
+##### From raw log2_counts
 ```{r}
 human_mouse_fluad_not_normalized = GSE124689_expression_not_normalized_log2_raw_symbol %>% 
   rownames_to_column("symbol") %>% 
@@ -2725,7 +2726,7 @@ distribution_check_avg_raw_qn_plot
 Boxplot by organism, averaged
 ```{r}
 distribution_check_avg_raw_qn_boxplot = human_mouse_fluad_raw_qn_avg %>% 
-  filter(timepoint %in% c(0)) %>% 
+  filter(timepoint %in% c(1)) %>% 
   mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
                              measure == "value_qn" ~ "Quantile\nnormalized",
                              T ~ measure)) %>% 
@@ -2768,7 +2769,7 @@ distribution_check_subject_raw_qn = human_mouse_fluad_raw_qn %>%
                              T ~ measure)) 
 
 distribution_check_subject_raw_qn_plot = distribution_check_subject_raw_qn %>% 
-  filter(timepoint == 0) %>% 
+  filter(timepoint == 1) %>% 
   # filter(participant_id %in% c("TriFLU-MF59_BL_1", "CRC305DGENT1581031", "CRC305DGENT1773058")) %>% 
   ggplot() +
   aes(y = value,
@@ -2819,19 +2820,227 @@ distribution_check_subject_raw_qn_all
 
 ##### From Log2FC
 ```{r}
-human_mouse_fluad_raw_qn %>% 
+# Calculate log2FC 
+human_mouse_fluad_raw_qn_log2fc <- human_mouse_fluad_raw_qn %>%
+  filter(measure %in% c("value_qn", "value_raw"),
+         timepoint %in% c(0, 1, 3, 7)) %>%
+  select(participant_id, symbol, timepoint, value, measure, organism) %>%
+  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_") %>%
+  pivot_longer(cols = starts_with("day_"),
+               names_to = "timepoint",
+               names_prefix = "day_",
+               values_to = "value") %>%
+  group_by(participant_id, symbol, measure) %>%
+  mutate(day0 = value[timepoint == "0"]) %>%
+  ungroup() %>%
+  mutate(log2fc = value - day0) %>%
+  filter(timepoint != "0")
+
+#Average L2FC
+human_mouse_fluad_raw_qn_log2fc_avg = human_mouse_fluad_raw_qn_log2fc %>% 
   group_by(symbol, organism, timepoint, measure) %>% 
-  summarize(avg = mean(value),
+  summarize(avg_log2fc = mean(log2fc, na.rm = T),
             n_subjects = n(),
-            sd = sd(value),
-            se = sd/sqrt(n_subjects)) %>% 
-  ungroup()
+            sd = sd(value, na.rm = T),
+            se = sd/sqrt(n_subjects),
+            #Get pval from simple t-test
+            pval = tryCatch(t.test(log2fc, mu = 0)$p.value, error = function(e) NA_real_), 
+            .groups = "drop") %>% 
+  ungroup() %>% 
+  mutate(ci_low = avg_log2fc - 1.96*se,
+         ci_high = avg_log2fc + 1.96*se,
+         pval_adj = p.adjust(pval, method = "BH"))
 
 
-human_mouse_fluad_raw_qn %>% 
-  glimpse()
+human_mouse_fluad_raw_qn_log2fc_avg %>% 
   
+
+human_mouse_fluad_raw_qn_log2fc
+human_mouse_fluad_raw_qn_log2fc_avg 
 ```
+
+Averaged
+```{r fig.height=5, fig.width=10}
+distribution_check_avg_raw_qn_log2fc_plot = human_mouse_fluad_raw_qn_log2fc_avg %>% 
+  filter(timepoint %in% c(0, 1, 3, 7)) %>%
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) %>% 
+  ggplot() +
+  aes(x = avg_log2fc) +
+  geom_density(aes(y = after_stat(count),
+                   fill = organism), 
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 0.5) +
+  facet_grid(~fct_rev(measure)~paste("Day", timepoint), scales = "free_y") +
+  scale_y_continuous(expand = c(0.01, 0.01))+
+  scale_x_continuous( limits = c(-0.5, 0.5)) +
+  scale_fill_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#546E7AFF"))+
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        legend.key = element_blank(),
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "",
+       x = "Log2-Fold Change",
+       y = "Frequency")
+
+distribution_check_avg_raw_qn_log2fc_plot
+
+```
+
+
+
+Plot correlation
+```{r}
+human_mouse_fluad_raw_qn_log2fc_avg %>% 
+  select(symbol, timepoint, measure, avg_log2fc, organism) %>% 
+  filter(timepoint %in% c(1, 3, 7)) %>% 
+  drop_na(avg_log2fc) %>% 
+  pivot_wider(names_from = "organism",
+              values_from = "avg_log2fc") %>% 
+  drop_na() %>%
+  ggplot() +
+  aes(x = Mouse,
+      y = Human) +
+  facet_grid(~measure~paste("Day", timepoint), axes = "all") +
+  geom_point(aes(color = measure)) +
+  scale_y_continuous(limits = c(-1, 1)) +
+  scale_x_continuous(limits = c(-1, 1)) +
+   scale_color_manual(values = c(
+    "value_qn"  = "#90A4AEFF",
+    "value_raw" = "#4DBBD5FF")) +
+  scale_fill_manual(values = c(
+    "value_qn"  = "#90A4AEFF",
+    "value_raw" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  theme(legend.position = "top",
+        legend.direction = "horizontal")
+
+
+```
+
+
+
+
+
+
+Boxplot by organism, averaged
+```{r}
+distribution_check_avg_raw_qn_log2fc_boxplot = human_mouse_fluad_raw_qn_log2fc_avg %>% 
+  filter(timepoint %in% c(1)) %>% 
+  drop_na(avg_log2fc) %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) %>% 
+  ggplot() +
+  aes(y = avg_log2fc,
+      x = organism,
+      label = organism) +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+  facet_grid(~measure~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0,0), 
+                     limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Log2-Fold Change")
+
+distribution_check_avg_raw_qn_log2fc_boxplot
+```
+
+
+By subject
+```{r fig.height=7, fig.width=18}
+distribution_check_subject_raw_qn_log2fc = human_mouse_fluad_raw_qn_log2fc %>% 
+  filter(timepoint %in% c(1)) %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) 
+
+distribution_check_subject_raw_qn_log2fc_plot = distribution_check_subject_raw_qn_log2fc %>% 
+  filter(timepoint == 1) %>% 
+  # filter(participant_id %in% c("TriFLU-MF59_BL_1", "CRC305DGENT1581031", "CRC305DGENT1773058")) %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+  geom_boxplot(aes(fill = organism), outliers = F) +
+  facet_grid(~measure~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0.01, 0.01), limits = c(-1, 1))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+
+distribution_check_subject_raw_qn_log2fc_plot
+```
+
+
+Combine boxplots
+```{r fig.height=5, fig.width=18}
+distribution_check_subject_raw_qn_log2fc_all = (distribution_check_subject_raw_qn_log2fc_plot + theme(strip.text.y = element_blank())) +
+  (distribution_check_avg_raw_qn_log2fc_boxplot + theme(axis.title.y = element_blank(), legend.position = "none")) +
+  plot_layout(guides = "collect",
+              axes = "collect",
+              axis_titles = "collect",
+              widths = c(1, 0.1)) +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+distribution_check_subject_raw_qn_log2fc_all %>% 
+  ggsave(filename = here("Figures", "distribution_check_subject_raw_qn_log2fc_all.png"),
+         width = 18,
+         height = 5)
+
+distribution_check_subject_raw_qn_log2fc_all
+```
+
+
+Plot volcano plot
+
+```{r}
+human_mouse_fluad_raw_qn_log2fc_avg %>% 
+  mutate(logp = -log())
+  ggplot() +
+  a
+```
+
 
 
 
@@ -3286,12 +3495,12 @@ meta_human = fluad_human_mouse_fit %>%
          ci_high_human = ci_high,
          ci_width_human = ci_size,
          pval_adj_human = adj_p_val,
-         pval_human = p_value
-         )
+         pval_human = p_value)
 ```
 
 
 ```{r fig.height=5, fig.width=5}
+
 #Unite
 pairwise_human_fit_measures = meta_human %>% 
   inner_join(meta_fit, by = join_by(human_symbol, timepoint)) %>% 
@@ -3954,9 +4163,7 @@ degs_human_mouse_overlap_common_plot
 
 ### Get by zscore
 
-
-### By positively correlated z score
-Get positively and negatively correlated genes and discretize by quantile
+Get highly correlated genes and discretize by quantile
 ```{r fig.height=5, fig.width=10}
 zscore_genes_mouse = pairwise_human_fit_test %>% 
   select(human_symbol,timepoint,  mean_human, mean_mouse, pval_adj_mouse, pval_adj_human, z_score_h2m) %>% 
@@ -3995,7 +4202,7 @@ zscore_genes_fit = pairwise_human_fit_test %>%
          comparison = "Human vs FIT") %>% 
   rename(zscore = z_score_h2fit,
          mean_model = mean_fit,
-         pval_model_adj = pval_fit_adj) %>%
+         pval_model_adj = pval_adj_fit) %>%
   #Discretize by quantile (zscore)
   mutate(quartile_label = cut(abs(zscore),
                          breaks = quantile(abs(zscore),
@@ -4005,7 +4212,7 @@ zscore_genes_fit = pairwise_human_fit_test %>%
                          labels = c("Q10", "Q25", "Q50", "Q75", "Q100")),
     timepoint_day = paste0("Day ", timepoint)) %>% 
   mutate(pval_model_adj = if_else(pval_model_adj <= 0.05, "DEG", "Not DEG"),
-         pval_human_adj = if_else(pval_human_adj <= 0.05, "DEG", "Not DEG")) 
+         pval_human_adj = if_else(pval_adj_human <= 0.05, "DEG", "Not DEG")) 
 
 zscore_genes_fit %>% 
   group_by(timepoint, quartile_label) %>% 
@@ -4039,8 +4246,6 @@ degs_pos_neg_summary_quantiles_best_worst_data <- zscore_genes %>%
 
 ### Scatterplot of correlation
 
-
-#### Absolute differences
 ```{r fig.height=4, fig.width=8}
 
 #Get all genes by quantile
@@ -4139,8 +4344,8 @@ abs_diff_correlation_plot_data_split_plot_mouse = diff_correlation_plot_data %>%
                                "Q50" = "gray50",
                                "Q75" = "gray75",
                                "Q100" = "gray90")) +
-  scale_x_continuous(limits = c(-1.5, 1.5)) +
-  scale_y_continuous(limits = c(-1.5, 1.5)) +
+  scale_x_continuous(limits = c(-1, 1)) +
+  scale_y_continuous(limits = c(-1, 1)) +
   
   theme_vaxgo() +
   theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
@@ -4223,8 +4428,8 @@ abs_diff_correlation_plot_data_split_plot_fit = diff_correlation_plot_data %>%
                                "Q50" = "gray50",
                                "Q75" = "gray75",
                                "Q100" = "gray90")) +
-  scale_x_continuous(limits = c(-1.5, 1.5)) +
-  scale_y_continuous(limits = c(-1.5, 1.5)) +
+  scale_x_continuous(limits = c(-1, 1)) +
+  scale_y_continuous(limits = c(-1, 1)) +
   
   theme_vaxgo() +
   theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
@@ -5431,20 +5636,6 @@ ranks_best_fit_and_mouse_zscore = ranks_fit_vs_mouse %>%
               filter(timepoint_ref == timepoint_other) %>%
   arrange(abs(zscore_h2mouse), desc(abs(zscore_h2fit))) %>%
   slice_head(n = 20)) %>%
-  
-  # FILTER BY PERCENTILE
-  # filter(
-  #   timepoint_ref == timepoint_other,
-  #   zscore_h2fit <= quantile(abs(zscore_h2fit), 0.05, na.rm = TRUE),  # os mais baixos 5%
-  #   zscore_h2mouse >= quantile(abs(zscore_h2mouse), 0.95, na.rm = TRUE)  # os mais altos 5%
-  # ) %>%
-  # arrange(abs(zscore_h2fit), -abs(zscore_h2mouse)) %>% 
-  # bind_rows(ranks_mouse_vs_fit %>%
-  #             filter(
-  #                   timepoint_ref == timepoint_other,
-  #   zscore_h2fit >= quantile(abs(zscore_h2fit), 0.95, na.rm = TRUE),  # os mais baixos 5%
-  #   zscore_h2mouse <= quantile(abs(zscore_h2mouse), 0.05, na.rm = TRUE)  # os mais altos 5%
-  # )) %>%
   select(condition,
          human_symbol,
          timepoint_ref,
