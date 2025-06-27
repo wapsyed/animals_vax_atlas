@@ -2684,86 +2684,6 @@ human_mouse_fluad_raw_qn_avg = human_mouse_fluad_raw_qn %>%
   ungroup()
 ```
 
-
-```{r}
-#Using SVA combat
-library(sva)
-
-# 1. Quantile normalize the matrix
-normalized_matrix <- normalizeBetweenArrays(
-  as.matrix(human_mouse_fluad_matrix), 
-  method = "quantile")
-
-# 2. Prepare metadata with batches
-batch_metadata <- human_mouse_fluad_metadata %>% 
-  select(sample_id, participant_id, array) %>%
-  filter(sample_id %in% colnames(normalized_matrix)) %>%
-  arrange(match(sample_id, colnames(normalized_matrix)))
-
-# Confirm sample order matches
-stopifnot(all(batch_metadata$sample_id == colnames(normalized_matrix)))
-
-# Build the batch matrix
-batch <- batch_metadata$array 
-mod <- model.matrix(~ 1, data = batch_metadata) 
-
-# Clean the normalized matrix (remove NA, NaN, Inf)
-clean_matrix <- normalized_matrix[complete.cases(normalized_matrix), ]
-
-# PCA BEFORE ComBat
-pca_before <- prcomp(t(clean_matrix), scale. = TRUE)
-pca_before_df <- as_tibble(pca_before$x[, 1:2]) %>%
-  mutate(sample_id = rownames(pca_before$x)) %>%
-  left_join(human_mouse_fluad_metadata, by = "sample_id")
-
-pca_before_combat <- ggplot(pca_before_df, aes(x = PC1, y = PC2, color = organism)) +
-  geom_point(size = 3, alpha = 0.8) +
-  theme_minimal() +
-  labs(title = "PCA After Quantile normalization",
-       color = "Organism")
-
-# Apply ComBat
-combat_matrix <- ComBat(dat = clean_matrix,
-                        batch = batch,
-                        mod = mod,
-                        par.prior = TRUE,
-                        prior.plots = FALSE)
-
-pca_after <- prcomp(t(combat_matrix), scale. = TRUE)
-pca_after_df <- as_tibble(pca_after$x[, 1:2]) %>%
-  mutate(sample_id = rownames(pca_after$x)) %>%
-  left_join(human_mouse_fluad_metadata, by = "sample_id")
-pca_after_combat <- ggplot(pca_after_df, aes(x = PC1, y = PC2, color = organism)) +
-  geom_point(size = 3, alpha = 0.8) +
-  theme_minimal() +
-  labs(title = "PCA After ComBat",
-       color = "Organism")
-
-
-pca_before_combat + pca_after_combat
-
-
-combat_df_long = combat_matrix %>% 
-  as.data.frame() %>% 
-  rownames_to_column("symbol") %>% 
-  pivot_longer(-symbol,
-               names_to = "sample_id",
-               values_to = "value_combat") %>% 
-  inner_join(human_mouse_fluad_metadata,
-             by = "sample_id")
-
-
-combat_matrix %>% 
-  asn
-
-human_mouse_fluad_raw_qn %>% 
-  inner_join(
-             by = "")
-
-
-```
-
-
 Sanity check
 
 ```{r}
@@ -3318,6 +3238,347 @@ ggplot() +
 
 
 
+### COMBAT
+
+
+
+```{r}
+#Using SVA combat
+library(sva)
+
+# 1. Quantile normalize the matrix
+normalized_matrix <- normalizeBetweenArrays(
+  as.matrix(human_mouse_fluad_matrix), 
+  method = "quantile")
+
+# 2. Prepare metadata with batches
+batch_metadata <- human_mouse_fluad_metadata %>% 
+  select(sample_id, participant_id, array) %>%
+  filter(sample_id %in% colnames(normalized_matrix)) %>%
+  arrange(match(sample_id, colnames(normalized_matrix)))
+
+# Confirm sample order matches
+stopifnot(all(batch_metadata$sample_id == colnames(normalized_matrix)))
+
+# Build the batch matrix
+batch <- batch_metadata$array 
+mod <- model.matrix(~ 1, data = batch_metadata) 
+
+# Clean the normalized matrix (remove NA, NaN, Inf)
+clean_matrix <- normalized_matrix[complete.cases(normalized_matrix), ]
+
+# PCA BEFORE ComBat
+pca_before <- prcomp(t(clean_matrix), scale. = TRUE)
+pca_before_df <- as_tibble(pca_before$x[, 1:2]) %>%
+  mutate(sample_id = rownames(pca_before$x)) %>%
+  left_join(human_mouse_fluad_metadata, by = "sample_id")
+
+pca_before_combat <- ggplot(pca_before_df, aes(x = PC1, y = PC2, color = organism)) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "PCA After Quantile normalization",
+       color = "Organism")
+
+# Apply ComBat
+combat_matrix <- ComBat(dat = clean_matrix,
+                        batch = batch,
+                        mod = mod,
+                        par.prior = TRUE,
+                        prior.plots = FALSE)
+
+combat_df_long = combat_matrix %>% 
+  as.data.frame() %>% 
+  rownames_to_column("symbol") %>% 
+  pivot_longer(-symbol,
+               names_to = "sample_id",
+               values_to = "value_combat") %>% 
+  inner_join(human_mouse_fluad_metadata,
+               by = "sample_id")  %>% 
+  pivot_longer(cols = value_combat,
+               names_to = "measure",
+               values_to = "value")
+
+
+#Unite with other datasets
+human_mouse_fluad_raw_qn_combat = combat_df_long %>% 
+  select(symbol, sample_id, participant_id, timepoint, organism, measure, value) %>% 
+  bind_rows(human_mouse_fluad_raw_qn %>% 
+           select(symbol, sample_id, participant_id, timepoint, organism, measure, value))
+
+human_mouse_fluad_raw_qn_combat_avg = human_mouse_fluad_raw_qn_combat %>% 
+  group_by(symbol, organism, timepoint, measure) %>% 
+  summarize(avg = mean(value),
+            n_subjects = n(),
+            sd = sd(value),
+            se = sd/sqrt(n_subjects)) %>% 
+  ungroup()
+
+human_mouse_fluad_raw_qn_combat
+
+# Calculate log2FC 
+human_mouse_fluad_combat_log2fc <- human_mouse_fluad_raw_qn_combat %>%
+  filter(timepoint %in% c(0, 1, 3, 7),
+         measure == "value_combat") %>%
+  select(participant_id, symbol, timepoint, value, measure, organism) %>%
+  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_") %>%
+  pivot_longer(cols = starts_with("day_"),
+               names_to = "timepoint",
+               names_prefix = "day_",
+               values_to = "value") %>%
+  group_by(participant_id, symbol, measure) %>%
+  mutate(day0 = value[timepoint == "0"]) %>%
+  ungroup() %>%
+  mutate(log2fc = value - day0) %>%
+  filter(timepoint != "0")
+
+#Average L2FC
+human_mouse_fluad_combat_log2fc_avg = human_mouse_fluad_combat_log2fc %>% 
+  group_by(symbol, organism, timepoint, measure) %>% 
+  summarize(avg_log2fc = mean(log2fc, na.rm = T),
+            n_subjects = n(),
+            sd = sd(value, na.rm = T),
+            se = sd/sqrt(n_subjects),
+            #Get pval from simple t-test
+            pval = tryCatch(t.test(log2fc, mu = 0)$p.value, error = function(e) NA_real_), 
+            .groups = "drop") %>% 
+  ungroup() %>% 
+  mutate(ci_low = avg_log2fc - 1.96*se,
+         ci_high = avg_log2fc + 1.96*se,
+         pval_adj = p.adjust(pval, method = "BH"))
+```
+
+
+```{r fig.height=5, fig.width=10}
+
+# PCA with quantile normalized
+clean_matrix_raw <- human_mouse_fluad_matrix[complete.cases(human_mouse_fluad_matrix), ]
+pca_raw <- prcomp(t(clean_matrix_raw), scale. = TRUE)
+pca_raw_df <- as_tibble(pca_raw$x[, 1:2]) %>%
+  mutate(sample_id = rownames(pca_raw$x)) %>%
+  left_join(human_mouse_fluad_metadata, by = "sample_id")
+
+pca_raw <- ggplot() +
+  geom_point(data = pca_raw_df %>% filter(organism == "Human"),
+             aes(x = PC1, y = PC2),
+             color = "black", fill = "#CFD8DC", shape = 21,
+             size = 3, stroke = 0.3, alpha = 0.7) +
+  geom_point(data = pca_raw_df %>% filter(organism == "Mouse"),
+             aes(x = PC1, y = PC2),
+             color = "black", fill = "#4DBBD5FF", shape = 21,
+             size = 3, stroke = 0.3, alpha = 0.9)+
+  theme_vaxgo() +
+  labs(title = "Raw expression",
+       color = "Organism")
+
+
+# PCA with quantile normalized
+pca_before <- prcomp(t(clean_matrix), scale. = TRUE)
+pca_before_df <- as_tibble(pca_before$x[, 1:2]) %>%
+  mutate(sample_id = rownames(pca_before$x)) %>%
+  left_join(human_mouse_fluad_metadata, by = "sample_id")
+
+pca_before_combat <-ggplot() +
+  theme_vaxgo() +
+  geom_point(data = pca_before_df %>% filter(organism == "Human"),
+             aes(x = PC1, y = PC2),
+             color = "black", fill = "#CFD8DC", shape = 21,
+             size = 3, stroke = 0.3, alpha = 0.7) +
+  geom_point(data = pca_before_df %>% filter(organism == "Mouse"),
+             aes(x = PC1, y = PC2),
+             color = "black", fill = "#4DBBD5FF", shape = 21,
+             size = 3, stroke = 0.3, alpha = 0.9) +
+  labs(title = "Quantile normalization",
+       color = "Organism")
+
+
+#PCA AFTER ComBat
+pca_after <- prcomp(t(combat_matrix), scale. = TRUE)
+pca_after_df <- as_tibble(pca_after$x[, 1:2]) %>%
+  mutate(sample_id = rownames(pca_after$x)) %>%
+  left_join(human_mouse_fluad_metadata, by = "sample_id")
+
+pca_after_combat <- ggplot() +
+  geom_point(data = pca_after_df %>% filter(organism == "Human"),
+             aes(x = PC1, y = PC2),
+             color = "black", fill = "#CFD8DC", shape = 21,
+             size = 3, stroke = 0.3, alpha = 0.5) +
+  geom_point(data = pca_after_df %>% filter(organism == "Mouse"),
+             aes(x = PC1, y = PC2),
+             color = "black", fill = "#4DBBD5FF", shape = 21,
+             size = 3, stroke = 0.3, alpha = 1) +
+  theme_vaxgo() +
+  labs(title = "ComBat",
+       fill = "Organism",
+       color = "Organism")
+
+
+
+pca_raw + pca_before_combat + pca_after_combat +
+  plot_layout(guides = "collect")
+```
+
+
+
+```{r}
+#Plot
+human_mouse_fluad_combat_log2fc_avg %>% 
+  select(symbol, timepoint, measure, avg_log2fc, organism) %>% 
+  filter(timepoint %in% c(1, 3, 7)) %>% 
+  drop_na(avg_log2fc) %>% 
+  pivot_wider(names_from = "organism",
+              values_from = "avg_log2fc") %>% 
+  drop_na() %>%
+  mutate(measure = case_when(measure == "value_combat" ~ "Combat normalized",T ~ measure)) %>% 
+  ggplot() +
+  aes(x = Mouse,
+      y = Human) +
+  facet_grid(~measure~paste("Day", timepoint), axes = "all") +
+  geom_point(color = "#90A4AEFF") +
+  scale_y_continuous(limits = c(-1, 1)) +
+  scale_x_continuous(limits = c(-1, 1)) +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  theme(legend.position = "none",
+        legend.direction = "horizontal")
+
+
+```
+
+
+```{r}
+human_mouse_fluad_raw_qn_combat %>% 
+  filter(timepoint == 0) %>% 
+  ggplot() +
+  aes(y = value,
+      x = participant_id,
+      label = participant_id) +
+  geom_boxplot(aes(fill = organism), outliers = F) +
+  facet_grid(~measure~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0.01, 0.01), limits = c(0, 5))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Expression")
+
+```
+
+```{r}
+distribution_check_avg_raw_qn_combat_log2fc_plot_data = human_mouse_fluad_combat_log2fc_avg%>% 
+  filter(timepoint %in% c(0, 1, 3, 7)) %>%
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             measure == "value_combat" ~"Combat normalized",
+                             T ~ measure))
+
+
+ distribution_check_avg_raw_qn_combat_log2fc_plot_data %>% 
+  ggplot() +
+  aes(x = avg_log2fc) +
+  geom_density(aes(y = after_stat(count),
+                   fill = organism), 
+               na.rm = T,
+               color = NA,
+               position = position_identity(), 
+               alpha = 0.8,
+               data = distribution_check_avg_raw_qn_combat_log2fc_plot_data %>% 
+                 filter(organism == "Human")) +
+  geom_density(aes(y = after_stat(count),
+                   color = organism), 
+               fill = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 1,
+               size = 1,
+               data = distribution_check_avg_raw_qn_combat_log2fc_plot_data %>% 
+                 filter(organism == "Mouse")) +
+  facet_grid(~fct_rev(measure)~paste("Day", timepoint), scales = "free_y") +
+  scale_y_continuous(expand = c(0.01, 0.01))+
+  scale_x_continuous( limits = c(-0.5, 0.5)) +
+  scale_fill_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#546E7AFF"))+
+  scale_color_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#546E7AFF"))+
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        legend.key = element_blank(),
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "",
+       x = "Log2-Fold Change",
+       y = "Frequency")
+```
+
+
+```{r}
+volcano_data <- distribution_check_avg_raw_qn_combat_log2fc_plot_data %>% 
+  mutate(
+    logp = -log10(pval_adj),
+    sig = case_when(
+      avg_log2fc > 0 & logp > 2 ~ "Upregulated",
+      avg_log2fc < 0 & logp > 2 ~ "Downregulated",
+      TRUE ~ "NS"
+    )
+  )
+
+
+volcano_data %>% 
+ggplot() +
+  aes(x = avg_log2fc, y = logp, fill = sig) +
+  facet_nested(~paste("Day", timepoint)+organism, scales = "free_y",  space = "free_y", nest_line = element_line(linetype = 1, color = "black")) +
+  geom_point(aes(fill = sig,
+                 color = sig),
+             pch = 21, 
+             size = 1, 
+             alpha = 1) +
+  geom_vline(xintercept = 0, color = "black", linetype = 1, size = 0.5) +
+  geom_hline(yintercept = 2, color = "black", linetype = 2, size = 0.5) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(breaks = c(2, 10, 20, 30, 40, 50, 60),
+                     limits = c(0, 70),
+                     expand = c(0.01, 0.01)) +
+  guides(color = F) +
+  scale_color_manual(
+    values = c(
+      "Upregulated" = "#165289", 
+      "Downregulated" = "#45efc6",
+      "NS" = "gray80")) +
+  scale_fill_manual(
+    values = c(
+      "Upregulated" = "#165289", 
+      "Downregulated" = "#45efc6",
+      "NS" = "gray80")) +
+  labs(x = "Log2-Fold Change",
+       y = "-log(FDR)",
+       fill = "Direction") +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.direction = "horizontal",
+        legend.title = element_blank(),
+        legend.key = element_blank(),
+        strip.text = element_text(size = 10),
+        axis.text = element_text(size = 10),
+        axis.text.x = element_text(angle = 0)) 
+
+```
 
 
 
