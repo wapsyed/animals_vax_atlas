@@ -48,6 +48,7 @@ library(ggh4x)
 library(readxl)
 library(patchwork)
 library(tidymodels)
+library(TidyDensity)
 ```
 
 
@@ -2650,6 +2651,8 @@ eset_human_mouse %>% saveRDS(file = here("tables", "eset_human_mouse.rds"))
 
 ##### From raw log2_counts
 ```{r}
+
+#Get normalized
 human_mouse_fluad_not_normalized = GSE124689_expression_not_normalized_log2_raw_symbol %>% 
   rownames_to_column("symbol") %>% 
   pivot_longer(-symbol,
@@ -2681,8 +2684,44 @@ human_mouse_fluad_raw_qn_avg = human_mouse_fluad_raw_qn %>%
             sd = sd(value),
             se = sd/sqrt(n_subjects)) %>% 
   ungroup()
-  
+
 ```
+
+
+Little sanity check
+
+```{r}
+# Calculate quantiles for each sample and measure
+quantile_summary <- human_mouse_fluad_raw_qn %>%
+  group_by(sample_id, measure) %>%
+  summarize(
+    q0   = quantile(value, probs = 0.00, na.rm = TRUE),
+    q25  = quantile(value, probs = 0.25, na.rm = TRUE),
+    q50  = quantile(value, probs = 0.50, na.rm = TRUE),
+    q75  = quantile(value, probs = 0.75, na.rm = TRUE),
+    q100 = quantile(value, probs = 1.00, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(cols = starts_with("q"), names_to = "quantile", values_to = "value")
+
+# Plot the quantiles
+ggplot(quantile_summary, aes(x = quantile, y = value, group = sample_id, color = measure)) +
+  geom_line(alpha = 0.3) +
+  labs(title = "Per-sample quantile distribution: raw vs. quantile-normalized") +
+  theme_minimal()
+
+human_mouse_fluad_raw_qn %>%
+  group_by(measure, organism, timepoint) %>%
+  summarize(
+    q0   = quantile(value, 0.00, na.rm = TRUE),
+    q25  = quantile(value, 0.25, na.rm = TRUE),
+    q50  = quantile(value, 0.50, na.rm = TRUE),
+    q75  = quantile(value, 0.75, na.rm = TRUE),
+    q100 = quantile(value, 1.00, na.rm = TRUE)
+  )
+```
+
+
 
 Averaged
 ```{r fig.height=5, fig.width=10}
@@ -2698,7 +2737,7 @@ distribution_check_avg_raw_qn_plot = human_mouse_fluad_raw_qn_avg %>%
                na.rm = T,
                position = position_identity(), 
                alpha = 0.5) +
-  facet_grid(~fct_rev(measure)~paste("Day", timepoint), scales = "fixed", axes = "all") +
+  facet_grid(~measure~paste("Day", timepoint), scales = "fixed", axes = "all") +
   scale_y_continuous(expand = c(0.01, 0.01))+
   scale_fill_manual(values = c(FIT = "#4361ee",
                                Mouse = "#4DBBD5FF",
@@ -2896,26 +2935,23 @@ distribution_check_avg_raw_qn_log2fc_plot
 
 Plot correlation
 ```{r fig.height=5, fig.width=8}
-human_mouse_fluad_raw_qn_log2fc_avg %>% 
+human_mouse_fluad_raw_qn_log2fc_avg_correlation_plot = human_mouse_fluad_raw_qn_log2fc_avg %>% 
   select(symbol, timepoint, measure, avg_log2fc, organism) %>% 
   filter(timepoint %in% c(1, 3, 7)) %>% 
   drop_na(avg_log2fc) %>% 
   pivot_wider(names_from = "organism",
               values_from = "avg_log2fc") %>% 
   drop_na() %>%
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) %>% 
   ggplot() +
   aes(x = Mouse,
       y = Human) +
   facet_grid(~measure~paste("Day", timepoint), axes = "all") +
-  geom_point(aes(color = measure)) +
+  geom_point(color = "#90A4AEFF") +
   scale_y_continuous(limits = c(-1, 1)) +
   scale_x_continuous(limits = c(-1, 1)) +
-   scale_color_manual(values = c(
-    "value_qn"  = "#90A4AEFF",
-    "value_raw" = "#90A4AEFF")) +
-  scale_fill_manual(values = c(
-    "value_qn"  = "#90A4AEFF",
-    "value_raw" = "#90A4AEFF")) +
   theme_vaxgo() +
   theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
         strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
@@ -2925,7 +2961,7 @@ human_mouse_fluad_raw_qn_log2fc_avg %>%
   theme(legend.position = "none",
         legend.direction = "horizontal")
 
-
+human_mouse_fluad_raw_qn_log2fc_avg_correlation_plot
 ```
 
 
@@ -3010,6 +3046,77 @@ distribution_check_subject_raw_qn_log2fc_plot
 ```
 
 
+Sanity check
+```{r}
+human_mouse_fluad_raw_qn_log2fc %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure))  %>% 
+  filter(organism == "Mouse") %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+  geom_boxplot(aes(fill = organism), outliers = F) +
+  facet_grid(~measure~timepoint, scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0.01, 0.01), limits = c(-1, 1))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+
+
+human_mouse_fluad_raw_qn_log2fc %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure))  %>% 
+  filter(organism == "Mouse") %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+  geom_boxplot(aes(fill = organism), outliers = F) +
+  facet_grid(~measure~timepoint, scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0.01, 0.01), limits = c(-1, 1))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+```
+
+
+
+
+
+
+
+
+
+
+
+
 Combine boxplots
 ```{r fig.height=5, fig.width=18}
 distribution_check_subject_raw_qn_log2fc_all = (distribution_check_subject_raw_qn_log2fc_plot + theme(strip.text.y = element_blank())) +
@@ -3024,6 +3131,33 @@ distribution_check_subject_raw_qn_log2fc_all %>%
   ggsave(filename = here("Figures", "distribution_check_subject_raw_qn_log2fc_all.png"),
          width = 18,
          height = 5)
+```
+
+
+```{r fig.height=10, fig.width=18}
+distribution_check_subject_raw_qn_all 
+
+a = (distribution_check_subject_raw_qn_log2fc_plot + theme(strip.text.y = element_blank()))
+b = (distribution_check_avg_raw_qn_log2fc_boxplot + theme(axis.title.y = element_blank(), legend.position = "none"))
+c = (distribution_check_subject_raw_qn_plot + theme(strip.text.y = element_blank()))
+d = (distribution_check_avg_raw_qn_boxplot + theme(axis.title.y = element_blank(), legend.position = "none"))
+
+((a | b) + plot_layout(widths = c(1, 0.1))) /
+((c | d) + plot_layout(widths = c(1, 0.1))) +
+  plot_layout(guides = "collect",
+              axes = "collect",
+              axis_titles = "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+
+```
+
+
+```{r fig.height=5, fig.width=18}
+distribution_check_avg_raw_qn_plot + distribution_check_avg_raw_qn_log2fc_plot +
+  plot_layout(widths = c(1, 0.5))
+  
+human_mouse_fluad_raw_qn_log2fc_avg_correlation_plot
 
 distribution_check_subject_raw_qn_log2fc_all
 ```
@@ -3044,14 +3178,18 @@ volcano_data <- human_mouse_fluad_raw_qn_log2fc_avg %>%
 volcano_data %>% 
 ggplot() +
   aes(x = avg_log2fc, y = logp, fill = sig) +
-  facet_wrap(~ organism~ timepoint, scales = "free", nrow = 2) +
+  facet_nested(~paste("Day", timepoint)+organism, scales = "free_y",  space = "free_y", nest_line = element_line(linetype = 1, color = "black")) +
   geom_point(aes(fill = sig,
                  color = sig),
              pch = 21, 
              size = 1, 
              alpha = 1) +
-  geom_vline(xintercept = 0, color = "black", linetype = 2) +
-  geom_hline(yintercept = 2, color = "black", linetype = 2) +
+  geom_vline(xintercept = 0, color = "black", linetype = 1, size = 0.5) +
+  geom_hline(yintercept = 2, color = "black", linetype = 2, size = 0.5) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(breaks = c(2, 10, 20, 30, 40, 50, 60),
+                     limits = c(0, 70),
+                     expand = c(0.01, 0.01)) +
   guides(color = F) +
   scale_color_manual(
     values = c(
@@ -3068,8 +3206,12 @@ ggplot() +
        fill = "Direction") +
   theme_vaxgo() +
   theme(legend.position = "top",
+        legend.direction = "horizontal",
+        legend.title = element_blank(),
+        legend.key = element_blank(),
         strip.text = element_text(size = 10),
-        axis.text = element_text(size = 10))
+        axis.text = element_text(size = 10),
+        axis.text.x = element_text(angle = 0)) 
 ```
 
 
@@ -3616,35 +3758,6 @@ fluad_human_mouse_fit %>%
 Check distributions
 ```{r fig.height=3, fig.width=12}
 pairwise_human_fit_measures = read_rds(here("FIT_Mouse2man", "pairwise_human_fit_measures.rds"))
-
-((pairwise_human_fit_measures %>% 
-  ggplot() +
-  aes(x = mean_mouse,
-      y = mean_human) +
-      labs(x = "Mouse L2FC",
-        y = "Human L2FC") +
-  geom_point(color = "steelblue",
-             size = 1) +
-  scale_y_continuous(limits = c(-1, 1)) +
-  scale_x_continuous(limits = c(-1, 1)) +
-  facet_grid(~timepoint) +
-  theme_vaxgo()+
-   geom_hline(yintercept = 0) +
-  geom_vline(xintercept = 0))) +
-  (pairwise_human_fit_measures %>% 
-  ggplot() +
-  aes(x = mean_fit,
-      y = mean_human) +
-      labs(x = "FIT L2FC",
-        y = "Human L2FC") +
-  geom_point(color = "purple") +
-  scale_y_continuous(limits = c(-1, 1)) +
-  scale_x_continuous(limits = c(-2, 2)) +
-  facet_grid(~timepoint) +
-  theme_vaxgo() +
-   geom_hline(yintercept = 0) +
-  geom_vline(xintercept = 0)) 
-  
 ```
 
 
