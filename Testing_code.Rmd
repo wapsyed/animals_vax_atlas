@@ -6298,8 +6298,6 @@ precision_recall_plot
 #### ROC Curve
 Do for one direction (up and then down)
 Do one sided t test limma for mouse, fit, and human
-Positive control: Human
-Neg control: Random permutation
 ```{r}
 #Import DEGs table
 dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds"))
@@ -8541,4 +8539,105 @@ zscore_genes_plot_timepoints_bar = degs_segments %>%
 
 
 
+
+#### ROC Curve
+Do for one direction (up and then down)
+Do one sided t test limma for mouse, fit, and human
+Positive control: Human
+Neg control: Random permutation
+```{r}
+#Import DEGs table
+dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds"))
+
+######### UP -----------
+#Do one sided t-test for each model
+dge_long_genes_up = dge_long_genes %>% 
+  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
+  mutate(
+    se = (ci_high - ci_low) / (2 * 1.96),
+    z = log2fc / se,
+    pval_one_sided = 1 - pnorm(z), #onesided
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    direction = if_else(pval_one_sided_adj < 0.05, "up", "not_up")) %>%
+  select(-adj_p_val) %>% 
+  rename(adj_p_val = pval_one_sided_adj)
+
+#Assign human log2fc direction as truth
+truth_human = dge_long_genes_up %>% 
+  select(symbol, organism, timepoint, l2fc = log2fc, adj_p_val, direction) %>% 
+  filter(organism == "Human") %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "organism",
+              values_from = "direction") %>% 
+  rename(truth = Human) %>% 
+  mutate(organism = "Human")
+
+#Get only up and not up genes from models
+models_up = dge_long_genes_up %>% 
+  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
+  mutate(
+    se = (ci_high - ci_low) / (2 * 1.96),
+    z = log2fc / se,
+    pval_one_sided = 1 - pnorm(z), #onesided
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    direction = if_else(pval_one_sided_adj < 0.05, "up", "not_up")) %>%
+  select(-adj_p_val) %>% 
+  rename(adj_p_val = pval_one_sided_adj) %>% 
+  filter(organism != "Human") %>% 
+  mutate(pred = direction,
+         prob = adj_p_val) %>% 
+  bind_rows(truth_human) %>% 
+  mutate(prob = adj_p_val)
+
+#Get probabilities (UP)
+classified_df_probs_up = truth_human %>% 
+  select(symbol, timepoint, truth) %>%
+  inner_join(models_up %>% 
+               select(symbol, timepoint, pred, prob, model = organism, 
+                      # l2fc
+                      ),
+             by = join_by("symbol", "timepoint")) %>% 
+  mutate(not_prob = 1 - prob,
+         sum = prob + not_prob,
+         truth = as.factor(truth)) %>% 
+  distinct()
+```
+
+
+Plot ROC curves
+```{r fig.height=4, fig.width=10}
+############# UP VS NOT UP
+#PLOT ROC Curve
+roc_curve_up_notup = classified_df_probs_up %>% 
+  select(symbol, timepoint, truth, pred, model, prob, not_prob, sum) %>%
+  group_by(model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Up") %>% 
+  ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
+  geom_path(size = 1, alpha = 1) +
+  geom_abline(lty = 3) +
+  theme_vaxgo() +
+  facet_grid(~comparison~paste("Day", timepoint)) + 
+  scale_color_manual(values = c(
+    "Mouse" = "#4DBBD5FF",
+    "FIT"   = "#4361ee")) +
+  labs(
+  x = "FPR",
+  y = "TPR",
+  color = "Model") + 
+  theme(
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    # strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0),
+    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
+    axis.text.y = element_text(size = 8),
+    panel.spacing.x = unit(0.5, "lines"),
+    legend.key = element_blank()
+  ) +
+  scale_x_continuous(n.breaks = 3) +
+  scale_y_continuous(n.break = 3)
+
+roc_curve_up_notup
+```
 
