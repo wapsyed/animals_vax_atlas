@@ -4,7 +4,9 @@
 ```{r message=FALSE, warning=FALSE}
 ##Packages --------
 library(tidyverse)
+library(rentrez)
 library(here)
+library(glue)
 library(ggsci)
 library(janitor)
 library(readr)
@@ -12,6 +14,7 @@ library(paletteer)
 library(beepr)
 library(preprocessCore)
 library(maditr)
+library(biomaRt)
 library(GEOquery)
 library(Matrix)
 library(circlize)
@@ -45,7 +48,7 @@ library(readxl)
 library(patchwork)
 library(tidymodels)
 library(TidyDensity)
-
+library(fgsea)
 
 ##Aesthetics -----
 #Custom theme
@@ -262,7 +265,7 @@ cluster_by_day <- function(df, day_column = "day", condition_column = "condition
       presence_matrix <- table(day_data[[condition_column]]) > 0
       dist_matrix <- as.matrix(presence_matrix)
       
-      # Aplicar o clustering
+      # Clustering
       col_clustered <- dist(dist_matrix) %>% hclust()
       
       # Armazenar a ordem dos clusters
@@ -290,9 +293,14 @@ cluster_by_day <- function(df, day_column = "day", condition_column = "condition
 #Data curation
 ## BioProject
 ```{r}
+#Data curation --------
+## BioProject
+
+#Import dataset
 animals_vaccines_bioproject_result <- read_csv(here("tables", "animals_vaccines_bioproject_result.csv"), 
     col_names = FALSE)
 
+#Clean table
 datacuration_clean = animals_vaccines_bioproject_result %>%
  drop_na() %>% 
   mutate(study = if_else(X1 =="Title", X2, NA)) %>% 
@@ -308,12 +316,18 @@ datacuration_clean = animals_vaccines_bioproject_result %>%
 
 datacuration_clean
 
+#Save
 datacuration_clean %>% 
   write_csv(here("tables", "datacuration_step2.csv"))
 ```
 
 
 ```{r fig.height=5, fig.width=7}
+
+#Import
+datacuration_clean = read_csv(here("tables", "datacuration_step2.csv"))
+
+#Visualize
 datacuration_clean %>%
   group_by(organism) %>% 
   summarize(n_organism = n()) %>% 
@@ -370,23 +384,17 @@ datacuration_clean %>%
 
 
 
-
+### BioProject metadata
 ```{r}
+
+### BioProject metadata -------
+#Filter only Mus musculus vaccination datasets
 mice_vaccination_mining = datacuration_clean %>% 
   filter(str_detect(organism,"Mus musculus")) %>% 
   filter(!str_detect(str_to_lower(title), "cancer|tumor|autoimmune|drug")) %>% 
   filter(str_detect(str_to_lower(title), "vaccin|immuniz"))
 
-
-mice_vaccination_mining
-```
-
-
-### BioProject metadata
-```{r}
-library(rentrez)
-
-#Single
+#Get metadata for one dataset
 bioprojectid = mice_vaccination_mining$id[[1]]
 bioproject_meta = entrez_summary(db = "bioproject", id = bioprojectid) %>% 
   as.tibble() %>% 
@@ -400,7 +408,7 @@ bioproject_meta = entrez_summary(db = "bioproject", id = bioprojectid) %>%
          organism_name)
 
 
-#Loop
+#Loop for every dataset
 bioproject_ids <- mice_vaccination_mining$id
 bioproject_metadata_df <- map_dfr(bioproject_ids, ~
   entrez_summary(db = "bioproject", id = .x) %>%
@@ -417,26 +425,28 @@ bioproject_metadata_df <- map_dfr(bioproject_ids, ~
     mutate(bioproject_id = .x)
 )
 
-
+#Filter out data
 bioproject_metadata_df = bioproject_metadata_df %>% 
   filter(!str_detect(project_description, "cancer|neoantigen|tumor|autoimmune|drug|opioid"))
 
-# Visualizar
+#Save
 bioproject_metadata_df %>% 
   write_excel_csv2(here("tables", "mice_vaccination_mining2.csv"))
 
+#Import
 mice_vaccination_mining2 <- read_delim("tables/mice_vaccination_mining2.csv", 
     delim = ";", escape_double = FALSE, trim_ws = TRUE)
 
-
-bioproject_metadata_df
+#Print
+bioproject_metadata_df = mice_vaccination_mining2
 
 ```
 
 
 ##GEO
 ```{r}
-library(glue)
+##GEO Metadata -----
+#Get metadata 
 #Single ------
 # query NCBI GEO 
 geo_ids <- "GSE199750"
@@ -463,42 +473,41 @@ series_summary_df = data_frame(bioproject = series_summary$bioproject,
 #            str_remove(., "200"))
 #   pull()
 
-text = readLines(here("tables", "gds_result (1).txt"))
-text_collapsed <- paste(text, collapse = "\n")
-gse_ids <- str_extract_all(conteudo, "GSE\\d+\\b") %>% unlist() %>% unique()
+# text = readLines(here("tables", "gds_result (1).txt"))
+# text_collapsed <- paste(text, collapse = "\n")
+# gse_ids <- str_extract_all(conteudo, "GSE\\d+\\b") %>% unlist() %>% unique()
+# 
+# 
+# geo_metadata_df <- map_dfr(gse_ids, ~ {
+#   result <- entrez_search("gds", term = glue("{.x}[ACCN] AND gse[ETYP]"))
+# 
+#   if (length(result$ids) == 0) {
+#     return(tibble(gse = .x, error = "Not found"))
+#   }
+# 
+#   summary <- entrez_summary(db = "gds", id = result$ids)
+# 
+#   tibble(
+#     gse = .x,
+#     uid = summary$uid,
+#     gds = summary$gds,
+#     bioproject = summary$bioproject,
+#     title = summary$title,
+#     summary_text = summary$summary,
+#     gpl = summary$gpl,
+#     n_samples = summary$n_samples,
+#     platformtitle = summary$platformtitle
+#   ) %>% 
+#     mutate(bioproject_id = str_remove(bioproject, "PRJNA"))
+# })
+# print(geo_metadata_df)
 
-
-geo_metadata_df <- map_dfr(gse_ids, ~ {
-  result <- entrez_search("gds", term = glue("{.x}[ACCN] AND gse[ETYP]"))
-
-  if (length(result$ids) == 0) {
-    return(tibble(gse = .x, error = "Not found"))
-  }
-
-  summary <- entrez_summary(db = "gds", id = result$ids)
-
-  tibble(
-    gse = .x,
-    uid = summary$uid,
-    gds = summary$gds,
-    bioproject = summary$bioproject,
-    title = summary$title,
-    summary_text = summary$summary,
-    gpl = summary$gpl,
-    n_samples = summary$n_samples,
-    platformtitle = summary$platformtitle
-  ) %>% 
-    mutate(bioproject_id = str_remove(bioproject, "PRJNA"))
-})
-print(geo_metadata_df)
-
-  
-  
 ```
 
 
-Merge by Bioproject ID
+##Merge GEO and Bioproject metadata
 ```{r}
+#Merge metadata from BioProject and GEO by Bioproject ID
 mice_vaccination_mining_ManualAnnotation <- read_csv(here("tables", "mice_vaccination_mining_ManualAnnotation.csv")) %>% 
   mutate(bioproject_id = as.character(bioproject_id),
          project_id = as.character(project_id)) %>% 
@@ -515,9 +524,11 @@ mice_vaccination_annotated = geo_metadata_df %>%
          ) %>% 
   arrange(-n_samples)
 
+#Save
 mice_vaccination_annotated %>% 
   write_csv(here("tables", "mice_vaccination_annotated.csv"))
 
+#Print
 mice_vaccination_annotated
 ```
 
@@ -526,7 +537,13 @@ mice_vaccination_annotated
 ## Mouse
 ### Download datasets
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
-###### GSE120661 ----
+
+#Benchmarking models ------
+#Mouse-------
+#Download datasets
+
+#GSE120661 ----
+
 #Metadata 
 filename = "GSE120661"
 GSE120661 <- getGEO("GSE120661", GSEMatrix = TRUE) 
@@ -546,6 +563,8 @@ GSE120661_metadata = eset %>%
   mutate(treatment = fct_relevel(treatment, "saline"),
          timepoint = fct_relevel(timepoint, "0"),
          condition = paste(treatment, timepoint, tissue, sep = "_"))
+
+#Save
 write_csv(GSE120661_metadata, file = here("tables", "GSE120661_metadata.csv"))
 
 #Counts matrix from Expression set
@@ -555,12 +574,12 @@ eset %>%
   as.data.frame() %>% 
   saveRDS(here("tables", "GSE120661_exprs.rds"))
 
+#Import
 GSE120661_eset = readRDS(here("tables", "GSE120661_exprs.rds"))
-
-# Not normalized
 GSE120661_counts_not_normalized_log2 = GSE120661_eset %>% 
   as.data.frame()
 
+#Save
 GSE120661_counts_not_normalized_log2 %>% 
   saveRDS(here("tables", "GSE120661_counts_not_normalized_log2.rds"))
 
@@ -568,24 +587,30 @@ GSE120661_counts_not_normalized_log2 %>%
 
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
-#Check distributions
+#Import
+GSE120661_eset = readRDS(here("tables", "GSE120661_exprs.rds"))
+GSE120661_counts_not_normalized_log2 = readRDS(here("tables", "GSE120661_counts_not_normalized_log2.rds"))
+
+#Check distribution
 GSE120661_exprs_distribution = GSE120661_eset %>% 
   rownames_to_column("probes") %>% 
   pivot_longer(cols = -probes,
                names_to = "sample_id",
                values_to = "value") 
 
-
+#Plot
 GSE120661_exprs_distribution %>% 
   filter(sample_id == "GSM3407136") %>% 
   ggplot() +
   aes(x = value) +
   geom_histogram()
 ```
-Metadata
+#### Get metadata
 ```{r}
+#Import
 GSE120661_metadata = read_csv(here("tables", "GSE120661_metadata.csv")) 
 
+#Clean
 GSE120661_metadata = GSE120661_metadata %>% 
   mutate(timepoint = as.integer(timepoint) %>% 
            as.character() %>% 
@@ -594,18 +619,17 @@ GSE120661_metadata = GSE120661_metadata %>%
          treatment = fct_relevel(treatment, "saline"),
          condition = paste(treatment, timepoint, tissue, sep = "_"))
 
-
+#Save
 GSE120661_metadata %>% saveRDS(here("tables", "GSE120661_metadata.rds"))
 ```
 
 Import
 ```{r}
+#Import
 GSE120661_metadata = readRDS(here("tables", "GSE120661_metadata.rds"))
-
-# GSE120661_counts_normalized = read_rds(here("tables", "GSE120661_counts_normalized.rds"))
 GSE120661_counts_not_normalized_log2 = read_rds(here("tables", "GSE120661_counts_not_normalized_log2.rds"))
 
-# GSE120661_counts_normalized %>% rownames() %>% length()
+#Check length
 GSE120661_counts_not_normalized_log2 %>% rownames() %>% length()
 
 #Select and filter
@@ -620,23 +644,24 @@ GSE120661_samples_pbmc = GSE120661_metadata %>%
 
 #Select only PBMC samples counts
 GSE120661_counts_not_normalized_log2 = GSE120661_counts_not_normalized_log2 %>% 
+  as.data.frame() %>% 
   select(c(GSE120661_samples_pbmc_vector)) %>% 
   as.matrix()
 ```
 
 ### Annotate genes
 ```{r}
-library(biomaRt)
-
-## set up biomart
+## Set up biomart
 ensembl_mart <- useMart("ensembl")
 ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
 
-## this is the MGI symbol for the gene we're interested in
+## Get the MGI symbol
 gene_id <- GSE120661_counts_not_normalized_log2 %>% rownames()
 
+#Get other annotations
 listAttributes(ensembl_mart)
 
+#Annotate
 annot <- getBM(
   attributes = c("agilent_sureprint_g3_ge_8x60k", #Agilent microarray data (design ID 028005, retrieved from GEO)
                  "ensembl_gene_id",
@@ -644,26 +669,11 @@ annot <- getBM(
                  "mgi_symbol",
                  "description"),
   filters = "agilent_sureprint_g3_ge_8x60k",
-  values = gene_id,  # <- Replace with your vector of probe IDs
-  mart = ensembl_mart
-)
-```
-
-### Filter genes with highest median expression
-
-- 39,430 probes in the microarray,
-- 39,392 that were annotated in BiomaRt (~99.90%)
-- 37,983 probes had a correspondent mgi symbol (96.33% of probes in microarray)
-- 31,140 probes had a correspondent entrez id (78.97% of probes in microarray)
-- 30,787 probes with entrez id also had a correspondent mgi_symbol (78.08% of probes in microarray)
-- 22,435 probes have an entrez gene id. As this is the input in FIT, we used this to filter, not mgi_symbol (56.89% of probes in microarray)
-- 21,744 genes were filtered by the highest median (55.14% were kept from the microarray)
-- 86 Dupes. The duplication is due to different mgi_symbols. Same Entrez IDs can correspond to different mgi_symbol
-- 20849 probes were used (52.87%)
-
-```{r}
+  values = gene_id,
+  mart = ensembl_mart)
 
 #Get annotations for each probe 
+### Filter genes with highest median expression
 GSE120661_counts_not_normalized_log2_summary = GSE120661_counts_not_normalized_log2 %>% 
   as.data.frame() %>% 
   rownames_to_column("probe") %>% 
@@ -677,6 +687,21 @@ GSE120661_counts_not_normalized_log2_summary = GSE120661_counts_not_normalized_l
               rename(probe = agilent_sureprint_g3_ge_8x60k), 
             by = "probe") 
 
+#Print out the annotated table
+GSE120661_counts_not_normalized_log2_summary
+```
+Stats
+- 39,430 probes in the microarray,
+- 39,392 that were annotated in BiomaRt (~99.90%)
+- 37,983 probes had a correspondent mgi symbol (96.33% of probes in microarray)
+- 31,140 probes had a correspondent entrez id (78.97% of probes in microarray)
+- 30,787 probes with entrez id also had a correspondent mgi_symbol (78.08% of probes in microarray)
+- 22,435 probes have an entrez gene id. As this is the input in FIT, we used this to filter, not mgi_symbol (56.89% of probes in microarray)
+- 21,744 genes were filtered by the highest median (55.14% were kept from the microarray)
+- 86 Dupes. The duplication is due to different mgi_symbols. Same Entrez IDs can correspond to different mgi_symbol
+- 20849 probes were used (52.87%)
+
+```{r}
 # Stats
 ## 24009 probes in the microarray
 GSE120661_counts_not_normalized_log2_summary %>% dim()
@@ -734,6 +759,9 @@ GSE120661_counts_not_normalized_log2 = GSE120661_counts_not_normalized_log2 %>%
 GSE120661_counts_not_normalized_log2 %>% dim()
 
 
+#---------------
+
+#Save 
 GSE120661_counts_not_normalized_log2 %>% 
   saveRDS(here("tables", "GSE120661_counts_not_normalized_log2.rds"))
 
@@ -744,14 +772,12 @@ GSE120661_samples_pbmc %>%
   mutate(sample_id = subject_id,
          subject_id = str_remove(subject_id, "_\\d+h")) %>% 
   saveRDS(here("tables", "GSE120661_samples_pbmc.rds"))
-
 ```
 
 
 
 ### Differential gene expression
 ```{r}
-
 #Import
 GSE120661_expression_highest_median_probes %>% 
   saveRDS(here("tables", "GSE120661_expression_highest_median_probes_not_normalized_log2.rds"))
@@ -760,7 +786,7 @@ GSE120661_counts_not_normalized_log2 =
 GSE120661_samples_pbmc = 
   read_rds(here("tables", "GSE120661_samples_pbmc.rds"))
 
-
+#Filter vaccine
 GSE120661_samples_pbmc_fluad = GSE120661_samples_pbmc %>% 
   filter(treatment == "Fluad")
 
@@ -769,30 +795,37 @@ GSE120661_counts_not_normalized_log2_matrix_fluad = GSE120661_counts_not_normali
   select(c(GSE120661_samples_pbmc_fluad$geo_sample)) %>% 
   as.matrix()
 
+#Normalize quantiles
 GSE120661_counts_normalized_matrix_fluad <- normalizeBetweenArrays(GSE120661_counts_not_normalized_log2_matrix_fluad, 
                                                                    method = "quantile")
 
+#Diagnostics
 dim(GSE120661_counts_normalized_matrix_fluad) #20845   35
 
 dim(AnnotatedDataFrame(GSE120661_samples_pbmc_fluad %>% column_to_rownames("geo_sample"))) #35
     
+#Create new Expression set with the filtered data
 eset_filtered <- ExpressionSet(
   assayData = GSE120661_counts_normalized_matrix_fluad,
-  phenoData = AnnotatedDataFrame(GSE120661_samples_pbmc_fluad %>% column_to_rownames("geo_sample"))
-)
+  phenoData = AnnotatedDataFrame(GSE120661_samples_pbmc_fluad %>%
+                                   column_to_rownames("geo_sample")))
 
+#Save
 eset_filtered %>% 
   saveRDS(file = here("tables", "GSE120661_eset_filtered.rds"))
 
+
+#Create design matrix -------
 design <- model.matrix(~ condition + 0, eset_filtered) # 0 defines the way we compare the samples
 colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
 
-# Then we estimate the correlation between measurements made on the same subject:
+# Estimate correlation between doses on the same individual:
 corfit <- duplicateCorrelation(eset_filtered, 
                                design = design, 
                                block = eset_filtered$subject_id)
 corfit$consensus
-# Then this inter-subject correlation is input into the linear model fit:
+
+# Use the correlation into the linear model
 #Fit Limma model
 fit <- lmFit(eset_filtered, design, 
              block = eset_filtered$subject_id, 
@@ -801,7 +834,7 @@ colnames(design) %>%
   as.data.frame() %>% 
   arrange(.)
 
-#Test for Fluad
+#Test for Fluad -------
 cont.matrix <- makeContrasts(conditionFluad_4_PBMC - conditionFluad_0_PBMC,
                              conditionFluad_8_PBMC - conditionFluad_0_PBMC,
                              conditionFluad_24_PBMC - conditionFluad_0_PBMC,
@@ -813,10 +846,7 @@ cont.matrix <- makeContrasts(conditionFluad_4_PBMC - conditionFluad_0_PBMC,
 fit2 <- contrasts.fit(fit, cont.matrix)
 fit2 <- treat(fit2, lfc = 0.0)
 
-#Get DEGs
-## For one contrast (example)
-# all_degs = topTreat(fit2, coef = 1, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE)
-
+#Get DEGs ------
 ## For every contrast
 results_list <- lapply(1:ncol(fit2), function(i) {
   topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
@@ -891,6 +921,8 @@ fit_genes = HS_MM_Symbol_Entrez %>%
   rownames_to_column("del") %>% 
   select(!del) 
 
+
+######## STATS ---------
 ## 16,417 unique mouse and human genes
 fit_genes %>% 
   select(mgi_symbol,
@@ -930,12 +962,12 @@ all_degs_annotated_fit %>%
   select(human_symbol) %>% 
   distinct()
 
+#Save --------
 all_degs_annotated %>%
   saveRDS(here("tables", "Fluad_all_degs_annotated.rds"))
 
 all_degs_annotated_fit %>%
   saveRDS(here("tables", "Fluad_all_degs_annotated_FIT.rds"))
-
 ```
 
 
@@ -945,14 +977,14 @@ all_degs_annotated_fit %>%
 ### Download dataset
 Data was quantile normalized signal intensity using limma 3.38.3, read.maimages source = agilent.median, backgroundCorrect method= normexp, normalizeBetweenArrays method= quantile. Ref: GEO.
 
-
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
 ### Download dataset --------
-Data was quantile normalized signal intensity using limma 3.38.3, read.maimages source = agilent.median, backgroundCorrect method= normexp, normalizeBetweenArrays method= quantile. Ref: GEO.
-
+# Data was quantile normalized signal intensity using limma 3.38.3, read.maimages source = agilent.median, backgroundCorrect method= normexp, normalizeBetweenArrays method= quantile. Ref: GEO
 
 ###### GSE124689 ----
+#Download dataset
 GSE124689 <- getGEO("GSE124689", GSEMatrix = TRUE) 
+#Get ExpressionSet
 eset <- GSE124689[[1]]
 #Expression
 GSE124689_exprs <- eset %>% exprs()
@@ -966,27 +998,21 @@ GSE124689_exprs %>%
 
 Import data
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
-
 #Import data
 GSE124689_exprs = readRDS(here("tables", "GSE124689_exprs.rds"))
 
-# Get metadata annotated by Amnah
+#Get metadata annotated by Amnah
 # cleandata_nonorm_flu <- readRDS(here("HumanFluData", "cleandata_nonorm_flu.rds")) 
 flu_expFC <- readRDS(here("HumanFluData", "expFC.rds"))
 # flu_expression_fc = flu_expFC[["exp_fc"]] %>% as.data.frame()
 flu_metadata = flu_expFC$cur_phenoData
 flu_metadata %>% filter(exposure_material_reported == "FLUADD")
 
-#Filter samples
+#Filter samples by vaccine
 human_samples_pbmc_fluad = flu_metadata %>% 
   filter(exposure_material_reported == "FLUADD")
 
-```
-
-Check distribution
-```{r}
 #Check distribution
-
 GSE124689_exprs %>% 
   as.data.frame() %>% 
   select(value = GSM3542845) %>% 
@@ -999,10 +1025,9 @@ GSE124689_exprs %>%
 
 
 
-
 ### Annotate features
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
-# Annotate features (genes)
+# Annotate genes
 probes_annotation <- read.delim(here("tables", "GPL21272-58809.txt"), skip = 19, header = TRUE, sep = "\t", quote = "") %>% 
   select(gene_id = ID, entrez_id = ENTREZ_GENE_ID, ensembl_id = ENSEMBL_ID, gene_symbol = GENE_SYMBOL) %>% 
   mutate(gene_id = as.character(gene_id))
@@ -1026,16 +1051,19 @@ GSE124689_counts_genes_selected = GSE124689_counts %>%
   slice_max(median, n = 1) %>% 
   ungroup()
 
+#Merge
 GSE124689_counts_raw = GSE124689_counts %>% 
   inner_join(GSE124689_counts_genes_selected %>% 
                select(gene_id, entrez_id),
              by = join_by("gene_id", "entrez_id"))
 
+#Delete duplicates by sampling
 dupes_entrez = GSE124689_counts_genes_selected %>% 
   get_dupes(entrez_id) %>% 
   group_by(entrez_id) %>% 
   slice_sample(n = 1)
 
+#Merge
 human_fluadd_not_normalized = GSE124689_counts_raw %>%
   select(-gene_symbol) %>% 
   filter(!gene_id %in% c(dupes_entrez$gene_id)) %>% 
@@ -1043,6 +1071,7 @@ human_fluadd_not_normalized = GSE124689_counts_raw %>%
   select(c(entrez_id, human_samples_pbmc_fluad$uid)) %>% 
   column_to_rownames("entrez_id") 
 
+#Save
 human_fluadd_not_normalized %>% saveRDS(file = here("tables", "GSE124689_expression_raw.rds"))
 
 #Get symbols only
@@ -1079,8 +1108,12 @@ human_fluadd_symbol_entrez = GSE124689_counts_raw_symbol %>%
   distinct() %>% 
   select(symbol = gene_symbol, entrez_id)
 
+#Save
 human_fluadd_not_normalized_symbol %>% saveRDS(file = here("tables", "GSE124689_expression_not_normalized_log2_raw_symbol.rds"))
+```
 
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
 #Counts matrix from Expression set
 flu_metadata_clean = flu_metadata %>% 
   arrange(uid) %>% 
@@ -1095,6 +1128,7 @@ flu_metadata_clean = flu_metadata %>%
   arrange(sample_id) %>% 
   select(condition, everything()) 
 
+#Save
 saveRDS(flu_metadata_clean, file = here("tables", "GSE124689_metadata_fluad_clean.rds"))
 ```
 
@@ -1893,6 +1927,7 @@ distribution_check_subject_raw_qn_log2fc_plot
 
 Sanity check
 ```{r}
+#Sanity check
 human_mouse_fluad_raw_qn_log2fc %>% 
   mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
                              measure == "value_qn" ~ "Quantile\nnormalized",
@@ -1968,11 +2003,13 @@ distribution_check_subject_raw_qn_log2fc_all = ((c | d) + plot_layout(widths = c
               axis_titles = "collect") +
   plot_annotation(theme = theme(legend.position = "top"))
 
+#Save
 distribution_check_subject_raw_qn_log2fc_all %>% 
   ggsave(filename = here("Figures", "distribution_check_subject_raw_qn_log2fc_all.png"),
          width = 18,
          height = 10)
 
+#Print
 distribution_check_subject_raw_qn_log2fc_all
 ```
 
@@ -1994,7 +2031,6 @@ beep(sound = 1)
 
 
 ###### Plot volcano plot
-
 ```{r fig.height=3, fig.width=16}
 #Volcano plot -------
 volcano_data <- human_mouse_fluad_raw_qn_log2fc_avg %>% 
@@ -2045,7 +2081,7 @@ ggplot() +
 
 volcano_plot_raw_qn
 
-
+#Save
 volcano_plot_raw_qn %>% 
   ggsave(filename = here("Figures", "volcano_plot_raw_qn.png"),
          width = 16,
@@ -2055,14 +2091,12 @@ beep()
 
 ##### PCA
 
-###### Expression
 ```{r fig.height=4, fig.width=8}
 # PCA -------
 annotation_samples_pca = human_mouse_fluad_raw_qn_log2fc %>% 
   mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
   select(participant_id, organism, timepoint, sample) %>% 
   distinct()
-
 
 # PCA with raw values
 clean_matrix_raw = human_mouse_fluad_raw_qn_log2fc %>% 
@@ -2185,7 +2219,7 @@ beep()
 
 #### DGE (Mouse normalized with human)
 ```{r}
-
+#DGE (Mouse normalized with human) ----
 human_mouse_fluad_matrix_mouse = human_mouse_fluad_matrix %>% 
   as.data.frame() %>% 
   select(c(human_mouse_fluad_metadata %>% 
@@ -2238,8 +2272,7 @@ results_list <- lapply(1:ncol(fit2), function(i) {
   topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
     mutate(comparison = colnames(fit2)[i]) %>% 
     rownames_to_column("symbol")
-    
-})
+  })
 
 # Combine all results
 all_contrasts_degs <- bind_rows(results_list)
@@ -2261,12 +2294,13 @@ all_degs_mouse = all_contrasts_degs %>%
                                T~comparisonA)) %>% 
   select(condition, everything())
 	
+#Save
 all_degs_mouse %>% saveRDS(file = here("tables", "GSE120661_degs_mouse.rds"))
 ```
 
 #### DGE (Human normalized with mouse)
 ```{r}
-
+# DGE (Human normalized with mouse) -------
 human_mouse_fluad_matrix_human = human_mouse_fluad_matrix %>% 
   as.data.frame() %>% 
   select(c(human_mouse_fluad_metadata %>% 
@@ -2274,27 +2308,32 @@ human_mouse_fluad_matrix_human = human_mouse_fluad_matrix %>%
              pull(sample_id))) %>% 
   as.matrix()
 
+#Create ExpressionSet
 eset_human <- ExpressionSet(
   assayData = human_mouse_fluad_matrix_human,
   phenoData = AnnotatedDataFrame(human_mouse_fluad_metadata %>% 
                                    column_to_rownames("sample_id") %>% 
                                    filter(organism == "Human")))
 
+#Save
 eset_human %>% saveRDS(file = here("tables", "GSE120661_eset_human_quantile.rds"))
 
-##### Run analysis in the cluster
+##### Run analysis in the cluster -------
 eset_human = readRDS(file = here("tables", "GSE120661_eset_human_quantile.rds"))
 
-design <- model.matrix(~ condition + 0, eset_human) # 0 defines the way we compare the samples
-colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+#Create design matrix
+design <- model.matrix(~ condition + 0, eset_human) 
+#Avoid blank spaces
+colnames(design) <- make.names(colnames(design))
 
+#Get intra-individual correlation
 corfit <- duplicateCorrelation(eset_human, 
                                design = design, 
                                block = eset_human$participant_id)
 corfit$consensus #0.10
 
-# Input into the linear model fit:
-#Fit Limma model
+# Input into the linear model:
+# Fit Limma model
 GSE124689_limma_fit <- lmFit(eset_human, 
              design, 
              block = eset_human$participant_id, 
@@ -2302,7 +2341,7 @@ GSE124689_limma_fit <- lmFit(eset_human,
 
 GSE124689_limma_fit %>% saveRDS(here("tables","GSE124689_limma_fit.rds"))
 
-##### Import results from cluster
+# Import results from cluster -------
 GSE124689_limma_fit <- readRDS(here("tables","GSE124689_limma_fit.rds"))
 
 #Contrasts
@@ -2318,14 +2357,13 @@ cont.matrix <- makeContrasts(conditionFLUADD.Day.1 - conditionFLUADD.Day.0,
 fit2 <- contrasts.fit(GSE124689_limma_fit, cont.matrix)
 fit2 <- treat(fit2, lfc = 0.0)
 
-#Get DEGs
-
+#Get DEGs ------
 ## For every contrast
 results_list <- lapply(1:ncol(fit2), function(i) {
   topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
     mutate(comparison = colnames(fit2)[i]) %>% 
     rownames_to_column("symbol")
-})
+  })
 
 # Combine all results
 all_contrasts_degs <- bind_rows(results_list)
@@ -2347,12 +2385,11 @@ GSE124689_degs = all_contrasts_degs %>%
   mutate(organism = "Human") %>% 
   inner_join(human_fluadd_symbol_entrez, 
                by = "symbol")
-  
-	
-GSE124689_degs
-
+#Save
 GSE124689_degs %>% saveRDS(file = here("tables", "GSE124689_degs.rds"))
 
+#Print results
+GSE124689_degs
 ```
 
 
@@ -2379,7 +2416,8 @@ StaphInfection_classifier_pos = FIT.mouse2man::StaphInfection_classifier_pos
 AllData_V2.0 = FIT.mouse2man::AllData_V2.0 #Training data
 
 #Samples
-microarray_sample = FIT.mouse2man::microarray_sample #Sample Microarray
+#Sample Microarray data
+microarray_sample = FIT.mouse2man::microarray_sample 
 microarray_sample %>% 
   rownames_to_column("MM_Entrez_symbol_desc") %>% 
   mutate(MM_Entrez_symbol_desc = as.character(MM_Entrez_symbol_desc)) %>% 
@@ -2397,6 +2435,7 @@ Obs.: Make sure that datasets from FIT package were retrieved
 Initial number of genes: 15503
 Number of genes for which FIT predictions will be calculated: 14401
 ```{r}
+### Loop for every time point -----
 all_degs_fit2 = all_degs_mouse %>% 
   select(symbol, EffectSize = logFC, condition) %>%
   inner_join(GSE120661_counts_not_normalized_log2_annotations %>% 
@@ -2440,10 +2479,11 @@ fit_results_combined <- map2_dfr(all_conditions, all_conditions, function(cond, 
   return(fit_output_tbl)
 })
 
+#Print
 fit_results_combined
 
+#Save
 fit_results_combined %>% saveRDS(here("FIT_Mouse2man", "FIT_FLUAD_alltimes.csv"))
-
 ```
 
 Import
@@ -2451,20 +2491,19 @@ Import
 #Import
 fit_results_combined = read_rds(here("FIT_Mouse2man", "FIT_FLUAD_alltimes.csv"))
 
+#Pivot longer
 fit_example_results = fit_results_combined %>% 
   clean_names() %>%  
   pivot_longer(cols = c(mouse_effect_size, fit_prediction),
                names_to = "measure", 
                values_to = "value")
 
+
 fit_example_results_ready = fit_example_results %>% 
   arrange(mouse_symbol) %>% 
-  select(condition, everything()) %>% 
-  # mutate(ci_size = ci_high - ci_low,
-  #        p_value = 
-  #        
-  #         adj_p_val, p_value)
+  select(condition, everything())
 
+#Save
 fit_example_results_ready %>% 
   saveRDS(file = here("tables", "fit_example_results_ready.rds"))
 ```
@@ -2478,7 +2517,7 @@ fluad_human_degs = read_rds(here("tables", "GSE124689_degs.rds"))
 all_degs_mouse = read_rds(file = here("tables", "GSE120661_degs_mouse.rds"))
 GSE120661_metadata = read_csv(here("tables", "GSE120661_metadata.csv")) 
 
-#Organize tables
+#Clean tables
 human_mouse_fluad_metadata_datasets = human_mouse_fluad_metadata %>% 
   select(vaccine, sample_type, timepoint, condition, organism, type, array) %>% 
   distinct() %>% 
@@ -2563,6 +2602,7 @@ fit_fluad_mouse_human = fluad_human %>%
 fit_fluad_mouse_human %>% 
   saveRDS(here("FIT_Mouse2man", "fit_fluad_mouse_human.rds"))
 
+#Print
 fit_fluad_mouse_human
 
 ```
@@ -2624,7 +2664,7 @@ meta_human = fit_fluad_mouse_human %>%
          pval_adj_human = adj_p_val,
          pval_human = p_value)
 
-#Unite
+#Unite and calculate summary statistics
 pairwise_human_fit_measures = meta_human %>% 
   inner_join(meta_fit, by = join_by(symbol, timepoint)) %>% 
   inner_join(meta_mouse, by = join_by(symbol, timepoint)) %>% 
@@ -2632,8 +2672,8 @@ pairwise_human_fit_measures = meta_human %>%
          human_2_fit = mean_human - mean_fit) %>% 
   group_by(timepoint) %>%
   ungroup() %>% 
+  
     mutate(
-      
     # Estimate SE from CIs
     se_human = (ci_high_human - ci_low_human) / (2 * 1.96),
     se_fit = (ci_high_fit - ci_low_fit) / (2 * 1.96),
@@ -2658,6 +2698,8 @@ pairwise_human_fit_measures = meta_human %>%
     # Cohen's d
     effect_size_h2fit = human_2_fit / se_diff_h2fit,
     effect_size_h2m = human_2_mouse / se_diff_h2m)  %>% 
+  
+  
   #Reorder cols
   select(
     timepoint, symbol,
@@ -2686,66 +2728,67 @@ pairwise_human_fit_measures = meta_human %>%
 #Save wide dataset
 pairwise_human_fit_measures %>% 
   saveRDS(here("FIT_Mouse2man", "pairwise_human_fit_measures.rds"))
+
 #Save long dataset
 fit_fluad_mouse_human %>% 
   mutate(condition =  paste(organism, "Day", timepoint)) %>% 
   saveRDS(file = here("tables", "dge_fit_mouse_human_long.rds"))
+
+#Print
+pairwise_human_fit_measures
 ```
 
 # Gene set enrichment analysis (GSEA)
 
 Import
 ```{r}
+# Gene set enrichment analysis (GSEA) --------
+
 #Import datasets ------
 pairwise_human_fit_measures = read_rds(here("FIT_Mouse2man", "pairwise_human_fit_measures.rds"))
-
 ImmuneGO_Mouse_Manual <- read_excel(here("VaxGO", "ImmuneGO_Mouse.xlsx"))
-
 ImmuneGO_Mouse_Manual_genes = ImmuneGO_Mouse_Manual %>% 
   separate_rows(genes)
-
 immunego_btm_manual_grouped = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genesets.csv"))
-
 ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
-
 dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds"))
 
+#Clean table
 annotation_conditions = dge_long_genes %>% 
   select(condition, timepoint, model = organism) %>% 
   distinct()
 
-```
-
-Run 
-```{r}
-#Run -----
+#Run GSEA -----
 #Human ImmuneGO
+
+#Clean table for GSEA standard
 term2gene = ImmuneGO_BTM_grouped_genes %>% 
   select(process, genes)
-
 df_genes2GSEA_human = dge_long_genes %>% 
   distinct() %>% 
   select(condition, genes = symbol, log2fold_change = log2fc) 
 
+#Run multiple GSEA
 gsea_results_immuneGO_Manual_human = autoGSEA(df = df_genes2GSEA_human,
          TERM2GENE = term2gene,
          geneset_name = "Human_ImmuneGO")
-
-gsea_results_immuneGO_Manual_human 
   
+#Save
 gsea_results_immuneGO_Manual_human %>% 
     saveRDS(here("GSEA_ORA", "gsea_results_immuneGO_BTM_Human_Manual.rds"))
+
+#Print
+gsea_results_immuneGO_Manual_human
 ```
 
 
 Import
 ```{r}
 #Import results -------
-# gsea_results_immuneGO_Manual_Mouse = read_rds(here("GSEA_ORA", "gsea_results_immuneGO_Manual_Mouse.rds"))
-# gsea_results_immuneGO_Manual = gsea_results_immuneGO_Manual_Mouse$gsea
 gsea_results_immuneGO_BTM_human = read_rds(here("GSEA_ORA", "gsea_results_immuneGO_BTM_Human_Manual.rds"))
 gsea_results_immuneGO_BTM_human = gsea_results_immuneGO_BTM_human$gsea
 
+#New BTM Annotation
 btm_annotation = read.table(file = here("VaxGO",  "BTM functional groups V3.txt"), sep="\t", header=TRUE) %>% 
   clean_names() %>% 
   rename(id = name) %>% 
@@ -2784,8 +2827,12 @@ gsea_results_BTM_annotated_wide = gsea_results_immuneGO_BTM_human %>%
   drop_na(Model) %>% 
   
   #Annotate
-  inner_join(btm_annotation, by = "id") 
-  
+  inner_join(btm_annotation, by = "id")
+```
+
+Plot correlation
+```{r fig.height=8, fig.width=8}
+#Plot correlation plot
 gsea_results_BTM_annotated_correlation_plot = gsea_results_BTM_annotated_wide %>% 
   ggplot() +
   aes(x = Model,
@@ -2838,8 +2885,10 @@ gsea_results_BTM_annotated_correlation_plot = gsea_results_BTM_annotated_wide %>
           legend.text = element_text(size = 10, hjust = 0)
           )
 
+#Print
 gsea_results_BTM_annotated_correlation_plot
 
+#Save results
 gsea_results_BTM_annotated_correlation_plot %>% 
   ggsave(filename = here("Figures", "gsea_results_BTM_annotated_correlation_plot.png"),
          width = 8,
@@ -2956,7 +3005,7 @@ dotplot %>%
 
 
 Arrange factors and add day 0
-```{r fig.height=8, fig.width=10}
+```{r fig.height=10, fig.width=6}
 #Arrange processes factor
 idorder = c(
   "IMMUNE SYSTEM",
@@ -2997,10 +3046,7 @@ idorder = c(
   "Ig MEDIATED RESPONSE",
   "Ig MEDIATED"
 )
-```
 
-
-```{r fig.height=10, fig.width=6}
 #Add day 0
 df_day0 = df %>% 
   mutate(day = "0",
@@ -3110,14 +3156,19 @@ lineplot_gsea_timepoint_data_plot %>%
 
 ### Number of DEGs
 ```{r fig.width=10, fig.height=4}
-#Import
+# Get best and worst predicted genes ----
+## Which genes have the least zscore?
+
+#Import datasets
 pairwise_human_fit_measures = readRDS(here("FIT_Mouse2man", "pairwise_human_fit_measures.rds")) %>% 
   rename(human_symbol = symbol)
-
 pairwise_human_fit_test = pairwise_human_fit_measures
+ImmuneGO_Mouse_Manual <- read_excel(here("VaxGO", "ImmuneGO_Mouse.xlsx"))
+ImmuneGO_Mouse_Manual_genes = ImmuneGO_Mouse_Manual %>% 
+  separate_rows(genes)
 
 
-#Total
+#Get total genes by each condition
 degs_mouse = pairwise_human_fit_measures %>% 
   filter(pval_adj_mouse < 0.05)
 degs_human = pairwise_human_fit_measures %>% 
@@ -3136,6 +3187,8 @@ degs_mouse_summarize = degs_mouse %>%
               group_by(timepoint) %>%
               summarize(n_genes = n(),
                         condition = "FIT"))
+
+#Print
 degs_mouse_summarize
 ```
 
@@ -3165,6 +3218,7 @@ degs_human_and_mouse_genes = degs_human_genes %>%
          comparison = "Mouse vs Human",
          organism = "Mouse",
          group = "Common")
+
 #Duplicate rows for human
 degs_human_and_mouse_genes_human = degs_human_and_mouse_genes %>% 
   mutate(organism = "Human")
@@ -3183,8 +3237,8 @@ degs_human_and_fit_genes_human = degs_human_and_fit_genes %>%
   mutate(organism = "Human")
 
 #Anti join, Human vs Mouse, Human vs FIT -------
-
 #Human
+#Human vs Mouse
 degs_human_Not_mouse_genes = degs_human_genes %>% 
   anti_join(degs_mouse_genes, 
              by = join_by("human_symbol", "timepoint")) %>% 
@@ -3192,7 +3246,7 @@ degs_human_Not_mouse_genes = degs_human_genes %>%
          comparison = "Mouse vs Human",
          organism = "Human",
          group = "Not common")
-
+#Human vs FIT
 degs_human_Not_fit_genes = degs_human_genes %>% 
   anti_join(degs_fit_genes, 
              by = join_by("human_symbol", "timepoint")) %>% 
@@ -3202,6 +3256,7 @@ degs_human_Not_fit_genes = degs_human_genes %>%
          group = "Not common")
 
 #Models
+#Mouse vs Human
 degs_mouse_Not_human_genes = degs_mouse_genes %>% 
   anti_join(degs_human_genes, 
              by = join_by("human_symbol", "timepoint")) %>% 
@@ -3210,6 +3265,7 @@ degs_mouse_Not_human_genes = degs_mouse_genes %>%
          comparison = "Mouse vs Human",
          group = "Not common")
 
+#FIT vs Human
 degs_human_Not_fit_genes = degs_fit_genes %>% 
   anti_join(degs_human_genes, 
              by = join_by("human_symbol", "timepoint")) %>% 
@@ -3218,7 +3274,7 @@ degs_human_Not_fit_genes = degs_fit_genes %>%
          comparison = "FIT vs Human",
          group = "Not common")
 
-#Merge data
+#Merge data ------
 degs_human_mouse_overlap_genes = 
   bind_rows(degs_human_and_mouse_genes,
             degs_human_and_mouse_genes_human,
@@ -3229,7 +3285,7 @@ degs_human_mouse_overlap_genes =
             degs_mouse_Not_human_genes, 
             degs_human_Not_fit_genes)
 
-#Classify by same and exclusive
+#Classify by same and exclusive DEGs -----
 degs_human_mouse_overlap_genes_summary = degs_human_mouse_overlap_genes %>% 
   group_by(condition, timepoint) %>% 
   summarize(n = n(),
@@ -3238,6 +3294,7 @@ degs_human_mouse_overlap_genes_summary = degs_human_mouse_overlap_genes %>%
             group) %>% 
   distinct()
 
+#Print
 degs_human_mouse_overlap_genes_summary
 ```
 
@@ -3251,10 +3308,7 @@ degs_human_mouse_overlap_common_plot = degs_human_mouse_overlap_genes_summary %>
   aes(x = organism,
       y = n,
       fill = fct_rev(group)) + 
-  geom_col(alpha = 1,
-           # size = 0.5,
-           # color = "black"
-           ) +
+  geom_col(alpha = 1) +
   facet_nested(rows = vars(fct_rev(comparison)), 
                cols = vars(paste("Day", timepoint)), 
                scales = "free", 
@@ -3288,14 +3342,14 @@ degs_human_mouse_overlap_common_plot = degs_human_mouse_overlap_genes_summary %>
     y = "Total",
     color = ""
     ) 
-
+#Print
 degs_human_mouse_overlap_common_plot
 
 #Save
-# degs_human_mouse_overlap_common_plot %>% 
-#   ggsave(filename = here("Figures", "degs_human_mouse_overlap_common_plot.png"),
-#          width = 4,
-#          height = 5)
+degs_human_mouse_overlap_common_plot %>%
+  ggsave(filename = here("Figures", "degs_human_mouse_overlap_common_plot.png"),
+         width = 4,
+         height = 5)
 
 ```
 
@@ -3305,10 +3359,11 @@ degs_human_mouse_overlap_common_plot
 ### Get by zscore
 
 Get highly correlated genes and discretize by quantile
-```{r fig.height=5, fig.width=10}
-#Get zscores ------
-#Get highly correlated genes and discretize by quantile
 
+#### Mouse
+```{r fig.height=5, fig.width=10}
+#Get highly correlated genes and discretize by quantile -----
+#By zscores ------
 #Mouse
 zscore_genes_mouse = pairwise_human_fit_test %>% 
   select(human_symbol,timepoint,  mean_human, mean_mouse, pval_adj_mouse, pval_adj_human, z_score_h2m) %>% 
@@ -3323,6 +3378,7 @@ zscore_genes_mouse = pairwise_human_fit_test %>%
   rename(zscore = z_score_h2m,
          mean_model = mean_mouse,
          pval_model_adj = pval_adj_mouse) %>% 
+  
   #Discretize by quantile (zscore)
   mutate(
     quartile_label = cut(abs(zscore),
@@ -3335,6 +3391,7 @@ zscore_genes_mouse = pairwise_human_fit_test %>%
   mutate(pval_model_adj = if_else(pval_model_adj <= 0.05, "DEG", "Not DEG"),
          pval_human_adj = if_else(pval_adj_human <= 0.05, "DEG", "Not DEG")) 
 
+#Pivot and sum only DEGs
 zscore_genes_mouse %>% 
   ungroup() %>% 
   select(human_symbol, timepoint, pval_model_adj, pval_human_adj) %>% 
@@ -3346,7 +3403,7 @@ zscore_genes_mouse %>%
   filter(deg =="DEG")
 ```
 
-
+####FIT
 ```{r fig.height=5, fig.width=10}
 #FIT
 zscore_genes_fit = pairwise_human_fit_test %>% 
@@ -3362,6 +3419,7 @@ zscore_genes_fit = pairwise_human_fit_test %>%
   rename(zscore = z_score_h2fit,
          mean_model = mean_fit,
          pval_model_adj = pval_adj_fit) %>%
+  
   #Discretize by quantile (zscore)
   mutate(quartile_label = cut(abs(zscore),
                          breaks = quantile(abs(zscore),
@@ -3370,13 +3428,19 @@ zscore_genes_fit = pairwise_human_fit_test %>%
                          include.lowest = TRUE,
                          labels = c("Q10", "Q25", "Q50", "Q75", "Q100")),
     timepoint_day = paste0("Day ", timepoint)) %>% 
-  mutate(pval_model_adj = if_else(pval_model_adj <= 0.05, "DEG", "Not DEG"),
+    mutate(pval_model_adj = if_else(pval_model_adj <= 0.05, "DEG", "Not DEG"),
          pval_human_adj = if_else(pval_adj_human <= 0.05, "DEG", "Not DEG")) 
 
 #Bind tables
 zscore_genes = bind_rows(zscore_genes_fit, zscore_genes_mouse)
-  
-#Summarize genes by quantile
+
+#Print
+zscore_genes
+```
+
+Summarize genes by quantile
+```{r fig.height=5, fig.width=10}
+#Summarize genes by quantile ------
 degs_pos_neg_summary_quantiles_best_worst_data <- zscore_genes %>%
   filter(pval_model_adj == pval_human_adj,
          pval_model_adj == "DEG") %>% 
@@ -3393,13 +3457,11 @@ degs_pos_neg_summary_quantiles_best_worst_data <- zscore_genes %>%
                                T~comparison)) %>% 
   ungroup() 
 
-
+#Print
 degs_pos_neg_summary_quantiles_best_worst_data
-
 ```
 
 ### Scatterplot of correlation
-
 ```{r fig.height=4, fig.width=8}
 #Scatterplot of correlation --------
 #Get all genes by quantile
@@ -3436,10 +3498,10 @@ diff_correlation_plot_data <- zscore_genes %>%
   filter(in_quantile) %>%
   select(-in_quantile)
 
-
+#Print
 diff_correlation_plot_data
 
-
+#Diagnostics
 diff_correlation_plot_data %>% 
   ungroup() %>% 
   select(human_symbol, timepoint, pval_model_adj, pval_human_adj, comparison) %>% 
@@ -3452,7 +3514,7 @@ diff_correlation_plot_data %>%
 ```
 
 
-Mouse
+#### Mouse
 ```{r fig.height=4, fig.width=8}
 #Plot correlation -----
 #Mouse
@@ -3568,7 +3630,7 @@ abs_diff_correlation_plot_data_split_plot_mouse
 
 
 
-FIT
+####FIT
 ```{r fig.height=4, fig.width=8}
 #Plot correlation for FIT
 abs_diff_correlation_plot_data_split_plot_fit = diff_correlation_plot_data %>% 
@@ -3683,7 +3745,7 @@ abs_diff_correlation_plot_data_split_plot_fit
 
 
 
-#### Lineplot of selected genes
+### Lineplot of gene expression by quantile
 ```{r}
 # Lineplot of selected genes -----
 #Selected genes by quantile and model
@@ -3734,7 +3796,7 @@ df_selected_genes_lines_plot = selected_genes_lines_all %>%
   arrange(human_symbol)
 
 
-#Get labels for the top 5 genes
+#Filter top 5 genes
 top5_genes = selected_genes_lines_models %>% 
   # filter(human_symbol %in% c(ImmuneGO_BTM_grouped_genes$genes)) %>% 
   group_by(comparison) %>% 
@@ -3743,7 +3805,7 @@ top5_genes = selected_genes_lines_models %>%
   inner_join(selected_genes_lines, by = join_by("human_symbol", "comparison")) %>% 
   mutate(group = case_when(str_detect(comparison, "FIT") ~ "FIT",
                                        str_detect(comparison, "Mouse") ~ "Mouse"))
-
+#Get labels for the top 5 genes
 top5_genes_labels = top5_genes %>% 
   filter(timepoint > 0) %>% 
   group_by(human_symbol, comparison) %>% 
@@ -3863,12 +3925,13 @@ df_selected_genes_lines_plot_plot = df_selected_genes_lines_plot %>%
              hjust = "right", 
              data = top5_genes_labels )
   
+#Print
 df_selected_genes_lines_plot_plot
 
 ```
 
 
-Unite plots
+###Unite all plots
 ```{r fig.height=8, fig.width=18, message=FALSE, warning=FALSE}
 #Unite plots ------
 a = degs_human_mouse_overlap_common_plot + theme(plot.title = element_blank(), 
@@ -3897,24 +3960,20 @@ beep()
 
 
 
-### Enrichment analysis
+### Enrichment analysis of genes in best and worst quartiles
 
 ```{r fig.width=10, fig.height= 8}
-
 # Enrichment analysis -------
-
 organism = "org.Hs.eg.db"
-library(msigdbr)
-library(fgsea)
-
 #Hallmarks
 #Retrieve human H (hallmark) gene set
 msigdbr_raw <- msigdbr(species = "human", category = "H") 
-  
+#Clean
 msigdbr_df = msigdbr_raw %>% 
   select(process = gs_name, genes = gene_symbol) %>% 
   mutate(process = str_remove(process, "HALLMARK_"))
 
+#Discretize by quartile
 df_genes_best_worst_fit_mouse = zscore_genes %>% 
   ungroup() %>% 
   mutate(quartiles_grouped = case_when(
@@ -3926,7 +3985,7 @@ df_genes_best_worst_fit_mouse = zscore_genes %>%
   select(genes = human_symbol,
          condition)
 
-#ORA Hallmarks DIFF
+#Run ORA Hallmarks
 ora_all_diff_hallmark <- enricher_condition(
   df = df_genes_best_worst_fit_mouse,
   term2gene_df = msigdbr_df) %>% 
@@ -3936,14 +3995,21 @@ ora_all_diff_hallmark <- enricher_condition(
   mutate(comparison = case_when(str_detect(condition, "FIT") ~ "FIT",
                                 str_detect(condition, "Mouse") ~ "Mouse"))
 
-ora_all_diff_hallmark
+#Save
+ora_all_diff_hallmark %>% 
+  saveRDS(file = here("GSEA_ORA", "ora_all_diff_hallmark.rds"))
 
+#Print
+ora_all_diff_hallmark
 ```
 
 
 ##### Plot ORA Hallmark
 ```{r fig.height=8, fig.width=8}
 ##### Plot ORA Hallmark ------
+#Import
+ora_all_diff_hallmark = readRDS(file = here("GSEA_ORA", "ora_all_diff_hallmark.rds"))
+#Cluster rows
 row_clustered = ora_all_diff_hallmark %>% 
     dplyr::select(condition, description, log_p_adjust) %>% 
     distinct() %>% 
@@ -3955,7 +4021,7 @@ row_clustered = ora_all_diff_hallmark %>%
     dist(.) %>% 
     hclust()
 
-
+#Plot
 ora_all_diff_hallmark_heatmap = ora_all_diff_hallmark %>% 
   clean_names() %>% 
   filter(description %in% c(row_clustered$labels)) %>% 
@@ -4001,6 +4067,7 @@ ora_all_diff_hallmark_heatmap = ora_all_diff_hallmark %>%
          title = "ORA, MSigDB Hallmarks") +
   facet_nested(~ paste("Day", timepoint) + fct_rev(comparison), scales = "free", space = "free") 
 
+#Print
 ora_all_diff_hallmark_heatmap
 
 #Save
