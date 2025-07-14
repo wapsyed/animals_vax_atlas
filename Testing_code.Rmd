@@ -1,4 +1,5 @@
 
+
 #Required
 ```{r message=FALSE, warning=FALSE}
 ##Packages --------
@@ -1290,7 +1291,7 @@ eset_human_mouse %>% saveRDS(file = here("tables", "eset_human_mouse.rds"))
 #                     intgroup = "organism")
 ```
 
-RLE plot
+##### RLE plot
 ```{r fig.height=8, fig.width=18}
 # Primeiro, transforme a matriz em long format e junte com a metadata
 long_expr <- as.data.frame(human_mouse_fluad_matrix) %>%
@@ -3283,7 +3284,6 @@ annotation_conditions = dge_long_genes %>%
 
 #Run GSEA -----
 #Human ImmuneGO
-
 #Clean table for GSEA standard
 term2gene = ImmuneGO_BTM_grouped_genes %>% 
   select(process, genes)
@@ -3305,6 +3305,8 @@ gsea_results_immuneGO_Manual_human
 ```
 
 
+#### Correlation plot (BTM, immune)
+
 Import
 ```{r}
 #Import results -------
@@ -3317,9 +3319,6 @@ btm_annotation = read.table(file = here("VaxGO",  "BTM functional groups V3.txt"
   rename(id = name) %>% 
   filter(group != "")
 ```
-
-
-#### Correlation plot (BTM, immune)
 
 ```{r fig.height=8, fig.width=8}
 #Annotate results
@@ -3356,7 +3355,7 @@ gsea_results_BTM_annotated_wide = gsea_results_immuneGO_BTM_human %>%
 
 
 Plot correlation
-```{r fig.height=7, fig.width=8}
+```{r fig.height=5, fig.width=6}
 #Define colors
 btm_annotation %>% pull(group) %>% unique()
 
@@ -3438,7 +3437,7 @@ gsea_results_BTM_annotated_correlation_plot = gsea_results_BTM_annotated_wide %>
           strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
           legend.position = "bottom",
           legend.direction = "horizontal",
-          legend.text = element_text(size = 10, hjust = 0)
+          legend.text = element_text(size = 8, hjust = 0)
           )
 
 #Print
@@ -3447,11 +3446,125 @@ gsea_results_BTM_annotated_correlation_plot
 #Save results
 gsea_results_BTM_annotated_correlation_plot %>% 
   ggsave(filename = here("Figures", "gsea_results_BTM_annotated_correlation_plot.png"),
-         width = 8,
-         height = 7)
+         width = 6,
+         height = 5)
+```
+
+#### Plot means
+
+```{r}
+#Annotate genes by BTM
+btm_annotation_genes = btm_annotation %>% 
+  rename(process = id) %>% 
+  inner_join(ImmuneGO_BTM_grouped_genes,
+             by = "process") %>% 
+  rename(symbol = genes)
+
+#Merge with DEGs
+dge_btm = dge_long_genes %>% 
+  inner_join(btm_annotation_genes %>% 
+               select(process, symbol, group, subgroup),
+             by = "symbol") %>% 
+  distinct()
+
+#Calculate mean
+#By BTM group
+dge_btm_mean_process = dge_btm %>% 
+  group_by(organism, timepoint, process) %>% 
+  summarize(mean_log2fc = mean(log2fc)) %>%
+  mutate(organism_2 = organism,
+         organism = if_else(organism == "Human", "Human", "Model")) %>% 
+  pivot_wider(names_from = "organism", values_from = "mean_log2fc") %>% 
+  group_by(process, timepoint) %>% 
+  fill(Human, .direction = "updown") %>% 
+  drop_na(Model) %>% 
+  rename(organism = organism_2) %>% 
+  ungroup() %>% 
+  inner_join(btm_annotation_genes %>% 
+               select(process, group, subgroup) %>% 
+               distinct(),
+             by = "process")
+
+dge_btm_mean_process
 ```
 
 
+
+Plot correlation
+```{r fig.height=5, fig.width=6}
+#Define colors
+btm_annotation %>% pull(group) %>% unique()
+
+immune_colors = c("SIGNAL TRANSDUCTION" = "#708d81",
+                  "CELL CYCLE" = "#06d6a0",
+                  "ECM AND MIGRATION" = "#52b788",
+                  "ENERGY METABOLISM" = "#95d5b2", 
+                  "INNATE RESPONSE" = "#184e77",
+                  "NEUTROPHILS" = "#219ebc",
+                  "NK CELLS" = "#a2d2ff",
+                  "IFN"= "#4361ee",
+                  "MONOCYTES" = "#4cc9f0",
+                  "PLATELETS" = "#7209b7",
+                  "B CELLS" = "#e5383b",
+                  "T CELLS" = "#f72585")
+immune_order = c("SIGNAL TRANSDUCTION",
+                  "CELL CYCLE",
+                  "ECM AND MIGRATION",
+                  "ENERGY METABOLISM", 
+                  "INNATE RESPONSE",
+                  "NEUTROPHILS",
+                  "NK CELLS",
+                  "IFN",
+                  "MONOCYTES",
+                  "PLATELETS",
+                  "B CELLS",
+                  "T CELLS")
+
+#Plot correlation plot
+dge_btm_mean_group_correlation_plot = dge_btm_mean_process %>% 
+  ungroup() %>% 
+  mutate(group = fct_relevel(group, c(immune_order))) %>% 
+  ggplot() +
+  aes(x = Model,
+      y = Human) +
+  facet_grid(~fct_rev(organism)~timepoint, axes = "all_x")+
+  #Plot all points
+  geom_point(aes(color = group,
+                 fill = group),
+             size = 2,
+             alpha = 0.8,
+             pch = 21) +
+  
+  scale_fill_manual(values = immune_colors) +
+  scale_color_manual(values = immune_colors) +
+  guides(color = F) +
+  labs(fill = "Immune group",
+       y = "Human (Mean Log2FC",
+       x = "Model (Mean Log2FC)") +
+  ylim(-2, 2) +
+  xlim(-2, 2) +
+  #Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
+    geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+    geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          legend.position = "bottom",
+          legend.direction = "horizontal",
+          legend.text = element_text(size = 8, hjust = 0)
+          )
+
+#Print
+dge_btm_mean_group_correlation_plot
+
+#Save results
+dge_btm_mean_group_correlation_plot %>%
+  ggsave(filename = here("Figures", "dge_btm_mean_group_correlation_plot.png"),
+         width = 6,
+         height = 5)
+```
 
 
 
@@ -5867,7 +5980,7 @@ msigdbr_df <- msigdbr(species = "human", collection = "H") %>%
 
 ora_mouse_fit_best_worst_perc_hallmark <- enricher_condition(
   df = overlap_best_worst %>% 
-    mutate(genes = human_symbol),
+    mutate(genes = symbol),
   term2gene_df = msigdbr_df) %>% 
   mutate(log_q = -log(qvalue)) %>% 
   mutate(description = str_replace_all(description, "_", " "),
@@ -5880,7 +5993,7 @@ ora_mouse_fit_best_worst_perc_hallmark
 
 
 ORA Hallmark
-```{r fig.height=8, fig.width=6}
+```{r fig.height=6, fig.width=6}
 #Plot heatmap for ORA Hallmark ------
 row_clustered = ora_mouse_fit_best_worst_perc_hallmark %>%  
     dplyr::select(condition, description, log_q) %>% 
@@ -5906,8 +6019,8 @@ df_ora_mouse_fit_best_worst_perc_hallmark_heatmap = ora_mouse_fit_best_worst_per
         model = case_when(str_detect(condition, "Mouse") ~ "Mouse", 
                           str_detect(condition, "FIT") ~ "FIT",
                           T ~ NA),
-        best_worst = case_when(str_detect(condition, "Best") ~ "Best", 
-                          str_detect(condition, "Worst") ~ "Worst",
+        best_worst = case_when(str_detect(condition, "Best") ~ "10%", 
+                          str_detect(condition, "Worst") ~ "90",
                           T ~ NA)) %>% 
   ggplot(aes(x=fct_rev(model), y = str_to_upper(description), fill = log_q)) +
   geom_tile(color = "black", 
@@ -5933,7 +6046,7 @@ df_ora_mouse_fit_best_worst_perc_hallmark_heatmap = ora_mouse_fit_best_worst_per
                                       margin = margin(0.2,1,0.2,1, "cm")),
           panel.grid = element_blank(), 
           panel.spacing.x = unit(0.1, "cm"),
-          plot.margin = margin(0, 0, 1, 0, unit = "cm"),
+          plot.margin = margin(0, 0, 0, 1, unit = "cm"),
           legend.direction = "horizontal",
           legend.position = "bottom") +
      labs(x = "",
@@ -5943,227 +6056,6 @@ df_ora_mouse_fit_best_worst_perc_hallmark_heatmap = ora_mouse_fit_best_worst_per
 
 
 df_ora_mouse_fit_best_worst_perc_hallmark_heatmap
-```
-
-
-
-
-
-
-
-#### GSEA: Which processes are better or worse predicted?
-
-```{r fig.width=10, fig.height= 8}
-# GSEA: Which processes are better or worse predicted? -------
-#Import
-#ImmuneGO ontologies
-ImmuneGO_Mouse_Manual <- read_excel(here("VaxGO", "ImmuneGO_Mouse.xlsx"))
-ImmuneGO_Mouse_Manual_genes = ImmuneGO_Mouse_Manual %>% separate_rows(genes)
-immunego_btm_manual_grouped = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genesets.csv"))
-ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
-
-#Define organism
-organism = "org.Hs.eg.db"
-#All Gene ontologies
-fit_mouse_ranked_zscore = ranks_mouse_vs_fit %>% 
-    ungroup() %>% 
-  rename(zscore = fit) %>% 
-  mutate(condition = paste0(condition, " (Day ", timepoint_ref, ")")) %>% 
-    filter(timepoint_ref == timepoint_other) %>% 
-  select(symbol, zscore, condition) %>% 
-  bind_rows(ranks_fit_vs_mouse %>%
-              ungroup() %>%
-                filter(timepoint_ref == timepoint_other) %>% 
-              rename(zscore = mouse) %>%
-              mutate(condition = paste0(condition, " (Day ", timepoint_ref, ")")) %>%
-              select(symbol, zscore, condition)) %>% 
-  rename(genes = symbol,
-         value = zscore)
-
-#Human ImmuneGO
-term2gene = ImmuneGO_BTM_grouped_genes %>% 
-  select(process, genes)
-
-# Rank best to worst
-fit_mouse_ranked_zscore = ranks_mouse_vs_fit %>% 
-    ungroup() %>% 
-  rename(zscore = zscore_h2mouse) %>% 
-  mutate(condition = paste0("Mouse best", " (Day ", timepoint_ref, ")")) %>% 
-    filter(timepoint_ref == timepoint_other) %>% 
-  select(symbol, zscore, condition) %>% 
-  bind_rows(ranks_fit_vs_mouse %>%
-              ungroup() %>%
-                filter(timepoint_ref == timepoint_other) %>% 
-              rename(zscore = zscore_h2fit) %>%
-              mutate(condition = paste0("FIT best", " (Day ", timepoint_ref, ")")) %>%
-              select(symbol, zscore, condition)) %>% 
-  distinct() %>% 
-  select(condition, genes = symbol, log2fold_change = zscore) 
-
-#Run multiple GSEAs
-fit_mouse_ranked_zscore_best_worst_gsea_results_immuneGO_Manual_human = autoGSEA(df = fit_mouse_ranked_zscore,
-         TERM2GENE = term2gene,
-         geneset_name = "Human_ImmuneGO") %>% 
-  clean_names()
-
-#Save
-fit_mouse_ranked_zscore_best_worst_gsea_results_immuneGO_Manual_human %>% 
-    saveRDS(here("GSEA_ORA", "fit_mouse_ranked_zscore_best_worst_gsea_results_immuneGO_Manual_human.rds"))
-
-
-
-# # Rank Worst to best
-# fit_mouse_ranked_zscore_worst_best = fit_mouse_ranked_zscore %>% 
-#   group_by() %>% 
-#   arrange(-abs(log2fold_change)) %>% 
-#   mutate(log2fold_change = -log2fold_change,
-#          condition = str_replace(condition, "best", "worst"))  
-# 
-#   
-# fit_mouse_ranked_zscore_worst_best_gsea_results_immuneGO_Manual_human = autoGSEA(df = fit_mouse_ranked_zscore_worst_best,
-#          TERM2GENE = term2gene,
-#          geneset_name = "Human_ImmuneGO") %>% 
-#   clean_names()
-# 
-# fit_mouse_ranked_zscore_worst_best_gsea_results_immuneGO_Manual_human %>% 
-#     saveRDS(here("GSEA_ORA", "fit_mouse_ranked_zscore_worst_best_gsea_results_immuneGO_Manual_human.rds"))
-
-```
-
-
-
-
-##### GSEA all BP in Gene ontology
-
-```{r fig.height=10, fig.width=10}
-# row_clustered = gseGO_all_zscore %>% 
-#     dplyr::select(condition, description, nes) %>% 
-#     distinct() %>% 
-#     pivot_wider(names_from = "condition",
-#                 values_from= "nes") %>%
-#     column_to_rownames("description") %>% 
-#     as.matrix() %>% 
-#     replace(is.na(.), 0) %>% 
-#     dist(.) %>% 
-#     hclust()
-# 
-# 
-# gseGO_all_zscore %>% 
-#   clean_names() %>% 
-#   filter(p_adjust < 0.01) %>% 
-#   arrange(-abs(nes)) %>% 
-#     mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
-#                               p_adjust <= 0.25 ~ "-",
-#                               p_adjust <= 0.50 ~ "/",
-#                               p_adjust <= 0.05 ~ "**",
-#                               TRUE ~ "")) %>% 
-#   ggplot(aes(x=condition, y = description, fill = nes)) +
-#   geom_tile(color = "white",
-#             size = 0, na.rm = F) + 
-#   geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
-#   scale_y_discrete(labels = label_wrap(15)) +
-#     theme_minimal() + 
-#     theme(axis.text = element_text(color = "black", size = 8) ,
-#           axis.line  = element_blank(),
-#           axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-#           axis.text.y = element_text(angle = 0, vjust = 1, hjust=1),
-#           axis.ticks = element_blank(),
-#           panel.grid = element_blank(),
-#           legend.direction = "horizontal",
-#           legend.position = "bottom") +
-#     labs(x = "",
-#          y = "") +
-#     scale_fill_gradient2(
-#         low = "#4DBBD5FF",      
-#         mid = "white",          
-#         high = "#DC0000FF",     
-#         midpoint = 0, 
-#         n.breaks = 3,
-#         oob = scales::squish,
-#         limits = c(-1, 1),      #
-#         name = "NES") +
-#     scale_y_discrete(position = "right")
-
-```
-
-
-##### GSEA Main immune processes
-
-```{r fig.height=7, fig.width=7}
-row_clustered = fit_mouse_ranked_zscore_best_worst_gsea_results_immuneGO_Manual_human$gsea %>% 
-  bind_rows(fit_mouse_ranked_zscore_worst_best_gsea_results_immuneGO_Manual_human$gsea) %>% 
-  clean_names() %>% 
-  # filter(p_adjust <= 0.50) %>%
-  filter(!str_detect(description, "\\(M"),#Filter out BTM IDs
-         !str_detect(description, "[a-z]"),
-         !str_detect(description, "PRR|APP")) %>% #Filter out main processes (Upper case)
-    dplyr::select(condition, description, nes) %>% 
-    distinct() %>% 
-    pivot_wider(names_from = "condition",
-                values_from= "nes") %>%
-    column_to_rownames("description") %>% 
-    as.matrix() %>% 
-    replace(is.na(.), 0) %>% 
-    dist(.) %>% 
-    hclust()
-
-
-col_clustered = fit_mouse_ranked_zscore_best_worst_gsea_results_immuneGO_Manual_human$gsea %>% 
-  bind_rows(fit_mouse_ranked_zscore_worst_best_gsea_results_immuneGO_Manual_human$gsea) %>% 
-  clean_names() %>% 
-  # filter(p_adjust <= 0.50) %>%
-  filter(!str_detect(description, "\\(M"),#Filter out BTM IDs
-         !str_detect(description, "[a-z]"),
-         !str_detect(description, "PRR|APP")) %>% #Filter out main processes (Upper case)
-    dplyr::select(condition, description, nes) %>% 
-    distinct() %>% 
-    pivot_wider(names_from = "description",
-                values_from= "nes") %>%
-    column_to_rownames("condition") %>% 
-    as.matrix() %>% 
-    replace(is.na(.), 0) %>% 
-    dist(.) %>% 
-    hclust()
-
-
-fit_mouse_ranked_zscore_best_worst_gsea_results_immuneGO_Manual_human$gsea %>% 
-  bind_rows(fit_mouse_ranked_zscore_worst_best_gsea_results_immuneGO_Manual_human$gsea) %>% 
-  clean_names() %>% 
-  filter(id %in% c(row_clustered$labels)) %>% 
-  # filter(p_adjust < 0.25) %>% 
-  arrange(-abs(nes)) %>% 
-    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
-                              p_adjust <= 0.25 ~ "-",
-                              TRUE ~ ""),
-           condition = fct_relevel(condition, col_clustered$labels)) %>% 
-  ggplot(aes(x=condition, y = description, fill = nes)) +
-  geom_tile(color = "white",
-            size = 0, na.rm = F) + 
-  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
-  scale_y_discrete(labels = label_wrap(15)) +
-    theme_minimal() + 
-    theme(axis.text = element_text(color = "black", size = 8) ,
-          axis.line  = element_blank(),
-          axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-          axis.text.y = element_text(angle = 0, vjust = 1, hjust=1),
-          axis.ticks = element_blank(),
-          panel.grid = element_blank(),
-          plot.margin = margin(1, 1, 1, 2, unit = "cm"),
-          legend.direction = "horizontal",
-          legend.position = "top") +
-    labs(x = "",
-         y = "") +
-    scale_fill_gradient2(
-        low = "#4DBBD5FF",      # azul para -1
-        mid = "white",          # branco para 0
-        high = "#DC0000FF",     # vermelho para +1
-        midpoint = 0, 
-        n.breaks = 3,
-        oob = scales::squish,
-        limits = c(-1, 1),      # fixa o intervalo
-        name = "NES") +
-    scale_y_discrete(position = "right")
-
 ```
 
 
@@ -9027,7 +8919,7 @@ target_genes = HS_MM_Symbol_Entrez %>%
 # Rodar para vários genes
 vip_all_rf <- map_df(target_genes, 
                   model_rf_by_gene, 
-                  X = 
+                  # X =
                   df_mouse = df_mouse, 
                   df_human = df_human, 
                   top_n = 5)
