@@ -29,6 +29,10 @@ source(here("scripts_notebooks", "required.R"))
 ## Found in translation
 Ref: Normand, R., Du, W., Briller, M. et al. Found In Translation: a machine learning model for mouse-to-human inference. Nat Methods 15, 1067–1073 (2018). https://doi.org/10.1038/s41592-018-0214-9
 Github: https://github.com/shenorrLabTRDF/FIT.mouse2man 
+
+- Standard (ST): which include human and mouse datasets that were conducted in separate experiments;
+- Reference (RF), in which the human and mouse datasets were directly contrasted in a publication authored by researchers who had generated at least one of the datasets.
+- CSP IDs can be enumarated by different comparisons with different mice strains, for example A/J and CD1 mice, and timpoints (not clearly stated).
 ```{r}
 #Install model package
 # library(devtools)
@@ -38,77 +42,107 @@ library(FIT.mouse2man)
 #Import files
 pca_rotations = FIT.mouse2man::pca_rotations
 best_models = FIT.mouse2man::best_models
+slopes_per_gene_V2.0 = FIT.mouse2man::slopes_per_gene_V2.0
+
+#Gene lookup table
 HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez %>% 
   rename(human_symbol = HGNC_symbol,
          mouse_symbol =MGI.symbol,
          HS.Entrez = Human.Entrez,
-         MM.Entrez = Mouse.Ortholog)
-MM_Entrez_symbol_desc = FIT.mouse2man::MM_Entrez_symbol_desc
-slopes_per_gene_V2.0 = FIT.mouse2man::slopes_per_gene_V2.0
+         MM.Entrez = Mouse.Ortholog) %>% 
+  mutate(HS.Entrez = as.character(HS.Entrez),
+         MM.Entrez = as.character(MM.Entrez))
+
+# MM_Entrez_symbol_desc = FIT.mouse2man::MM_Entrez_symbol_desc
 # Psoriasis_classifier_neg = FIT.mouse2man::Psoriasis_classifier_neg
 # StaphInfection_classifier_pos = FIT.mouse2man::StaphInfection_classifier_pos
 
 #Training data
 AllData_V2.0 = FIT.mouse2man::AllData_V2.0 %>% 
+  mutate(csp_id_short = str_remove(CSP_ID, "Microarrays_RF_"),
+         csp_id_short = str_remove(csp_id_short, "Microarrays_ST_"),
+         csp_id_short = str_remove(csp_id_short, "RNAseq_ST_"),
+         csp_id_short = str_remove(csp_id_short, "RNAseq_RF_")) %>% 
   inner_join(HS_MM_Symbol_Entrez, 
-             by )
+             by = join_by("HS.Entrez", "MM.Entrez")) %>% 
+  separate(csp_id_short, into = c("del", "csp_id_index")) %>% 
+  select(-del)
   
-
+AllData_V2.0$csp_id_index %>% unique()
 
 ```
 
 
 ## Filter datasets
+Get metadata for datasets on Supplementary Files of FIT paper and filter datasets with blood-derived samples
 ```{r}
 #Get metadata for datasets on Supplementary Files of FIT paper and filter datasets with blood-derived samples
-training_datasets_blood <- c(
-  "Microarrays_RF_EcoliInfection_1",
-  "Microarrays_RF_EcoliInfection_3",
-  "Microarrays_RF_StaphInfection_10",
-  "Microarrays_RF_StaphInfection_11",
-  "Microarrays_RF_StaphInfection_12",
-  "Microarrays_RF_StaphInfection_1",
-  "Microarrays_RF_StaphInfection_2",
-  "Microarrays_RF_StaphInfection_3",
-  "Microarrays_RF_StaphInfection_4",
-  "Microarrays_RF_StaphInfection_5",
-  "Microarrays_RF_StaphInfection_6",
-  "Microarrays_RF_StaphInfection_7",
-  "Microarrays_RF_StaphInfection_8",
-  "Microarrays_RF_StaphInfection_9",
-  "Microarrays_ST_Burns_1",
-  "Microarrays_ST_Burns_2",
-  "Microarrays_ST_Burns_3",
-  "Microarrays_ST_Injury_1",
-  "Microarrays_ST_Injury_3",
-  "Microarrays_ST_Injury_4",
-  "Microarrays_ST_Injury_5",
-  "Microarrays_ST_Sepsis_10",
-  "Microarrays_ST_Sepsis_14",
-  "Microarrays_ST_Sepsis_16",
-  "Microarrays_ST_Sepsis_17",
-  "Microarrays_ST_Sepsis_18",
-  "Microarrays_ST_Sepsis_19",
-  "Microarrays_ST_Sepsis_20",
-  "Microarrays_ST_Sepsis_2",
-  "Microarrays_ST_Sepsis_3",
-  "Microarrays_ST_Sepsis_4",
-  "Microarrays_ST_Sepsis_5",
-  "Microarrays_ST_Sepsis_6",
-  "Microarrays_ST_Sepsis_9"
-)
+#Import
+fit_training_datasets_metadata <- read_excel(here("FIT_Mouse2man", "41592_2018_214_MOESM3_ESM.xlsx"))
+
+#Clean grouped header
+fit_training_datasets_metadata_newcols = fit_training_datasets_metadata %>% 
+  slice_head(n = 2) %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  
+  #Fill sub columns
+  rownames_to_column("V0") %>% 
+  
+  mutate(V1 = if_else(is.na(V1), V0, V1),
+         V0 = ifelse(str_detect(V0, "^\\.\\.\\.\\d+$"), NA, V0),
+         V1 = ifelse(str_detect(V1, "^\\.\\.\\.\\d+$"), NA, V1)) %>% 
+  
+  #Fill columns
+  fill(V0, .direction = "down") %>% 
+  fill(V1, .direction = "down") %>% 
+  
+  #Fill columns manually
+  mutate(V2 = if_else(V0 == V1, V0, V2),
+         V3 = if_else(V0 == V1, V0, NA),
+         V3 = if_else(is.na(V2), paste0(V0,"_", V1), V2),
+         V2 = if_else(is.na(V2), V3, V2),
+         V3 = if_else(V2 == "Disease" & V0 != "Disease", 
+                      paste0(V0, "_", V1, "_", V2), 
+                      V3),
+         V3 = if_else(V2 == "Control" & V0 != "Control", 
+                      paste0(V0, "_", V1, "_", V2), 
+                      V3),
+         #Clean table further
+         V3 = str_remove(V3, " Data"),
+         V3 = make_clean_names(V3)) %>% 
+  select(V3)
+
+#Set new names
+fit_training_datasets_metadata_clean = fit_training_datasets_metadata %>% 
+  filter(!row_number() %in% c(1:2)) %>% 
+  setNames(fit_training_datasets_metadata_newcols %>% pull()) %>% 
+  fill(disease, .direction = "down")
+
+fit_training_datasets_metadata_clean %>% 
+  saveRDS(file = here("FIT_Mouse2man", "fit_training_datasets_metadata_clean.rds"))
+  
+#Get datasets with blood-derived samples only, in both organisms
+fit_training_datasets_blood = fit_training_datasets_metadata_clean %>% 
+  filter(str_detect(human_tissue_control, "Blood"),
+         str_detect(mouse_tissue_disease, "Blood"))
 
 AllData_V2.0_blood = AllData_V2.0 %>% 
-  filter(CSP_ID %in% c(training_datasets_blood))
+  filter(CSP_ID %in% c(fit_training_datasets_blood$comparison_id %>% unique())) 
 
-#Save
 AllData_V2.0_blood %>% 
   saveRDS(here("new_models", "AllData_FIT_training_blood.rds"))
+
 ```
+
 
 Import
 ```{r}
+#Import data
+fit_training_datasets_metadata_clean = read_rds(file = here("FIT_Mouse2man", "fit_training_datasets_metadata_clean.rds"))
 AllData_V2.0_blood = read_rds(here("new_models", "AllData_FIT_training_blood.rds"))
+ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
+
 ```
 
 ### Plot distributions
@@ -153,9 +187,6 @@ AllData_V2.0_distributions_plot = AllData_V2.0 %>%
        y = "Frequency",
        title = "All samples")
 
-
-AllData_V2.0_distributions_plot 
-
 AllData_V2.0_blood_distributions_plot = AllData_V2.0_blood %>% 
   clean_names() %>% 
   pivot_longer(cols = c(fc_hs:qval_mm),
@@ -199,37 +230,93 @@ AllData_V2.0_blood_distributions_plot = AllData_V2.0_blood %>%
        title = "Blood samples")
 
 
-AllData_V2.0_blood_distributions_plot 
-  
-```
-Plot all
-```{r fig.height=8, fig.width=12}
-AllData_V2.0_distributions_plot + AllData_V2.0_blood_distributions_plot +
+#Plot all
+AllData_V2.0_distributions_all = AllData_V2.0_distributions_plot + AllData_V2.0_blood_distributions_plot +
   plot_layout(widths = c(1, 0.15),
               guides = "collect",
               axes = "collect") +
   plot_annotation(theme = theme(legend.position = "top"))
 
-```
-
-
-
-
-
-
-```{r}
-AllData_V2.0 %>%
-  inner_join(HS_MM_Symbol_Entrez,
-             by = join_by())
-  ggplot()
-
-
+#Save
+AllData_V2.0_distributions_all %>% 
+  ggsave(filename = here("Figures", "FIT_Training data_distributions_all.png"),
+         width = 10,
+         height = 10)
 
 ```
 
 
 
+###Correlation plots
+```{r fig.height=12, fig.width=10}
 
+#Log2FC scatterplot
+
+blood_l2fc_scatterplot = AllData_V2.0_blood %>%
+  clean_names() %>%
+  mutate(csp_id_index = fct_relevel(csp_id_index, as.character(1:30))) %>% 
+  filter(qval_hs <= 0.05 | qval_mm <= 0.05) %>% 
+  
+  #Plot
+  ggplot() +
+  aes(x = fc_mm,
+      y = fc_hs) +
+  
+  facet_nested_wrap(~disease+paste("Comparison", csp_id_index), scales = "free", nest_line = T) +
+  
+  #All DEGs
+  geom_point(color = "gray90") +
+  
+  #DEGs in both organisms
+  geom_point(color = "#4DBBD5FF",
+             fill = "#4DBBD5FF",
+             alpha = 1.5,
+             size = 1,
+             pch = 21,
+             data = AllData_V2.0_blood %>%
+               clean_names() %>%
+               filter(qval_hs <= 0.05 & qval_mm <= 0.05)) +
+  
+  #Immune DEGs
+  geom_point(color = "#4361ee",
+             fill = "#4361ee",
+             alpha = 1.5,
+             size = 1,
+             pch = 21,
+             data = AllData_V2.0_blood %>%
+               clean_names() %>%
+               filter(human_symbol %in% c(ImmuneGO_BTM_grouped_genes$genes)) %>% 
+               filter(qval_hs <= 0.05 & qval_mm <= 0.05)) +
+  
+  #Add linear models
+  stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
+  
+  stat_smooth(method = "lm", geom = "line", color = "#4DBBD5FF", fill = "#4DBBD5FF", alpha = 0.8, size = 1, se = F, 
+              data = AllData_V2.0_blood %>%
+               clean_names() %>%
+               filter(qval_hs <= 0.05 & qval_mm <= 0.05)) +
+  
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  theme(legend.position = "none",
+        legend.direction = "horizontal") +
+  labs(x = "Mouse L2FC",
+       y = "Human L2FC",
+       title= "Correlation plot, Log2-Fold Change")
+
+blood_l2fc_scatterplot
+
+#Save
+blood_l2fc_scatterplot %>% 
+  ggsave(filename = here("Figures", "FIT_TrainingData_blood_l2fc_scatterplot.png"),
+         height = 12,
+         width = 10)
+
+```
 
 
 
