@@ -1,0 +1,126 @@
+```{r}
+pairwise_human_fit_test =  read_rds(here("FIT_Mouse2man", "pairwise_human_fit_test.rds"))
+```
+
+
+```{r fig.height=4, fig.width=8}
+
+quantile_diff_genes = pairwise_human_fit_test 
+
+abs_diff_correlation_plot_data_split_qn = quantile_diff_genes %>% 
+  mutate(
+    quartile_label = cut(abs(human_2_mouse_qn),
+                         breaks = quantile(abs(human_2_mouse_qn),
+                                           probs = c(0, 0.10, 0.25, 0.5, 0.75, 1),
+                                           na.rm = TRUE),
+                         include.lowest = TRUE,
+                         labels = c("Q10", "Q25", "Q50", "Q75", "Q100")),
+    timepoint_day = paste0("Day ", timepoint)) %>% 
+  mutate(pval_mouse_adj = if_else(pval_mouse_adj <= 0.05, "DEG", "Not DEG"),
+         pval_human_adj = if_else(pval_human_adj <= 0.05, "DEG", "Not DEG"))
+
+abs_diff_correlation_plot_data_split_qn %>% dplyr::count(timepoint)
+
+#Get all genes
+quantiles <- quantile(abs(quantile_diff_genes$human_2_mouse_qn), 
+                    probs = c(0.10, 0.25, 0.5, 0.75, 1), 
+                    na.rm = TRUE)
+
+diff_correlation_plot_data_qn = quantile_diff_genes %>% 
+  arrange(timepoint)  %>% 
+  ungroup() %>% 
+  #Split by quantile
+    mutate(
+    Q10 = abs(human_2_mouse_qn) <= quantiles[1],
+    Q25 = abs(human_2_mouse_qn) <= quantiles[2],
+    Q50 = abs(human_2_mouse_qn) <= quantiles[3],
+    Q75 = abs(human_2_mouse_qn) <= quantiles[4],
+    Q100 = abs(human_2_mouse_qn) <= quantiles[5]
+  ) %>%
+  #Cumulative
+  pivot_longer(cols = starts_with("Q"),
+               names_to = "quartile_label",
+               values_to = "in_quantile") %>%
+  mutate(quartile_label = fct_relevel(quartile_label, "Q10", "Q25", "Q50", "Q75", "Q100")) %>% 
+  filter(in_quantile) %>%
+  select(-in_quantile)
+```
+
+
+```{r fig.height=4, fig.width=8}
+abs_diff_correlation_plot_data_split_qn %>% 
+  ungroup() %>% 
+  ggplot() +
+  aes(x = mean_mouse_qn,
+      y = mean_human_qn) +
+  facet_wrap(~paste("Day", timepoint)) +
+  #All points, colored by differences
+  geom_point(
+             aes(color = quartile_label,
+                 # alpha = quartile_label,
+                 fill = quartile_label),
+             # fill = NA,
+             # alpha = 1,
+             pch = 21) +
+
+  #Same DEGs (WORST)
+  geom_point(color = "#4DBBD5FF",
+             fill = "#4DBBD5FF",
+             alpha = 1,
+             size = 0.5,
+             pch = 21,
+             data = abs_diff_correlation_plot_data_split_qn %>%
+               filter(pval_mouse_adj == pval_human_adj,
+                      pval_mouse_adj == "DEG") %>%
+               filter(quartile_label %in% c("Q50", "Q75", "Q100"))) +
+  #Same DEGs (BEST)
+  geom_point(color = "black",
+             fill = "#4DBBD5FF",
+             alpha = 1,
+             size = 2,
+             pch = 21,
+             data = abs_diff_correlation_plot_data_split_qn %>%
+               filter(pval_mouse_adj == pval_human_adj,
+                      pval_mouse_adj == "DEG") %>%
+               filter(quartile_label %in% c(
+                 "Q10",
+                 "Q25"
+                 ))) +
+   #Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_abline(slope = -1, alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  
+  scale_color_manual(values = c("Q10" = "black",
+                               "Q25" = "gray25",
+                               "Q50" = "gray50",
+                               "Q75" = "gray75",
+                               "Q100" = "gray90")) +
+  scale_fill_manual(values = c("Q10" = "black",
+                               "Q25" = "gray25",
+                               "Q50" = "gray50",
+                               "Q75" = "gray75",
+                               "Q100" = "gray90")) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(limits = c(-1.5, 1.5)) +
+  
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        legend.position = "right",
+        legend.direction = "vertical",
+        legend.key.width = unit(0.4, 'cm'),
+        legend.key.height = unit(0.4, 'cm'),
+        legend.key = element_blank(),
+        legend.title = element_text(size = 10, vjust = 0.9),
+        legend.text = element_text(size = 7, vjust = 0.5, hjust = -0.2)) +
+  labs(title = "Which genes and DEGs vary in both human and mouse?",
+       subtitle = "Differences in mouse to human, by timepoint.In colors, DEGs in human AND mouse, p_adjust < 0.05, |diff| < 0.2. \nPurple = Negatively correlated, Blue = Positively correlated",
+       x = "Mouse L2FC",
+       y = "Human L2FC",
+       alpha = "Quantiles",
+       fill = "Quantiles",
+       color = "|Z|")
+
+
+```
