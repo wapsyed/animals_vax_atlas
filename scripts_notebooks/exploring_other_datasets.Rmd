@@ -19,7 +19,7 @@ knitr::opts_chunk$set(echo = TRUE, eval=FALSE, cache = TRUE)
 
 # Exploring other datasets
 
-##Import required codes
+## Import required codes
 ```{r}
 # install.packages("here")
 library(here)
@@ -509,9 +509,12 @@ blood_l2fc_scatterplot %>%
 ```
 
 
-## Check raw datasets from mice used in training
+# Check raw datasets from mice used in training
+
+## S. aureus infection
+### GSE19668 (Mouse)
 ```{r}
-#Sepsis: GSE19668 -----
+#S aureus: GSE19668 -----
 filename = "GSE19668"
 GSE19668 <- getGEO("GSE19668", GSEMatrix = TRUE) 
 eset <- GSE19668[[1]]
@@ -618,7 +621,7 @@ GSE19668_log2fc_sample_wide = GSE19668_counts_log2_summary_annotated_probes %>%
 GSE19668_log2fc_sample_wide
 ```
 
-
+#### Correlation plots, pairwise
 ```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
 #Plot correlation between animals ------
 #Change params in geoms
@@ -766,6 +769,194 @@ beep()
 ```
 
 
+
+
+#### PCA
+
+```{r fig.height=4, fig.width=5}
+#Import metadata
+annotation_samples_pca = GSE19668_counts_log2_summary_annotated_probes %>% 
+  mutate(sample = paste0(participant_id, "_Day_", timepoint)) %>% 
+  select(participant_id, timepoint, sample) %>% 
+  distinct()
+
+
+# PCA with raw values
+clean_matrix_raw = GSE19668_counts_log2_summary_annotated_probes %>% 
+  mutate(sample = paste0(participant_id, "_Day_", timepoint)) %>% 
+  select(sample, entrezgene_id, log2fc) %>% 
+  filter(!entrezgene_id == "") %>% 
+  distinct() %>%
+  pivot_wider(names_from = "sample",
+              values_from = "log2fc") %>% 
+  column_to_rownames("entrezgene_id") %>% 
+  as.matrix()
+
+clean_matrix_raw[!is.finite(clean_matrix_raw)] <- 0
+
+pca_raw <- prcomp(t(clean_matrix_raw), scale. = TRUE)
+pca_raw_df <- as_tibble(pca_raw$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_raw$x)) %>% 
+  left_join(annotation_samples_pca, by = "sample")
+
+#Plot
+pca_raw <- pca_raw_df %>%
+  mutate(timepoint = as.character(timepoint)) %>% 
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      fill = timepoint,
+      shape = organism,
+      label = participant_id) +
+  geom_point(size = 3, 
+             alpha = 1, 
+             pch = 24, 
+             color = "black") +
+  theme_vaxgo() +
+  guides(fill = "none") +
+  scale_color_manual(values = c("2" = "#caf0f8",
+                                "4" = "#219ebc",
+                                "6" = "#669bbc",
+                                "12" = "purple")) +
+  scale_fill_manual(values = c("2" = "#caf0f8",
+                                "4" = "#219ebc",
+                                "6" = "#669bbc",
+                                "12" = "purple")) +
+  labs(title = "Mouse, S. aureus, GSE19668",
+       shape = "Organism",
+       color = "Timepoint") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank())
+pca_raw 
+
+```
+
+
+
+
+
+### GSE33341 (Human)
+```{r}
+#S. aureus: GSE33341 -----
+filename = "GSE33341"
+GSE33341 <- getGEO("GSE33341", GSEMatrix = TRUE) 
+eset <- GSE33341[[2]] #The matrix #1 the mouse annotated
+
+#Metadata ------
+GSE33341_metadata = eset %>% 
+  pData() %>% 
+  dplyr::select( 
+    geo_sample = "geo_accession", 
+    participant_id = "title",
+    sex = "host gender:ch1",
+    condition = "source_name_ch1",
+    pathogen = "pathogen:ch1",
+    description = "source_name_ch1", 
+    ethnicity = "ethnicity:ch1",
+    tissue_infection = "anatomic site of infection:ch1",
+    batch_experimental = "experimental batch:ch1",
+    age = "host age (yr):ch1") %>% 
+  mutate(condition = pathogen,
+         organism = "Human",
+         timepoint = 1,
+         time_unit = "Day",
+         tissue = "Blood",
+         participant_id = str_extract(participant_id, "\\[.*?\\]") %>% 
+           str_remove("\\[") %>% 
+           str_remove("\\]"),
+         condition = case_when(description == "blood patient with E. coli bacteremia prior antibiotic treatment (Emergency Department)" ~ "E. coli prior antibiotic",
+                               description == "blood patient with S. aureus bacteremia prior antibiotic treatment (Emergency Department)" ~ "S aureus prior antibiotic",
+                               description == "blood human NOT infected" ~ "No infection",
+                               T ~ description),
+         pathogen = if_else(pathogen == "-", "Healthy", pathogen))
+
+GSE33341_metadata
+  
+```
+
+
+```{r}
+#Filter metadata
+GSE33341_metadata_filtered = GSE33341_metadata %>%
+  filter(pathogen %in% c("Staphylococcus aureus", "Healthy")) %>% 
+  select(geo_sample, participant_id, condition, timepoint, everything())
+
+#Counts matrix
+GSE33341_eset <- exprs(eset) %>% as.data.frame()
+
+#Annotate data and calculate log2fc
+GSE33341_expression_metadata  = GSE33341_eset %>% 
+  rownames_to_column("probe_id") %>% 
+  pivot_longer(cols = -probe_id,
+               names_to = "geo_sample",
+               values_to = "value_raw") %>% 
+  inner_join(GSE33341_metadata_filtered, 
+             by = "geo_sample") 
+
+#Get value from healthy and calculate Log2FC
+GSE33341_log2fc_sample = GSE33341_expression_metadata %>% 
+  filter(pathogen == "Healthy") %>% 
+  select(probe_id, participant_id, value_raw_ref = value_raw) %>% 
+  inner_join(GSE33341_expression_metadata,
+             by = join_by("probe_id", "participant_id")) %>% 
+  filter(timepoint != 0) %>% 
+  mutate(log2fc = value_raw - day0_value_raw)
+
+########### Filter and annotate probes -----
+## Set up biomart
+ensembl_mart <- useMart("ensembl")
+# listDatasets(ensembl_mart)
+ensembl_mart <- useDataset("hsapiens_gene_ensembl", mart = ensembl_mart)
+
+## Get the MGI symbol
+gene_id <- GSE33341_log2fc_sample$probe_id %>% unique()
+# listAttributes(ensembl_mart)
+#Annotate
+annot <- getBM(
+  attributes = c("affy_mouse430_2",
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "mgi_symbol",
+                 "description"),
+  filters = "affy_mouse430_2",
+  values = gene_id,
+  mart = ensembl_mart)
+
+#Filter genes with highest median expression
+GSE19668_counts_log2_summary_annotated_probes = GSE19668_counts_not_normalized_log2 %>% 
+  as.data.frame() %>% 
+  rownames_to_column("probe_id") %>% 
+  pivot_longer(cols = -probe_id,
+               names_to = "sample",
+               values_to = "expression") %>% 
+  group_by(probe_id) %>% 
+  summarize(mean = mean(expression, na.rm = TRUE),
+            median = median(expression, na.rm = T)) %>%  
+  inner_join(annot %>% 
+              rename(probe_id = affy_mouse430_2), 
+            by = "probe_id") %>% 
+  group_by(entrezgene_id) %>% 
+  slice_max(median, n = 1) %>% 
+  select(probe_id, entrezgene_id, mgi_symbol) %>% 
+  distinct() %>%  ##41.398 -> 19.394 probes left
+  
+  #Filter probes from the original table
+  inner_join(GSE19668_log2fc_sample, 
+             by = "probe_id")
+  
+
+#Pivot wider
+GSE19668_log2fc_sample_wide = GSE19668_counts_log2_summary_annotated_probes %>%
+  select(mgi_symbol, participant_id, timepoint, log2fc) %>% 
+  pivot_wider(names_from = participant_id,
+              values_from = log2fc)
+  
+#Print
+GSE19668_log2fc_sample_wide
+```
 
 
 
