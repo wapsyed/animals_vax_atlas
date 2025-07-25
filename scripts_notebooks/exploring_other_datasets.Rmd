@@ -249,6 +249,20 @@ AllData_V2.0_distributions_all %>%
 
 ###Correlation plots
 ```{r fig.height=12, fig.width=10}
+# Calculate the correlation
+cor_data <- AllData_V2.0_blood %>%
+  clean_names() %>%
+  filter(qval_hs <= 0.05 | qval_mm <= 0.05) %>%
+  mutate(csp_id_index = fct_relevel(csp_id_index, as.character(1:30))) %>%
+  group_by(disease, csp_id_index) %>%
+  summarize(
+    cor_value = cor(fc_mm, fc_hs, method = "pearson", use = "complete.obs"),
+    label_pos_x = max(fc_mm, na.rm = TRUE),
+    label_pos_y = max(fc_hs, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(label = paste0("r = ", round(cor_value, 2)))
+
 
 #Log2FC scatterplot
 
@@ -296,12 +310,26 @@ blood_l2fc_scatterplot = AllData_V2.0_blood %>%
                clean_names() %>%
                filter(qval_hs <= 0.05 & qval_mm <= 0.05)) +
   
-  theme_vaxgo() +
-  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
-        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
+  #Add lines
   geom_abline(alpha = 0.2, linetype = 2) +
   geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
   geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  
+  #Add correlation metrics
+  geom_label(
+    data = cor_data,
+    aes(x = label_pos_x, y = label_pos_y, label = label),
+    inherit.aes = FALSE,
+    fill = "white",
+    hjust = 1,
+    vjust = 1,
+    size = 3
+  ) +
+  
+  #Theme
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
   theme(legend.position = "none",
         legend.direction = "horizontal") +
   labs(x = "Mouse L2FC",
@@ -322,175 +350,426 @@ blood_l2fc_scatterplot %>%
 
 
 ## Plot correlation
-```{r}
-cov_genes_FIT_training = AllData_V2.0 %>% 
-  clean_names() %>% 
-  select(hs_entrez, mean_human = fc_hs, mean_mouse = fc_mm) %>% 
-  inner_join(HS_MM_Symbol_Entrez %>%
-               clean_names() %>%
-               select(human_symbol = hgnc_symbol,
-                      hs_entrez = human_entrez) %>% 
-               mutate(hs_entrez = as.character(hs_entrez)),
-             by = "hs_entrez") %>% 
-  arrange(human_symbol) %>% 
-  group_by(human_symbol) %>% 
-  summarize(sd_human = sd(mean_human),
-            cov = cov(mean_human, mean_mouse),
-            mean_human_time = mean(mean_human),
-            mean_mouse_time = mean(mean_mouse)) %>% 
-  arrange(-cov)
-
-cov_genes_FIT_training %>% filter(abs(cov) > 0.001) #15891 genes from 6,373 (92.9%)
-cov_genes_FIT_training %>% filter(abs(cov) > 0.01) #11320 genes from 6,373 (50.3%)
-cov_genes_FIT_training %>% filter(abs(cov) > 0.1) #1151 genes
-cov_genes_FIT_training %>% filter(abs(cov) > 0.2) #356 genes
-cov_genes_FIT_training %>% filter(abs(cov) > 0.3) #186 genes
-
-
-genes_vary_human_all_FIT = cov_genes_FIT_training %>% 
-  filter(abs(mean_human_time) >= 0.1,
-        abs(mean_mouse_time) <= 0.1) %>% 
-  arrange(-abs(cov))
-
-genes_vary_mouse_all_FIT = cov_genes_FIT_training %>% 
-  filter(abs(mean_mouse_time) >= 0.1,
-                abs(mean_human_time) <= 0.1) %>% 
-  arrange(-abs(cov))
-
-genes_vary_human_mouse_all_FIT = cov_genes_FIT_training %>% 
-  filter(abs(mean_human_time) >= 0.1,
-         abs(mean_mouse_time) >= 0.1) %>% 
-  arrange(-abs(cov))
-
-genes_not_vary_human_mouse_all_FIT = cov_genes_FIT_training %>% 
-   filter(abs(mean_human_time) <= 0.1, 
-          abs(mean_mouse_time) <= 0.1) %>%  
-  arrange(-abs(cov))
-
-cov_genes_FIT_training %>% filter(abs(mean_human_time) > 0.1) #3,962
-cov_genes_FIT_training %>% filter(abs(mean_human_time) > 0.2) #2191
-
-cov_genes_FIT_training %>% filter(abs(mean_mouse_time) > 0.1) #3363
-cov_genes_FIT_training %>% filter(abs(mean_mouse_time) > 0.2) #1631
-
-cov_genes_FIT_training %>% filter(abs(mean_mouse_time) < 0.1) #3,010
-cov_genes_FIT_training %>% filter(abs(mean_mouse_time) < 0.2) #4742
-
-
-
-genes_vary_human_all_FIT #5,787
-genes_vary_mouse_all_FIT #1,807
-genes_not_vary_human_mouse_all_FIT #6,476
-genes_vary_human_mouse_all_FIT #2,355
-```
-
-
-
-
-#Plot 
-
 ```{r fig.height=8, fig.width=8}
-genes_vary_human = cov_genes_FIT_training %>% 
-  ggplot() +
-  aes(x = mean_human_time,
-      y = mean_mouse_time) +
-    geom_point(color = "#3182bd", fill = NA, pch = 21) +
-  scale_x_continuous(limits = c(-1.5, 1.5)) +
-  scale_y_continuous(limits = c(-1.5, 1.5)) +
-    gghighlight(abs(mean_human_time) >= 0.1,
-                abs(mean_mouse_time) <= 0.1,
-              use_direct_label = FALSE, 
-              unhighlighted_params = list(alpha = 0.2, fill = NA)) +
-  geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
-                  data = cov_genes_FIT_training %>% 
-                    filter(abs(mean_human_time) > 0.1,
-                abs(mean_mouse_time) <= 0.1) %>% 
-                  arrange(-abs(cov)) %>% 
-                  slice_head(n = 10)) +
-   theme_vaxgo() +
-  labs(title = "Which genes vary only in human?",
-       subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1.")
 
-genes_vary_mouse = cov_genes_FIT_training %>% 
-  ggplot() +
-  aes(x = mean_human_time,
-      y = mean_mouse_time) +
-    geom_point(color = "#90A4AEFF", fill = NA, pch = 21) +
-  scale_x_continuous(limits = c(-1.5, 1.5)) +
-  scale_y_continuous(limits = c(-1.5, 1.5)) +
-  gghighlight(abs(mean_mouse_time) >= 0.1,
-                abs(mean_human_time) <= 0.1,
-              use_direct_label = FALSE,
-              unhighlighted_params = list(alpha = 0.2, fill = NA)) +
-  geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
-                  data = cov_genes_FIT_training %>% 
-                    filter(abs(mean_mouse_time) >= 0.1,
-                abs(mean_human_time) <= 0.1) %>% 
-                  arrange(-abs(cov)) %>% 
-                  slice_head(n = 10)) +
+## Plot correlation-----
+# cov_genes_FIT_training = AllData_V2.0 %>% 
+#   clean_names() %>% 
+#   select(hs_entrez, mean_human = fc_hs, mean_mouse = fc_mm) %>% 
+#   inner_join(HS_MM_Symbol_Entrez %>%
+#                clean_names() %>%
+#                select(human_symbol = hgnc_symbol,
+#                       hs_entrez = human_entrez) %>% 
+#                mutate(hs_entrez = as.character(hs_entrez)),
+#              by = "hs_entrez") %>% 
+#   arrange(human_symbol) %>% 
+#   group_by(human_symbol) %>% 
+#   summarize(sd_human = sd(mean_human),
+#             cov = cov(mean_human, mean_mouse),
+#             mean_human_time = mean(mean_human),
+#             mean_mouse_time = mean(mean_mouse)) %>% 
+#   arrange(-cov)
+# 
+# cov_genes_FIT_training %>% filter(abs(cov) > 0.001) #15891 genes from 6,373 (92.9%)
+# cov_genes_FIT_training %>% filter(abs(cov) > 0.01) #11320 genes from 6,373 (50.3%)
+# cov_genes_FIT_training %>% filter(abs(cov) > 0.1) #1151 genes
+# cov_genes_FIT_training %>% filter(abs(cov) > 0.2) #356 genes
+# cov_genes_FIT_training %>% filter(abs(cov) > 0.3) #186 genes
+# 
+# 
+# genes_vary_human_all_FIT = cov_genes_FIT_training %>% 
+#   filter(abs(mean_human_time) >= 0.1,
+#         abs(mean_mouse_time) <= 0.1) %>% 
+#   arrange(-abs(cov))
+# 
+# genes_vary_mouse_all_FIT = cov_genes_FIT_training %>% 
+#   filter(abs(mean_mouse_time) >= 0.1,
+#                 abs(mean_human_time) <= 0.1) %>% 
+#   arrange(-abs(cov))
+# 
+# genes_vary_human_mouse_all_FIT = cov_genes_FIT_training %>% 
+#   filter(abs(mean_human_time) >= 0.1,
+#          abs(mean_mouse_time) >= 0.1) %>% 
+#   arrange(-abs(cov))
+# 
+# genes_not_vary_human_mouse_all_FIT = cov_genes_FIT_training %>% 
+#    filter(abs(mean_human_time) <= 0.1, 
+#           abs(mean_mouse_time) <= 0.1) %>%  
+#   arrange(-abs(cov))
+# 
+# cov_genes_FIT_training %>% filter(abs(mean_human_time) > 0.1) #3,962
+# cov_genes_FIT_training %>% filter(abs(mean_human_time) > 0.2) #2191
+# 
+# cov_genes_FIT_training %>% filter(abs(mean_mouse_time) > 0.1) #3363
+# cov_genes_FIT_training %>% filter(abs(mean_mouse_time) > 0.2) #1631
+# 
+# cov_genes_FIT_training %>% filter(abs(mean_mouse_time) < 0.1) #3,010
+# cov_genes_FIT_training %>% filter(abs(mean_mouse_time) < 0.2) #4742
+# 
+# 
+# 
+# genes_vary_human_all_FIT #5,787
+# genes_vary_mouse_all_FIT #1,807
+# genes_not_vary_human_mouse_all_FIT #6,476
+# genes_vary_human_mouse_all_FIT #2,355
 
-  theme_vaxgo() +
-  labs(title = "Which genes vary only in mouse?",
-       subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1") 
+# #Plot
+# genes_vary_human = cov_genes_FIT_training %>% 
+#   ggplot() +
+#   aes(x = mean_human_time,
+#       y = mean_mouse_time) +
+#     geom_point(color = "#3182bd", fill = NA, pch = 21) +
+#   scale_x_continuous(limits = c(-1.5, 1.5)) +
+#   scale_y_continuous(limits = c(-1.5, 1.5)) +
+#     gghighlight(abs(mean_human_time) >= 0.1,
+#                 abs(mean_mouse_time) <= 0.1,
+#               use_direct_label = FALSE, 
+#               unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+#   geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
+#                   data = cov_genes_FIT_training %>% 
+#                     filter(abs(mean_human_time) > 0.1,
+#                 abs(mean_mouse_time) <= 0.1) %>% 
+#                   arrange(-abs(cov)) %>% 
+#                   slice_head(n = 10)) +
+#    theme_vaxgo() +
+#   labs(title = "Which genes vary only in human?",
+#        subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1.")
+# 
+# genes_vary_mouse = cov_genes_FIT_training %>% 
+#   ggplot() +
+#   aes(x = mean_human_time,
+#       y = mean_mouse_time) +
+#     geom_point(color = "#90A4AEFF", fill = NA, pch = 21) +
+#   scale_x_continuous(limits = c(-1.5, 1.5)) +
+#   scale_y_continuous(limits = c(-1.5, 1.5)) +
+#   gghighlight(abs(mean_mouse_time) >= 0.1,
+#                 abs(mean_human_time) <= 0.1,
+#               use_direct_label = FALSE,
+#               unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+#   geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
+#                   data = cov_genes_FIT_training %>% 
+#                     filter(abs(mean_mouse_time) >= 0.1,
+#                 abs(mean_human_time) <= 0.1) %>% 
+#                   arrange(-abs(cov)) %>% 
+#                   slice_head(n = 10)) +
+# 
+#   theme_vaxgo() +
+#   labs(title = "Which genes vary only in mouse?",
+#        subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1") 
+# 
+# 
+# genes_vary_mouse_human = cov_genes_FIT_training %>% 
+#   ggplot() +
+#   aes(x = mean_human_time,
+#       y = mean_mouse_time) +
+#   geom_point(color = "black", fill = NA, pch = 21) +
+#   scale_x_continuous(limits = c(-1.5, 1.5)) +
+#   scale_y_continuous(limits = c(-1.5, 1.5)) +
+#   gghighlight(abs(mean_human_time) >= 0.1,
+#                 abs(mean_mouse_time) >= 0.1,
+#                             unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+#   geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
+#                   data = cov_genes_FIT_training %>% 
+#                     filter(abs(mean_human_time) >= 0.1,
+#                 abs(mean_mouse_time) >= 0.1) %>% 
+#                   arrange(-abs(cov)) %>% 
+#                   slice_head(n = 10)) +
+#   theme_vaxgo() +
+#   labs(title = "Which genes vary in both human and mouse?",
+#        subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1")
+# 
+# genes_notvary_mouse_human = cov_genes_FIT_training %>% 
+#   ggplot() +
+#   aes(x = mean_human_time,
+#       y = mean_mouse_time) +
+#   geom_point(color = "black", fill = NA, pch = 21) +
+#   scale_x_continuous(limits = c(-1.5, 1.5)) +
+#   scale_y_continuous(limits = c(-1.5, 1.5)) +
+#   gghighlight(abs(mean_human_time) <= 0.1,
+#                 abs(mean_mouse_time) <= 0.1,
+#               unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+#   geom_label_repel(aes(label = human_symbol), 
+#                   # color = "red",
+#                   max.overlaps = 20, force_pull = 4, size = 3, 
+#                   data = cov_genes_FIT_training %>% 
+#                     filter(abs(mean_human_time) <= 0.1, 
+#                              abs(mean_mouse_time) <= 0.1) %>%  
+#                     arrange(-abs(cov)) %>% 
+#                     slice_head(n = 10)) +
+#   theme_vaxgo() +
+#   labs(title = "Which genes do not vary in both human and mouse?",
+#        subtitle = "Top 10 genes with highest covariance. Mean cutoff < 0.1")
+#   
+# 
+# #Plot all
+# genes_vary_mouse + genes_vary_human + genes_vary_mouse_human + genes_notvary_mouse_human +
+#   plot_layout(guides = "collect", axes = "collect", axis_titles =  "collect",
+#               ncol =  2)
+  
+```
 
 
-genes_vary_mouse_human = cov_genes_FIT_training %>% 
-  ggplot() +
-  aes(x = mean_human_time,
-      y = mean_mouse_time) +
-  geom_point(color = "black", fill = NA, pch = 21) +
-  scale_x_continuous(limits = c(-1.5, 1.5)) +
-  scale_y_continuous(limits = c(-1.5, 1.5)) +
-  gghighlight(abs(mean_human_time) >= 0.1,
-                abs(mean_mouse_time) >= 0.1,
-                            unhighlighted_params = list(alpha = 0.2, fill = NA)) +
-  geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
-                  data = cov_genes_FIT_training %>% 
-                    filter(abs(mean_human_time) >= 0.1,
-                abs(mean_mouse_time) >= 0.1) %>% 
-                  arrange(-abs(cov)) %>% 
-                  slice_head(n = 10)) +
-  theme_vaxgo() +
-  labs(title = "Which genes vary in both human and mouse?",
-       subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1")
+## Check raw datasets from mice used in training
+```{r}
+#Sepsis: GSE19668 -----
+filename = "GSE19668"
+GSE19668 <- getGEO("GSE19668", GSEMatrix = TRUE) 
+eset <- GSE19668[[1]]
 
-genes_notvary_mouse_human = cov_genes_FIT_training %>% 
-  ggplot() +
-  aes(x = mean_human_time,
-      y = mean_mouse_time) +
-  geom_point(color = "black", fill = NA, pch = 21) +
-  scale_x_continuous(limits = c(-1.5, 1.5)) +
-  scale_y_continuous(limits = c(-1.5, 1.5)) +
-  gghighlight(abs(mean_human_time) <= 0.1,
-                abs(mean_mouse_time) <= 0.1,
-              unhighlighted_params = list(alpha = 0.2, fill = NA)) +
-  geom_label_repel(aes(label = human_symbol), 
-                  # color = "red",
-                  max.overlaps = 20, force_pull = 4, size = 3, 
-                  data = cov_genes_FIT_training %>% 
-                    filter(abs(mean_human_time) <= 0.1, 
-                             abs(mean_mouse_time) <= 0.1) %>%  
-                    arrange(-abs(cov)) %>% 
-                    slice_head(n = 10)) +
-  theme_vaxgo() +
-  labs(title = "Which genes do not vary in both human and mouse?",
-       subtitle = "Top 10 genes with highest covariance. Mean cutoff < 0.1")
+#Metadata ------
+GSE19668_metadata = eset %>% 
+  pData() %>% 
+  dplyr::select( 
+    geo_sample = "geo_accession", 
+    subject_id = "title",
+    # sex = "gender:ch1", 
+    treatment = "infection:ch1", 
+    # tissue = "tissue:ch1",
+    timepoint = "time point:ch1",
+    # animal_replicate = "animal replicate:ch1",
+    strain = "strain:ch1") %>% 
+  mutate(treatment = fct_relevel(treatment, "none"),
+         timepoint = fct_relevel(timepoint, "0"),
+         condition = paste(treatment, strain, timepoint, sep = "_"))
+
+#Filter metadata
+GSE19668_metadata_filtered = GSE19668_metadata %>%
+  filter(strain == "C57BL/6J") %>% 
+  separate(subject_id, into = c("tissue", "strain1", "timepoint1", "participant_id"), sep = " ") %>% 
+  select(!c(tissue:timepoint1)) %>% 
+  arrange(participant_id, timepoint) %>% 
+  separate(timepoint, into = c("timepoint_number", "time_unit")) %>% 
+  mutate(time_unit = "hours",
+         timepoint = timepoint_number %>% as.numeric()) %>% 
+  arrange(timepoint) %>% 
+  select(-timepoint_number) %>% 
+  select(geo_sample, participant_id, condition, timepoint, time_unit, everything())
+
+#Counts matrix
+GSE19668_eset <- exprs(eset) %>% as.data.frame()
+
+#Annotate data and calculate log2fc
+GSE19668_expression_metadata  = GSE19668_eset %>% 
+  rownames_to_column("probe_id") %>% 
+  pivot_longer(cols = 2:51,
+               names_to = "geo_sample",
+               values_to = "value_raw") %>% 
+  inner_join(GSE19668_metadata_filtered, 
+             by = "geo_sample") 
+
+#Get value from day 0 and calculate Log2FC
+GSE19668_log2fc_sample = GSE19668_expression_metadata %>% 
+  filter(timepoint == 0) %>% 
+  select(probe_id, participant_id, day0_value_raw = value_raw) %>% 
+  inner_join(GSE19668_expression_metadata,
+             by = join_by("probe_id", "participant_id")) %>% 
+  filter(timepoint != 0) %>% 
+  mutate(log2fc = value_raw - day0_value_raw)
+
+########### Filter and annotate probes -----
+## Set up biomart
+ensembl_mart <- useMart("ensembl")
+ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
+
+## Get the MGI symbol
+gene_id <- GSE19668_log2fc_sample$probe_id %>% unique()
+# listAttributes(ensembl_mart)
+#Annotate
+annot <- getBM(
+  attributes = c("affy_mouse430_2",
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "mgi_symbol",
+                 "description"),
+  filters = "affy_mouse430_2",
+  values = gene_id,
+  mart = ensembl_mart)
+
+#Filter genes with highest median expression
+GSE19668_counts_log2_summary_annotated_probes = GSE19668_counts_not_normalized_log2 %>% 
+  as.data.frame() %>% 
+  rownames_to_column("probe_id") %>% 
+  pivot_longer(cols = -probe_id,
+               names_to = "sample",
+               values_to = "expression") %>% 
+  group_by(probe_id) %>% 
+  summarize(mean = mean(expression, na.rm = TRUE),
+            median = median(expression, na.rm = T)) %>%  
+  inner_join(annot %>% 
+              rename(probe_id = affy_mouse430_2), 
+            by = "probe_id") %>% 
+  group_by(entrezgene_id) %>% 
+  slice_max(median, n = 1) %>% 
+  select(probe_id, entrezgene_id, mgi_symbol) %>% 
+  distinct() %>%  ##41.398 -> 19.394 probes left
+  
+  #Filter probes from the original table
+  inner_join(GSE19668_log2fc_sample, 
+             by = "probe_id")
   
 
-#Plot all
-genes_vary_mouse + genes_vary_human + genes_vary_mouse_human + genes_notvary_mouse_human +
-  plot_layout(guides = "collect", axes = "collect", axis_titles =  "collect",
-              ncol =  2)
+#Pivot wider
+GSE19668_log2fc_sample_wide = GSE19668_counts_log2_summary_annotated_probes %>%
+  select(mgi_symbol, participant_id, timepoint, log2fc) %>% 
+  pivot_wider(names_from = participant_id,
+              values_from = log2fc)
   
+#Print
+GSE19668_log2fc_sample_wide
+```
+
+
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
+#Plot correlation between animals ------
+#Change params in geoms
+#Density
+my_dens <- function(data, mapping, ...) {
+  ggplot(data = data, mapping=mapping) +
+    geom_density(alpha = 0.2, color = "black")
+}
+#Points
+my_point <- function(data, mapping, ...) {
+  ggplot(data = data, mapping = mapping) +
+    geom_point(alpha = 0.8, ...)  
+}
+
+#All timepoints
+mouse_correlation_ggpairs_alldays = ggpairs(GSE19668_log2fc_sample_wide %>% 
+                                              mutate(timepoint = as.character(timepoint),
+                                                     timepoint = fct_reorder(timepoint, as.numeric(timepoint))),
+                                    columns = 4:8,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("All days, GSE19668, C57BL/6J"), 
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point)
+                                    ) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("2" = "#caf0f8",
+                                "4" = "#219ebc",
+                                "6" = "#669bbc",
+                                "12" = "#4361ee")) +
+  scale_fill_manual(values = c("2" = "#caf0f8",
+                                "4" = "#219ebc",
+                                "6" = "#669bbc",
+                                "12" = "#4361ee"))
+
+mouse_correlation_ggpairs_alldays
+#Save
+mouse_correlation_ggpairs_alldays %>%
+  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_alldays_SAureus_GSE19668.png"),
+         height = 10,
+         width = 10)
+beep()
+
+
+
+#Timepoint 2
+timepoint_select = 2
+mouse_correlation_ggpairs_day2 = ggpairs(GSE19668_log2fc_sample_wide %>% 
+                                              filter(timepoint == 2) %>% 
+                                              mutate(timepoint = as.character(timepoint),
+                                                     timepoint = fct_reorder(timepoint, as.numeric(timepoint))),
+                                    columns = 4:8,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select, "GSE19668, C57BL/6J"), 
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point)
+                                    ) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("2" = "#caf0f8",
+                                "4" = "#219ebc",
+                                "6" = "#669bbc",
+                                "12" = "#4361ee")) +
+  scale_fill_manual(values = c("2" = "#caf0f8",
+                                "4" = "#219ebc",
+                                "6" = "#669bbc",
+                                "12" = "#4361ee"))
+
+mouse_correlation_ggpairs_day2
+#Save
+mouse_correlation_ggpairs_day2 %>%
+  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_day2_SAureus_GSE19668.png"),
+         height = 10,
+         width = 10)
+beep()
+
+#Timepoint 6
+timepoint_select = 6
+mouse_correlation_ggpairs_day6 = ggpairs(GSE19668_log2fc_sample_wide %>% 
+                                              filter(timepoint == timepoint_select) %>% 
+                                              mutate(timepoint = as.character(timepoint),
+                                                     timepoint = fct_reorder(timepoint, as.numeric(timepoint))),
+                                    columns = 4:8,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select, "GSE19668, C57BL/6J"), 
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point)
+                                    ) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("2" = "#caf0f8",
+                                "4" = "#219ebc",
+                                "6" = "#669bbc",
+                                "12" = "#4361ee")) +
+  scale_fill_manual(values = c("2" = "#caf0f8",
+                                "4" = "#219ebc",
+                                "6" = "#669bbc",
+                                "12" = "#4361ee"))
+
+mouse_correlation_ggpairs_day6
+#Save
+mouse_correlation_ggpairs_day6 %>%
+  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_day6_SAureus_GSE19668.png"),
+         height = 10,
+         width = 10)
+beep()
+
+#Timepoint 12
+timepoint_select = 12
+mouse_correlation_ggpairs_day12 = ggpairs(GSE19668_log2fc_sample_wide %>% 
+                                              filter(timepoint == timepoint_select) %>% 
+                                              mutate(timepoint = as.character(timepoint),
+                                                     timepoint = fct_reorder(timepoint, as.numeric(timepoint))),
+                                    columns = 4:8,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select, "GSE19668, C57BL/6J"), 
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point)
+                                    ) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("2" = "#caf0f8",
+                                "4" = "#219ebc",
+                                "6" = "#669bbc",
+                                "12" = "#4361ee")) +
+  scale_fill_manual(values = c("2" = "#caf0f8",
+                                "4" = "#219ebc",
+                                "6" = "#669bbc",
+                                "12" = "#4361ee"))
+
+mouse_correlation_ggpairs_day12
+#Save
+mouse_correlation_ggpairs_day12 %>%
+  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_day12_SAureus_GSE19668.png"),
+         height = 10,
+         width = 10)
+beep()
+
+
+
+
+
+
+
 ```
 
 
 
 
 
-
-
-#### Enrichment analysis
+## Enrichment analysis
 
 ```{r fig.width=10, fig.height= 8}
 organism = "org.Hs.eg.db"

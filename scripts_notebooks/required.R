@@ -5,8 +5,8 @@ required_packages <- c(
   "tidyverse", "rentrez", "yardstick", "ggridges", "here", "glue", "ggsci", 
   "janitor", "readr", "paletteer", "beepr", "preprocessCore", "maditr", 
   "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
-  "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", 
-  "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm"
+  "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
+  "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath"
 )
 
 # Bioconductor
