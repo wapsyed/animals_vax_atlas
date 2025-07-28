@@ -17,7 +17,7 @@ knitr::opts_chunk$set(echo = TRUE, eval=FALSE, cache = TRUE)
 ```
 
 
-# Exploring other datasets
+# Exploring other datasets: A general analysis
 
 ## Import required codes
 ```{r}
@@ -207,12 +207,10 @@ AllData_V2.0_blood_distributions_plot = AllData_V2.0_blood %>%
   scale_x_continuous(limits = c(-2, 2)) +
     scale_fill_manual(
   values = c(
-    FIT = "#CE1800FF", 
     Mouse = "#546E7AFF",
     Human = "#4DBBD5FF"))+
     scale_color_manual(
   values = c(
-    FIT = "#CE1800FF", 
     Mouse = "#546E7AFF",
     Human = "#4DBBD5FF"))+
     theme_vaxgo() +
@@ -286,6 +284,8 @@ blood_l2fc_scatterplot = AllData_V2.0_blood %>%
              alpha = 1.5,
              size = 1,
              pch = 21,
+             
+             #Get only DEGs with the same sign (positive correlation)
              data = AllData_V2.0_blood %>%
                clean_names() %>%
                #Filter DEGs in both organisms, same sign
@@ -300,7 +300,7 @@ blood_l2fc_scatterplot = AllData_V2.0_blood %>%
              data = AllData_V2.0_blood %>%
                clean_names() %>%
                filter(human_symbol %in% c(ImmuneGO_BTM_grouped_genes$genes)) %>% 
-               filter(qval_hs <= 0.05 & qval_mm <= 0.05)) +
+               filter(qval_hs <= 0.05 & qval_mm <= 0.05 & sign(fc_hs) == sign(fc_mm))) +
   
   #Add linear models
   stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
@@ -507,7 +507,6 @@ blood_l2fc_scatterplot %>%
   
 ```
 
-
 # Check raw datasets from mice used in training
 
 ## S. aureus infection
@@ -645,6 +644,8 @@ GSE19668_log2fc_sample_wide = GSE19668_counts_log2_summary_annotated_probes %>%
 #Print
 GSE19668_log2fc_sample_wide
 ```
+
+
 
 
 #### Correlation plots, pairwise
@@ -871,12 +872,8 @@ btm_annotation_genes = ImmuneGO_BTM_grouped_genes %>%
 
 #Annotate genes by BTM
 GSE19668_genes_btm = GSE19668_counts_log2_summary_annotated_probes %>% 
+  ungroup() %>% 
   rename(mm_entrez = entrezgene_id) %>% 
-  inner_join(HS_MM_Symbol_Entrez %>% 
-               clean_names() %>% 
-               rename(mgi_symbol = mouse_symbol) %>% 
-               select(mgi_symbol, human_symbol), 
-             by = join_by("mgi_symbol")) %>% 
   select(mgi_symbol, symbol = human_symbol, participant_id, geo_sample, timepoint, treatment, log2fc) %>% 
   inner_join(btm_annotation_genes, by = "symbol")
 
@@ -889,7 +886,8 @@ dge_btm_mean_process = GSE19668_genes_btm %>%
   inner_join(btm_annotation_genes %>% 
                select(process, group, subgroup) %>% 
                distinct(),
-             by = "process")
+             by = "process") %>% 
+  ungroup()
 
 dge_btm_mean_process
 ```
@@ -926,7 +924,7 @@ immune_order = c("SIGNAL TRANSDUCTION",
 
 ```
 
-
+##### GGPairs
 ```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
 #Change params in geoms
 #Density
@@ -1004,6 +1002,85 @@ beep()
 
 
 
+##### Ggplot manual
+```{r fig.height=8, fig.width=10}
+#Sample 5 participants
+set.seed(31415)
+
+#Create table
+ggpairs_data_dge_btm_mean_process = dge_btm_mean_process %>% 
+  mutate(timepoint = as.character(timepoint),
+         timepoint = fct_reorder(timepoint, timepoint %>% as.numeric)) %>% 
+  ungroup()
+
+sample_participants_5 = ggpairs_data_dge_btm_mean_process %>% 
+  select(3:7) %>% 
+  colnames()
+
+
+plot_data <-
+  #Pivot longer, 1st participatn
+  ggpairs_data_dge_btm_mean_process %>%
+  filter(timepoint == 2) %>% 
+  select(timepoint, group, process, sample_participants_5) %>%
+  pivot_longer(cols = !c("group", "process", "timepoint"), 
+               names_to = "participant_1", 
+               values_to = "participant_1_value") %>%
+  
+  #Add a column to the 2nd participant
+  inner_join(
+    ggpairs_data_dge_btm_mean_process %>%
+      filter(timepoint == 2) %>% 
+      select(timepoint, group, process, sample_participants_5) %>%
+      pivot_longer(cols = !c("group", "process", "timepoint"), 
+                   names_to = "participant_2",
+                   values_to = "participant_2_value"),
+    by = c("process", "group")) %>%
+  #Remove pares idênticos (mesma variável)
+  filter(participant_1 != participant_2) %>%
+  
+  #Remove dupes (ex: A-B e B-A → A-B)
+  mutate(pair_min = pmin(participant_1, participant_2),
+         pair_max = pmax(participant_1, participant_2)) %>%
+  distinct(process, pair_min, pair_max, .keep_all = TRUE) %>% 
+  
+  # Arrange participants to create a pairwise matrix
+  mutate(
+    participant_1 = factor(participant_1, levels = sample_participants_5),
+    participant_2 = factor(participant_2, levels = rev(sample_participants_5)))
+
+
+#Calculate correlation
+cor_labels <- plot_data %>%
+  group_by(participant_1, participant_2) %>%
+  summarise(cor_value = cor(participant_1_value, participant_2_value, use = "pairwise.complete.obs", method = "pearson"),
+            .groups = "drop") %>%
+  mutate(r_squared = cor_value ^ 2,
+         cor_label = paste0("r = ", round(cor_value, 2), ", R² = ", round(r_squared, 2)))
+
+
+#Plot 
+plot_data %>% 
+ggplot(aes(x = participant_1_value, y = participant_2_value, color = group)) +
+  geom_point(alpha = 1) +
+  stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+    geom_label(data = cor_labels,
+            aes(x = 0, y = Inf, label = cor_label), 
+            hjust = 0.5, vjust = 1, inherit.aes = FALSE, size = 3) +
+  facet_grid(participant_2 ~ participant_1, scales = "free", drop = T) +
+  theme_vaxgo() +
+  ylim(-3, 3) +
+  xlim(-3, 3) +
+  theme(strip.text = element_text(size = 8),
+        strip.text.y = element_text(angle = 0, hjust = 0)) +
+  scale_color_manual(values = immune_colors) +
+  labs(x = "Log2FC", 
+       y = "Log2FC", 
+       color = "",
+       title = "GSE19668, Mouse, SAureus infeciton, random sample")
+```
 
 
 
@@ -1193,6 +1270,229 @@ beep()
 ```
 
 
+#### BTMs
+```{r}
+#New BTM Annotation
+ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
+btm_annotation = read.table(file = here("VaxGO",  "BTM functional groups V3.txt"), sep="\t", header=TRUE) %>% 
+  clean_names() %>% 
+  rename(id = name) %>% 
+  filter(group != "")
+
+btm_annotation_genes = ImmuneGO_BTM_grouped_genes %>% 
+               inner_join(btm_annotation %>% 
+                            rename(process = id), 
+                          by = "process") %>% 
+               rename(symbol = genes)
+
+#Annotate genes by BTM
+GSE33341_genes_btm = GSE33341_counts_log2_summary_annotated_probes %>% 
+  rename(hs_entrez = entrezgene_id,
+         human_symbol = hgnc_symbol) %>% 
+  inner_join(HS_MM_Symbol_Entrez %>% 
+               clean_names() %>% 
+               rename(mgi_symbol = mouse_symbol) %>% 
+               select(mgi_symbol, human_symbol), 
+             by = join_by("human_symbol")) %>% 
+  select(mgi_symbol, symbol = human_symbol, participant_id, geo_sample, timepoint, pathogen, log2fc) %>% 
+  inner_join(btm_annotation_genes, by = "symbol")
+
+
+dge_btm_mean_process = GSE33341_genes_btm %>%
+  mutate(condition = paste0(participant_id, "_Day", timepoint)) %>% 
+  group_by(participant_id, timepoint, process) %>% 
+  summarize(mean_log2fc = mean(log2fc)) %>%
+  pivot_wider(names_from = "participant_id", values_from = "mean_log2fc") %>% 
+  inner_join(btm_annotation_genes %>% 
+               select(process, group, subgroup) %>% 
+               distinct(),
+             by = "process")
+
+dge_btm_mean_process
+```
+
+
+```{r}
+#Define colors
+btm_annotation %>% pull(group) %>% unique()
+
+immune_colors = c("SIGNAL TRANSDUCTION" = "#708d81",
+                  "CELL CYCLE" = "#06d6a0",
+                  "ECM AND MIGRATION" = "#52b788",
+                  "ENERGY METABOLISM" = "#95d5b2", 
+                  "INNATE RESPONSE" = "#184e77",
+                  "NEUTROPHILS" = "#219ebc",
+                  "NK CELLS" = "#a2d2ff",
+                  "IFN"= "#4361ee",
+                  "MONOCYTES" = "#4cc9f0",
+                  "PLATELETS" = "#7209b7",
+                  "B CELLS" = "#e5383b",
+                  "T CELLS" = "#f72585")
+immune_order = c("SIGNAL TRANSDUCTION",
+                  "CELL CYCLE",
+                  "ECM AND MIGRATION",
+                  "ENERGY METABOLISM", 
+                  "INNATE RESPONSE",
+                  "NEUTROPHILS",
+                  "NK CELLS",
+                  "IFN",
+                  "MONOCYTES",
+                  "PLATELETS",
+                  "B CELLS",
+                  "T CELLS")
+
+```
+
+
+
+
+```{r fig.height=8, fig.width=10}
+#Sample 5 participants
+set.seed(31415)
+sample_participants_5 = ggpairs_data_dge_btm_mean_process %>% 
+  select(3:35) %>% 
+  colnames() %>% 
+  sample(5)
+
+
+plot_data <-
+  #Pivot longer, 1st participatn
+  ggpairs_data_dge_btm_mean_process %>%
+  select(group, process, sample_participants_5) %>%
+  pivot_longer(cols = !c("group", "process"), 
+               names_to = "participant_1", 
+               values_to = "participant_1_value") %>%
+  
+  #Add a column to the 2nd participant
+  inner_join(
+    ggpairs_data_dge_btm_mean_process %>%
+      select(group, process, sample_participants_5) %>%
+      pivot_longer(cols = !c("group", "process"), 
+                   names_to = "participant_2",
+                   values_to = "participant_2_value"),
+    by = c("process", "group")) %>%
+  #Remove pares idênticos (mesma variável)
+  filter(participant_1 != participant_2) %>%
+  
+  #Remove dupes (ex: A-B e B-A → A-B)
+  mutate(pair_min = pmin(participant_1, participant_2),
+         pair_max = pmax(participant_1, participant_2)) %>%
+  distinct(process, pair_min, pair_max, .keep_all = TRUE) %>% 
+  
+  # Arrange participants to create a pairwise matrix
+  mutate(
+    participant_1 = factor(participant_1, levels = sample_participants_5),
+    participant_2 = factor(participant_2, levels = rev(sample_participants_5)))
+
+
+cor_labels <- plot_data %>%
+  group_by(participant_1, participant_2) %>%
+  summarise(cor_value = cor(participant_1_value, participant_2_value, use = "pairwise.complete.obs", method = "pearson"),
+            .groups = "drop") %>%
+  mutate(
+    r_squared = cor_value^2,
+    cor_label = paste0("r = ", round(cor_value, 2), ", R² = ", round(r_squared, 2))
+  )
+
+
+#Plot 
+plot_data %>% 
+ggplot(aes(x = participant_1_value, y = participant_2_value, color = group)) +
+  geom_point(alpha = 0.5) +
+  stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+    geom_label(data = cor_labels,
+            aes(x = 0, y = Inf, label = cor_label), 
+            hjust = 0.5, vjust = 1, inherit.aes = FALSE, size = 3) +
+  facet_grid(participant_2 ~ participant_1, scales = "free", drop = T) +
+  theme_vaxgo() +
+  ylim(-3, 3) +
+  xlim(-3, 3) +
+  theme(strip.text = element_text(size = 8),
+        strip.text.y = element_text(angle = 0, hjust = 0)) +
+  scale_color_manual(values = immune_colors) +
+  labs(x = "Log2FC", 
+       y = "Log2FC", 
+       color = "",
+       title = "GSE33341, Human, SAureus infeciton, random sample")
+
+```
+
+
+ggpairs
+
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
+#Change params in geoms
+#Density
+my_dens <- function(data, mapping, ...) {
+  ggplot(data = data, mapping=mapping) +
+    geom_density(alpha = 0.2, color = "black")
+}
+#Points
+my_point <- function(data, mapping, ...) {
+  ggplot(data = data, mapping = mapping) +
+    geom_point(alpha = 0.5, color = "black", pch = 21)  
+}
+
+#Create table
+ggpairs_data_dge_btm_mean_process = dge_btm_mean_process
+
+
+#All days
+human_correlation_ggpairs_btms_gsea_alldays = ggpairs_data_dge_btm_mean_process %>% 
+  select(timepoint, process, group, subgroup, sample_participants_5) %>% 
+  clean_names() %>% 
+  ungroup() %>% 
+  ggpairs(columns = 5:9, 
+          mapping = ggplot2::aes(color = subgroup, 
+                                 fill = subgroup), 
+          title = paste("Day 1"),
+          diag = list(continuous = my_dens),
+          lower = list(continuous = my_point)
+          ) +
+  
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2)+
+  theme_vaxgo() +
+  scale_color_manual(values = immune_colors) +
+  scale_fill_manual(values = immune_colors) 
+
+human_correlation_ggpairs_btms_gsea_alldays
+
+human_correlation_ggpairs_btms_gsea_alldays %>%
+  ggsave(filename = here("Figures", "human_correlation_ggpairs_btms_gsea_alldays_Saureus.png"),
+         height = 10,
+         width = 10)
+beep()
+
+human_correlation_ggpairs_btms_gsea_alldays +
+  geom_point(aes(color = group))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ### Compare Human vs Mouse
 
 ```{r}
@@ -1261,6 +1561,8 @@ cor_data <- human_mouse_saureus_log2fc_avg_wide %>%
 
 
 
+ylim_range = c(-5, 5)
+xlim_range = c(-5, 5)
 human_mouse_saureus_log2fc_avg_wide_scatterplot = human_mouse_saureus_log2fc_avg_wide %>% 
   filter(padj_human <= 0.05 | padj_mouse <= 0.05) %>% 
   
@@ -1295,6 +1597,11 @@ human_mouse_saureus_log2fc_avg_wide_scatterplot = human_mouse_saureus_log2fc_avg
   
   #Add linear models
   stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
+  stat_smooth(method = "lm", geom = "line", color = "#4DBBD5FF", alpha = 0.5, se = F, size = 1,
+              data = human_mouse_saureus_log2fc_avg_wide %>%
+               filter(human_symbol %in% c(ImmuneGO_BTM_grouped_genes$genes)) %>% 
+               #Filter DEGs in both organisms, same sign
+               filter(padj_human <= 0.05 & padj_mouse <= 0.05 & sign(Human) == sign(Mouse))) +
   
   #Add correlation metrics (Pearson)
   geom_label(
@@ -1306,6 +1613,10 @@ human_mouse_saureus_log2fc_avg_wide_scatterplot = human_mouse_saureus_log2fc_avg
     vjust = 1,
     size = 3
   ) +
+  
+  #Adjust the axes range
+  ylim(ylim_range) +
+  xlim(xlim_range) +
   
   #Add lines
   geom_abline(alpha = 0.2, linetype = 2) +
@@ -1326,14 +1637,6 @@ human_mouse_saureus_log2fc_avg_wide_scatterplot = human_mouse_saureus_log2fc_avg
 human_mouse_saureus_log2fc_avg_wide_scatterplot
 
 ```
-
-
-
-
-
-
-
-
 
 
 #### Plot correlation between genes (log2fc for every sample)
@@ -1462,6 +1765,118 @@ correlation_long_all_mouse_human_timepoints_summary %>%
   guides(fill = "none") 
   
 ```
+
+
+
+
+#### BTMs
+
+
+```{r}
+#Annotate genes by BTM
+dge_btm_mean_process = GSE33341_genes_btm %>%
+  mutate(organism = "Human") %>% 
+  bind_rows(GSE19668_genes_btm %>% 
+              mutate(organism = "Mouse")) %>%
+  filter(timepoint %in% c(1, 2)) %>% 
+  mutate(condition = paste0(organism, "_Day", timepoint)) %>% 
+  group_by(condition, timepoint, process) %>% 
+  summarize(mean_log2fc = mean(log2fc),
+            group,
+            subgroup) %>%
+  ungroup() %>% 
+  distinct() %>% 
+  select(-timepoint) %>% 
+  pivot_wider(names_from = "condition", values_from = "mean_log2fc") 
+
+dge_btm_mean_process
+```
+##### Ggplot manual
+```{r fig.height=5, fig.width=7}
+#Sample 5 participants
+set.seed(31415)
+
+#Create table
+ggpairs_data_dge_btm_mean_process = dge_btm_mean_process
+
+sample_participants_5 = ggpairs_data_dge_btm_mean_process %>% 
+  select(4:5) %>% 
+  colnames()
+
+
+plot_data <-
+  #Pivot longer, 1st participatn
+  ggpairs_data_dge_btm_mean_process %>%
+  select(group, process, sample_participants_5) %>%
+  pivot_longer(cols = !c("group", "process"), 
+               names_to = "participant_1", 
+               values_to = "participant_1_value") %>%
+  
+  #Add a column to the 2nd participant
+  inner_join(
+    ggpairs_data_dge_btm_mean_process %>%
+      select(group, process, sample_participants_5) %>%
+      pivot_longer(cols = !c("group", "process"), 
+                   names_to = "participant_2",
+                   values_to = "participant_2_value"),
+    by = c("process", "group")) %>%
+  #Remove pares idênticos (mesma variável)
+  filter(participant_1 != participant_2) %>%
+  
+  #Remove dupes (ex: A-B e B-A → A-B)
+  mutate(pair_min = pmin(participant_1, participant_2),
+         pair_max = pmax(participant_1, participant_2)) %>%
+  distinct(process, pair_min, pair_max, .keep_all = TRUE) %>% 
+  
+  # Arrange participants to create a pairwise matrix
+  mutate(
+    participant_1 = factor(participant_1, levels = sample_participants_5),
+    participant_2 = factor(participant_2, levels = rev(sample_participants_5)))
+
+
+#Calculate correlation
+cor_labels <- plot_data %>%
+  group_by(participant_1, participant_2) %>%
+  summarise(cor_value = cor(participant_1_value, participant_2_value, use = "pairwise.complete.obs", method = "pearson"),
+            .groups = "drop") %>%
+  mutate(r_squared = cor_value ^ 2,
+         cor_label = paste0("r = ", round(cor_value, 2), ", R² = ", round(r_squared, 2)))
+
+
+#Plot 
+plot_data %>% 
+ggplot(aes(x = participant_2_value, y = participant_1_value)) +
+  geom_point(aes(fill = group), alpha = 1, size = 2, color = "black", pch = 21) +
+  stat_smooth(aes(x = participant_2_value, y = participant_1_value),
+              method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+    geom_label(data = cor_labels,
+            aes(x = 0, y = Inf, label = cor_label), 
+            hjust = 0.5, vjust = 1, inherit.aes = FALSE, size = 3) +
+  facet_grid(participant_2 ~ participant_1, scales = "free", drop = T) +
+  theme_vaxgo() +
+  ylim(-3, 3) +
+  xlim(-3, 3) +
+  theme(strip.text = element_text(size = 8),
+        strip.text.y = element_text(angle = 0, hjust = 0)) +
+  scale_color_manual(values = immune_colors) +
+  scale_fill_manual(values = immune_colors) +
+  labs(x = "Mouse Log2FC", 
+       y = "Human Log2FC", 
+       color = "",
+       title = "Mouse vs. Human")
+
+
+
+```
+
+
+
+
+
+
+
 
 
 
@@ -1878,7 +2293,130 @@ gsea_hallmarks_all_cov$gsea %>%
 
 
 
+# Compare with FIT prediction
 
+## Run FIT on a training dataset
+```{r}
+#Get log2fc mean
+GSE19668_input2FIT = GSE19668_counts_log2_summary_annotated_probes %>% 
+  ungroup() %>% 
+    filter(timepoint == 2) %>% 
+  select(participant_id, MM.Entrez = entrezgene_id, EffectSize = log2fc) %>% 
+  group_by(MM.Entrez) %>% 
+  summarize(mean_log2fc = mean(EffectSize))
+
+#Save
+GSE19668_input2FIT %>% 
+  write_csv(file = here("FIT_Mouse2man", "GSE19668_day2_FIT_mouse.csv"))
+
+#Run FIT
+GSE19668_input2FIT_day2 = FIT.mouse2man::FIT(MouseFile = here("FIT_Mouse2man", "GSE19668_day2_FIT_mouse.csv"), DataType = "rnaseq")
+```
+
+
+## Distribution
+```{r fig.height=5, fig.width=5}
+#Bind rows
+mouse_human_fit_log2fc = bind_rows(GSE19668_input2FIT_day2 %>%
+            select(human_symbol = Human.symbol,
+                   log2fc = FIT_prediction) %>%
+            mutate(organism = "FIT"),
+          
+            human_mouse_saureus_log2fc_avg_wide %>%
+            select(human_symbol, log2fc = Human) %>%
+            mutate(organism = "Human"),
+          
+          human_mouse_saureus_log2fc_avg_wide %>%
+            select(human_symbol, log2fc = Mouse) %>%
+            mutate(organism = "Mouse"))
+
+mouse_human_fit_log2fc_wide = GSE19668_input2FIT_day2 %>%
+            select(human_symbol = Human.symbol,
+                   FIT_prediction) %>% 
+  inner_join(human_mouse_saureus_log2fc_avg_wide %>%
+            select(human_symbol, Human),
+            by = "human_symbol") %>% 
+  inner_join(human_mouse_saureus_log2fc_avg_wide %>%
+            select(human_symbol, Mouse),
+            by = "human_symbol")
+
+#Plot histogram
+mouse_human_fit_log2fc %>% 
+  ggplot() +
+  aes(x = log2fc,
+      fill = organism) +
+  geom_density(aes(y = after_stat(count),
+                   color = organism),
+                  position = position_identity(), 
+               alpha = 0.1,
+               size = 1,
+              show.legend = T) +
+  scale_fill_manual(values = c(FIT = "#4361ee",
+                               Mouse = "#4DBBD5FF",
+                               Human = "#546E7AFF"))+
+  scale_color_manual(values = c(FIT = "#4361ee",
+                                Mouse = "#4DBBD5FF",
+                                Human = "#546E7AFF"))+
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        legend.key = element_blank(),
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_x_continuous(limits = c(-4, 4)) +
+  labs(color = "",
+       fill = "")
+```
+
+
+```{r fig.height=5, fig.width=5}
+
+mouse_human_scatterplot = mouse_human_fit_log2fc_wide %>% 
+  ggplot() + 
+  aes(x = Mouse,
+      y = Human) +
+#All DEGs
+geom_point(color = "#4DBBD5FF",
+           alpha = 1.5,
+               size = 1,
+               pch = 21) +
+#Theme
+theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size =10),
+          axis.text.y = element_text(size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
+    theme(legend.position = "none",
+          legend.direction = "horizontal") +
+    labs(x = "Mouse L2FC",
+         y = "Human L2FC")
+
+
+fit_human_scatterplot = mouse_human_fit_log2fc_wide %>% 
+  ggplot() + 
+  aes(x = FIT_prediction,
+      y = Human) +
+#All DEGs
+geom_point(color = "#4361ee",
+           alpha = 1.5,
+               size = 1,
+               pch = 21) +
+  geom_vline(xintercept = 0, linetype = 2, linewidth = 0.2) +
+  geom_hline(yintercept = 0, linetype = 2, linewidth = 0.2) +
+#Theme
+theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size =10),
+          axis.text.y = element_text(size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
+    theme(legend.position = "none",
+          legend.direction = "horizontal") +
+    labs(x = "Mouse L2FC",
+         y = "Human L2FC")
+
+
+```
 
 
 
