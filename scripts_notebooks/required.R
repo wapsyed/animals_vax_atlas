@@ -276,3 +276,55 @@ cluster_by_day <- function(df, day_column = "day", condition_column = "condition
   
   return(order_df)
 }
+
+#Colors --------
+colors_immune = list(organism = c("FIT" = "#4361ee",
+                                  "Mouse" = "#4DBBD5FF",
+                                  "Human" = "#90A4AEFF"),
+                     timepoint = c("1" = "#caf0f8",
+                                   "2" = "#caf0f8",
+                                   "4" = "#219ebc",
+                                   "6" = "#669bbc",
+                                   "12" = "purple"),
+                     race = c("White" = "gray80",
+                              "Other" = "#4DBBD5FF",
+                              "CB6F1" = "#90A4AEFF"))
+
+
+btm_immune_groups = list(group = c("SIGNAL TRANSDUCTION" = "#708d81",
+                                   "CELL CYCLE" = "#06d6a0",
+                                   "ECM AND MIGRATION" = "#52b788",
+                                   "ENERGY METABOLISM" = "#95d5b2", 
+                                   "INNATE RESPONSE" = "#184e77",
+                                   "INFLAMMATORY/TLR/CHEMOKINES"  = "#3a86ff",
+                                   "INTERFERON/ANTIVIRAL SENSING" = "#669bbc",
+                                   "NEUTROPHILS" = "#219ebc",
+                                   "NK CELLS" = "#a2d2ff",
+                                   "IFN"= "#4361ee",
+                                   "MONOCYTES" = "#4cc9f0",
+                                   "DC ACTIVATION" = "#9f86c0",
+                                   "PLATELETS" = "#7209b7",
+                                   "B CELLS" = "#e5383b",
+                                   "T CELLS" = "#f72585",
+                                   "PLASMA CELLS" = "#ffafcc"),
+                         subgroup = c("SIGNAL TRANSDUCTION" = "#708d81",
+                                      "CELL CYCLE" = "#06d6a0",
+                                      "ECM AND MIGRATION" = "#52b788",
+                                      "ENERGY METABOLISM" = "#95d5b2", 
+                                      "INNATE RESPONSE" = "#184e77",
+                                      "INFLAMMATORY/TLR/CHEMOKINES"  = "#3a86ff",
+                                      "INTERFERON/ANTIVIRAL SENSING" = "#669bbc",
+                                      "NEUTROPHILS" = "#219ebc",
+                                      "NK CELLS" = "#a2d2ff",
+                                      "IFN"= "#4361ee",
+                                      "MONOCYTES" = "#4cc9f0",
+                                      "ANTIGEN PRESENTATION"= "#7209b7", 
+                                      "DC ACTIVATION" = "#9f86c0",
+                                      "PLATELETS" = "#7209b7",
+                                      "B CELLS" = "#e5383b",
+                                      "T CELLS" = "#f72585",
+                                      "PLASMA CELLS" = "#ffafcc"))
+
+
+
+
