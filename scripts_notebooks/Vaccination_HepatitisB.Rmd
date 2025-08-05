@@ -40,10 +40,11 @@ GSE120661_metadata = read_csv(file = here("tables", "GSE120661_metadata.csv"))
 mouse_engerixb_metadata = GSE120661_metadata %>% 
   filter(treatment == "Engerix B",
          tissue == "PBMC") %>% 
-  mutate(timepoint = timepoint / 24,
+  mutate(timepoint = (timepoint / 24) %>% round(1),
          participant_id = paste0("ENG_BL_", animal_replicate)) %>% 
-  filter(timepoint %in% c(1, 3, 7)) 
+  filter(timepoint %in% c(0, 1, 3, 7))
 
+#Get log2 values
 mouse_engerixb_log2 = GSE120661_counts_not_normalized_log2 %>% 
   select(mouse_engerixb_metadata %>% pull(geo_sample))
 
@@ -106,7 +107,7 @@ mouse_engerixb_log2_filtered = mouse_engerixb_log2 %>%
   rownames_to_column("probe") %>% 
   inner_join(mouse_engerixb_log2summary, by = "probe") %>%   #214,396
   select(probe, mouse_entrez, human_symbol = hgnc_symbol, c(mouse_engerixb_metadata %>% pull(geo_sample)))
-#20618
+#14395
 mouse_engerixb_log2_filtered %>% dim()
 
 #Save 
@@ -120,9 +121,9 @@ mouse_engerixb_log2_filtered %>%
 #Import
 mouse_engerixb_log2_filtered = readRDS(here("tables", "GSE120661_mouse_engerixb_log2.rds"))
 
-#Pivot wider
-mouse_engerixb_log2_filtered_sample_wide = mouse_engerixb_log2_filtered %>%
-  pivot_longer(cols = GSM3407496:GSM3407859,
+#Annotate
+mouse_engerixb_log2fc_filtered_sample_long = mouse_engerixb_log2_filtered %>%
+  pivot_longer(cols = -(probe:human_symbol),
                names_to = "geo_sample",
                values_to = "log2") %>% 
   inner_join(mouse_engerixb_metadata %>% 
@@ -130,11 +131,26 @@ mouse_engerixb_log2_filtered_sample_wide = mouse_engerixb_log2_filtered %>%
              by = "geo_sample") %>% 
   select(human_symbol, participant_id, timepoint, log2) %>% 
   distinct() %>% 
+  select(participant_id, human_symbol, timepoint, value = log2) %>%
+  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_") %>%
+  pivot_longer(cols = starts_with("day_"),
+               names_to = "timepoint",
+               names_prefix = "day_",
+               values_to = "value") %>%
+  group_by(participant_id, human_symbol) %>% 
+  mutate(day0 = value[timepoint == "0"]) %>%
+  ungroup() %>%
+  mutate(log2fc = value - day0) %>%
+  filter(timepoint != "0")
+
+
+#Pivot wider
+mouse_engerixb_log2fc_filtered_sample_wide = mouse_engerixb_log2fc_filtered_sample_long %>% 
+  select(-c(value:day0)) %>% 
   pivot_wider(names_from = "participant_id",
-              values_from = "log2")
-  
-#Print
-mouse_engerixb_log2_filtered_sample_wide
+              values_from = "log2fc")
+
+beep()
 ```
 
 
@@ -156,13 +172,13 @@ my_point <- function(data, mapping, ...) {
 }
 
 #All timepoints
-mouse_correlation_ggpairs_alldays = ggpairs(mouse_engerixb_log2_filtered_sample_wide %>% 
+mouse_correlation_ggpairs_alldays = ggpairs(mouse_engerixb_log2fc_filtered_sample_wide %>% 
                                               mutate(timepoint = as.character(timepoint),
                                                      timepoint = fct_reorder(timepoint, as.numeric(timepoint))),
                                     columns = 3:7,
                                     mapping = ggplot2::aes(color = timepoint,
                                                            fill = timepoint),
-                                    title = "All days, GSE19668, C57BL/6J", 
+                                    title = "All days, HepB/EngerixB, GSE120661, C57BL/6J", 
                                     diag = list(continuous = my_dens),
                                     lower = list(continuous = my_point)
                                     ) +
@@ -177,46 +193,12 @@ mouse_correlation_ggpairs_alldays = ggpairs(mouse_engerixb_log2_filtered_sample_
                                 "12" = "#4361ee")) 
 
 mouse_correlation_ggpairs_alldays
-#Save
-# mouse_correlation_ggpairs_alldays %>%
-#   ggsave(filename = here("Figures", "mouse_correlation_ggpairs_alldays_SAureus_GSE19668.png"),
-#          height = 10,
-#          width = 10)
-# beep()
-
-
-
-#Timepoint 2
-timepoint_select = 2
-mouse_correlation_ggpairs_day2 = ggpairs(GSE19668_log2fc_sample_wide %>% 
-                                              filter(timepoint == 2) %>% 
-                                              mutate(timepoint = as.character(timepoint),
-                                                     timepoint = fct_reorder(timepoint, as.numeric(timepoint))),
-                                    columns = 4:8,
-                                    mapping = ggplot2::aes(color = timepoint,
-                                                           fill = timepoint),
-                                    title = paste("Day", timepoint_select, "GSE19668, C57BL/6J"), 
-                                    diag = list(continuous = my_dens),
-                                    lower = list(continuous = my_point)
-                                    ) +
-  theme_vaxgo() +
-  scale_color_manual(values = c("2" = "#caf0f8",
-                                "4" = "#219ebc",
-                                "6" = "#669bbc",
-                                "12" = "#4361ee")) +
-  scale_fill_manual(values = c("2" = "#caf0f8",
-                                "4" = "#219ebc",
-                                "6" = "#669bbc",
-                                "12" = "#4361ee"))
-
-mouse_correlation_ggpairs_day2
-#Save
-mouse_correlation_ggpairs_day2 %>%
-  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_day2_SAureus_GSE19668.png"),
+# Save
+mouse_correlation_ggpairs_alldays %>%
+  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_alldays_HepB_GSE120661.png"),
          height = 10,
          width = 10)
 beep()
-
 ```
 
 
@@ -225,22 +207,27 @@ beep()
 #### PCA
 
 ```{r fig.height=4, fig.width=5}
+#Input
+samples_metadata_pca_input = mouse_engerixb_metadata
+samples_log2fc_values_pca_input = mouse_engerixb_log2fc_filtered_sample_long
+
+
 #Import metadata
-annotation_samples_pca = GSE19668_counts_log2_summary_annotated_probes %>% 
+annotation_samples_pca = samples_metadata_pca_input %>% 
   mutate(sample = paste0(participant_id, "_Day_", timepoint)) %>% 
   select(participant_id, timepoint, sample) %>% 
   distinct()
 
 
 # PCA with raw values
-clean_matrix_raw = GSE19668_counts_log2_summary_annotated_probes %>% 
+clean_matrix_raw = samples_log2fc_values_pca_input %>% 
   mutate(sample = paste0(participant_id, "_Day_", timepoint)) %>% 
-  select(sample, entrezgene_id, log2fc) %>% 
-  filter(!entrezgene_id == "") %>% 
+  select(sample, human_symbol, log2fc) %>% 
+  filter(!human_symbol == "") %>% 
   distinct() %>%
   pivot_wider(names_from = "sample",
               values_from = "log2fc") %>% 
-  column_to_rownames("entrezgene_id") %>% 
+  column_to_rownames("human_symbol") %>% 
   as.matrix()
 
 clean_matrix_raw[!is.finite(clean_matrix_raw)] <- 0
@@ -266,15 +253,21 @@ pca_raw <- pca_raw_df %>%
              color = "black") +
   theme_vaxgo() +
   guides(fill = "none") +
-  scale_color_manual(values = c("2" = "#caf0f8",
+  scale_color_manual(values = c("1" = "#caf0f8",
+                                "2" = "#caf0f8",
+                                "3" = "#219ebc",
                                 "4" = "#219ebc",
                                 "6" = "#669bbc",
+                                "7" = "#669bbc",
                                 "12" = "purple")) +
-  scale_fill_manual(values = c("2" = "#caf0f8",
+  scale_fill_manual(values = c("1" = "#caf0f8",
+                                "2" = "#caf0f8",
+                                "3" = "#219ebc",
                                 "4" = "#219ebc",
                                 "6" = "#669bbc",
+                                "7" = "#669bbc",
                                 "12" = "purple")) +
-  labs(title = "Mouse, S. aureus, GSE19668",
+  labs(title = "Mouse, HepB, EngerixB, GSE120661",
        shape = "Organism",
        color = "Timepoint") +
   theme(axis.text.x = element_text(angle = 0),
@@ -282,6 +275,8 @@ pca_raw <- pca_raw_df %>%
         axis.line.x = element_blank(),
         axis.line.y = element_blank())
 pca_raw 
+
+beep()
 
 ```
 
@@ -301,14 +296,13 @@ btm_annotation_genes = ImmuneGO_BTM_grouped_genes %>%
                rename(symbol = genes)
 
 #Annotate genes by BTM
-GSE19668_genes_btm = GSE19668_counts_log2_summary_annotated_probes %>% 
+samples_genes_btm = samples_log2fc_values_pca_input %>% 
   ungroup() %>% 
-  rename(mm_entrez = entrezgene_id) %>% 
-  select(mgi_symbol, symbol = human_symbol, participant_id, geo_sample, timepoint, treatment, log2fc) %>% 
+  select(symbol = human_symbol, participant_id, timepoint, log2fc) %>% 
   inner_join(btm_annotation_genes, by = "symbol")
 
 
-dge_btm_mean_process = GSE19668_genes_btm %>%
+dge_btm_mean_process = samples_genes_btm %>%
   mutate(condition = paste0(participant_id, "_Day", timepoint)) %>% 
   group_by(participant_id, timepoint, process) %>% 
   summarize(mean_log2fc = mean(log2fc)) %>%
@@ -387,45 +381,27 @@ mouse_correlation_ggpairs_btms_gsea_alldays = ggpairs_data_dge_btm_mean_process 
   geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
   geom_vline(xintercept = 0, alpha = 0.2, linetype = 2)+
   theme_vaxgo() +
-  scale_color_manual(values = c("2" = "#caf0f8",
+  scale_color_manual(values = c("1" = "#caf0f8",
+                                "2" = "#caf0f8",
+                                "3" = "#219ebc",
                                 "4" = "#219ebc",
                                 "6" = "#669bbc",
+                                "7" = "#669bbc",
                                 "12" = "purple")) +
-  scale_fill_manual(values = c("2" = "#caf0f8",
+  scale_fill_manual(values = c("1" = "#caf0f8",
+                                "2" = "#caf0f8",
+                                "3" = "#219ebc",
                                 "4" = "#219ebc",
                                 "6" = "#669bbc",
-                                "12" = "purple")) 
+                                "7" = "#669bbc",
+                                "12" = "purple"))
 
 mouse_correlation_ggpairs_btms_gsea_alldays
 
 mouse_correlation_ggpairs_btms_gsea_alldays %>%
-  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_btms_gsea_alldays_Saureus.png"),
+  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_btms_gsea_alldays_EngerixB_Mouse.png"),
          height = 10,
          width = 10)
-
-
-#All days, colored by group
-mouse_correlation_ggpairs_btms_gsea_alldays_groupcolor = ggpairs_data_dge_btm_mean_process %>%
-  ggpairs(columns = 3:7,
-          mapping = ggplot2::aes(color = group,
-                                 fill = group),
-          title = paste("Day", timepoint_selected),
-          diag = list(continuous = my_dens),
-          lower = list(continuous = my_point)) +
-  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
-  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2)+
-  theme_vaxgo() +
-  scale_color_manual(values = immune_colors) +
-  scale_fill_manual(values = immune_colors)
-
-mouse_correlation_ggpairs_btms_gsea_alldays_groupcolor
-
-mouse_correlation_ggpairs_btms_gsea_alldays_groupcolor %>%
-  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_btms_gsea_alldays_groupcolor_Saureus.png"),
-         height = 10,
-         width = 10)
-
-beep()
 
 ```
 
@@ -451,7 +427,7 @@ sample_participants_5 = ggpairs_data_dge_btm_mean_process %>%
 plot_data <-
   #Pivot longer, 1st participatn
   ggpairs_data_dge_btm_mean_process %>%
-  filter(timepoint == 2) %>% 
+  filter(timepoint == 1) %>% 
   select(timepoint, group, process, sample_participants_5) %>%
   pivot_longer(cols = !c("group", "process", "timepoint"), 
                names_to = "participant_1", 
@@ -460,7 +436,7 @@ plot_data <-
   #Add a column to the 2nd participant
   inner_join(
     ggpairs_data_dge_btm_mean_process %>%
-      filter(timepoint == 2) %>% 
+      filter(timepoint == 1) %>% 
       select(timepoint, group, process, sample_participants_5) %>%
       pivot_longer(cols = !c("group", "process", "timepoint"), 
                    names_to = "participant_2",
@@ -496,20 +472,20 @@ ggplot(aes(x = participant_1_value, y = participant_2_value, color = group)) +
   stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
   geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
   geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
-    geom_label(data = cor_labels,
+  geom_label(data = cor_labels,
             aes(x = 0, y = Inf, label = cor_label), 
             hjust = 0.5, vjust = 1, inherit.aes = FALSE, size = 3) +
   facet_grid(participant_2 ~ participant_1, scales = "free", drop = T) +
   theme_vaxgo() +
-  ylim(-3, 3) +
-  xlim(-3, 3) +
+  ylim(-1, 1) +
+  xlim(-1, 1) +
   theme(strip.text = element_text(size = 8),
         strip.text.y = element_text(angle = 0, hjust = 0)) +
   scale_color_manual(values = immune_colors) +
   labs(x = "Log2FC", 
        y = "Log2FC", 
        color = "",
-       title = "GSE19668, Mouse, SAureus infeciton, random sample")
+       title = "Mouse, Hepatitis B, EngerixB Mouse")
 ```
 
 
@@ -524,17 +500,24 @@ ggplot(aes(x = participant_1_value, y = participant_2_value, color = group)) +
 
 
 
-### GSE110480 (Human)
+### GSE124533 (Human)
+Download directly from GEO. The data is too large.
 
 #### Prepare data
 ```{r}
-#S. aureus: GSE33341 -----
-filename = "GSE33341"
-GSE33341 <- getGEO("GSE33341", GSEMatrix = TRUE) 
-eset <- GSE33341[[2]] #The matrix #1 the mouse annotated
+#EngerixB: GSE124533 -----
+filename = "GSE124533"
+lines <- readLines(here("data_studies", "GSE124533_series_matrix.txt"))
+```
+
+
+```{r}
+GSE124533_series_matrix.txt
+GSE124533 <- getGEO("GSE124533", GSEMatrix = TRUE) 
+eset <- GSE124533[[2]] #The matrix #1 the mouse annotated
 
 #Metadata ------
-GSE33341_metadata = eset %>% 
+GSE124533_metadata = eset %>% 
   pData() %>% 
   dplyr::select( 
     geo_sample = "geo_accession", 
