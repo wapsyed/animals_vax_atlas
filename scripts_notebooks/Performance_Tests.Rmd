@@ -1168,109 +1168,7 @@ roc_curve_up_notup = classified_df_probs_up %>%
   group_by(model, timepoint) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Up vs Non-Up")
-```
 
-
-Down vs not-down
-```{r}
-######### DOWN -----------
-#Do one sided t-test for each model
-dge_long_genes_down = dge_long_genes %>% 
-  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
-  mutate(
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    pval_one_sided = pnorm(z, lower.tail = T), #onesided, p(gene) < 0 (left tail)
-    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    direction = if_else(pval_one_sided_adj < 0.05, "down", "not_down")) %>%
-  select(-adj_p_val) %>% 
-  rename(adj_p_val = pval_one_sided_adj)
-
-#Assign human log2fc direction as truth
-truth_human = dge_long_genes_down %>% 
-  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
-  filter(organism == "Human") %>% 
-  distinct() %>% 
-  pivot_wider(names_from = "organism",
-              values_from = "direction") %>% 
-  rename(truth = Human) %>% 
-  mutate(organism = "Human")
-
-#Generate comparable distributions
-perfect_prediction = truth_human %>%
-  mutate(prob = adj_p_val) %>%
-  rename(pred = truth)
-
-permutation_prediction = perfect_prediction %>%
-  group_by(timepoint) %>% 
-  mutate(prob = randperm(prob),
-         organism = "Permutation")
-
-uniform_prediction = perfect_prediction %>%
-  group_by(timepoint) %>% 
-  mutate(prob = runif(n()),
-         organism = "Uniform")
-
-shuffle_prediction = perfect_prediction %>%
-  group_by(timepoint) %>% 
-  mutate(prob = sample(prob),
-         organism = "Shuffle")
-
-normal_prediction = perfect_prediction %>% 
-  group_by(timepoint) %>% 
-  mutate(prob = rnorm(n(), mean = 0.5, sd = 0.1),
-         prob= pmin(pmax(prob, 0), 1),
-         organism = "Normal")
-
-#Get only up and not up genes from models
-models_down = dge_long_genes_down %>% 
-  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
-  mutate(
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    pval_one_sided = pnorm(z, lower.tail = T), #one sided, less
-    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    direction = if_else(pval_one_sided_adj < 0.05, "down", "not_down")) %>%
-  select(-adj_p_val) %>% 
-  rename(adj_p_val = pval_one_sided_adj) %>% 
-  filter(organism != "Human") %>% 
-  mutate(pred = direction,
-         prob = adj_p_val) %>% 
-  #Add controls
-  bind_rows(
-    perfect_prediction,
-    permutation_prediction,
-    uniform_prediction,
-    shuffle_prediction,
-    normal_prediction
-    )
-
-#Get probabilities (DOWN)
-classified_df_probs_down = truth_human %>% 
-  select(symbol, timepoint, truth) %>%
-  inner_join(models_down %>% 
-               select(symbol, timepoint, pred, prob, model = organism),
-             by = join_by("symbol", "timepoint")) %>% 
-  mutate(not_prob = 1 - prob,
-         sum = prob + not_prob,
-         truth = as.factor(truth)) %>% 
-  distinct()
-
-
-#Get ROC
-roc_curve_down_notdown = classified_df_probs_down %>% 
-  filter(model %in% c("Human", "Mouse", "Uniform", "FIT")) %>%
-  select(symbol, timepoint, truth, pred, model, prob, not_prob, sum) %>%
-  group_by(model, timepoint) %>%
-  roc_curve(truth, prob) %>%
-  mutate(comparison = "Down vs Non-Down") 
-
-```
-
-
-
-Distributions
-```{r fig.height=5, fig.width=5}
 
 #Plot model distributions and negative-control distributions
 classified_df_probs_up %>% 
@@ -1355,9 +1253,87 @@ roc_curve_up_notup_plot = roc_curve_up_notup %>%
 
 roc_curve_up_notup_plot
 ```
-
-
+Down vs not-down
 ```{r fig.height=4, fig.width=10}
+
+######### DOWN -----------
+#Do one sided t-test for each model
+dge_long_genes_down = dge_long_genes %>% 
+  #Filter immune genes only
+  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
+  mutate(
+    se = (ci_high - ci_low) / (2 * 1.96),
+    z = log2fc / se,
+    pval_one_sided = pnorm(z, lower.tail = T), #onesided, p(gene) < 0 (left tail)
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    direction = if_else(pval_one_sided_adj < 0.05, "down", "not_down")) %>%
+  select(-adj_p_val) %>% 
+  rename(adj_p_val = pval_one_sided_adj)
+
+#Assign human log2fc direction as truth
+truth_human = dge_long_genes_down %>% 
+  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
+  filter(organism == "Human") %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "organism",
+              values_from = "direction") %>% 
+  rename(truth = Human) %>% 
+  mutate(organism = "Human")
+
+#Generate comparable distributions
+perfect_prediction = truth_human %>%
+  #Invert probabilities
+  mutate(prob = 1 - adj_p_val) %>%
+  rename(pred = truth)
+uniform_prediction = perfect_prediction %>%
+  group_by(timepoint) %>% 
+  mutate(prob = runif(n()),
+         organism = "Uniform")
+
+
+#Get only up and not up genes from models
+models_down = dge_long_genes_down %>% 
+  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
+  mutate(
+    se = (ci_high - ci_low) / (2 * 1.96),
+    z = log2fc / se,
+    pval_one_sided = pnorm(z, lower.tail = T), #one sided, less
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    #Invert probabilities
+    pval_one_sided_adj = 1 - pval_one_sided_adj,
+    direction = if_else(pval_one_sided_adj < 0.05, "down", "not_down")) %>%
+  select(-adj_p_val) %>% 
+  rename(adj_p_val = pval_one_sided_adj) %>% 
+  filter(organism != "Human") %>% 
+  mutate(pred = direction,
+         prob = adj_p_val) %>% 
+  #Add controls
+  bind_rows(
+    perfect_prediction,
+    uniform_prediction
+    )
+
+#Get probabilities (DOWN)
+classified_df_probs_down = truth_human %>% 
+  select(symbol, timepoint, truth) %>%
+  inner_join(models_down %>% 
+               select(symbol, timepoint, pred, prob, model = organism),
+             by = join_by("symbol", "timepoint")) %>% 
+  mutate(not_prob = 1 - prob,
+         sum = prob + not_prob,
+         truth = as.factor(truth)) %>% 
+  distinct()
+
+
+#Get ROC
+roc_curve_down_notdown = classified_df_probs_down %>% 
+  filter(model %in% c("Human", "Mouse", "Uniform", "FIT")) %>%
+  select(symbol, timepoint, truth, pred, model, prob, not_prob, sum) %>%
+  group_by(model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Down vs Non-Down") 
+
+
 ############# DOWN VS NOT DOWN
 #PLOT ROC Curve
 roc_curve_down_notdown_plot = roc_curve_down_notdown %>% 
@@ -1390,6 +1366,11 @@ roc_curve_down_notdown_plot = roc_curve_down_notdown %>%
   scale_y_continuous(n.break = 3)
 
 roc_curve_down_notdown_plot
+
+roc_curve_down_notdown_plot %>%
+  ggsave(filename = here("Figures", "roc_curve_down_notdown_plot_Immune.png"),
+         width = 10,
+         height =4)
 
 ```
 
