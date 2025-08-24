@@ -6,6 +6,7 @@ required_packages <- c(
   "janitor", "readr", "paletteer", "beepr", "preprocessCore", "maditr", 
   "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
+  "pracma",
   "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath"
 )
 
