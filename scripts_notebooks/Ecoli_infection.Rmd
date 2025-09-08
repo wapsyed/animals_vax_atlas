@@ -45,8 +45,6 @@ eset_human <- GSE33341[[2]]
 #Mouse
 GSE33341_ecoli_mouse_metadata = eset_mouse %>% 
   pData() %>% 
-  filter(`pathogen:ch1` == "Escherichia  coli") %>%
-  mutate(`pathogen:ch1` = if_else(`pathogen:ch1` == "Escherichia  coli", "Escherichia coli", `pathogen:ch1`)) %>%
   dplyr::select( 
     geo_sample = "geo_accession", 
     #Host
@@ -66,15 +64,19 @@ GSE33341_ecoli_mouse_metadata = eset_mouse %>%
     timepoint = "time after infection (h):ch1",
     bac_strain = "bacterial strain:ch1"
     ) %>% 
-  mutate(subject_id = paste0("Ecoli_mouse_", host_strain, "_Animal_", subject_num),
-         # treatment = fct_relevel(treatment, "none"),
-         # timepoint = fct_relevel(timepoint, "0"),
-         condition = paste("Ecoli_mouse", host_strain, timepoint, sep = "_")) %>% 
-  select(geo_sample, condition, subject_id, everything())
+  filter(pathogen %in% c("Escherichia  coli", "-")) %>%
+  mutate(pathogen = if_else(pathogen == "Escherichia  coli", "escherichia coli", "none"),
+         subject_id = paste0("Mouse_", host_strain, "_Animal", subject_num, "_Batch", batch),
+         status = str_replace(status, "-", "Healthy"),
+         condition = paste("Mouse", host_strain, timepoint, sep = "_"),
+         comparison = paste0("Mouse_", host_strain, "_Batch", batch)) %>% 
+  select(geo_sample, comparison, condition, subject_id, everything())
 
 GSE33341_ecoli_mouse_metadata
+```
 
 
+```{r}
 #Human
 GSE33341_ecoli_human_metadata = eset_human %>% 
   pData() %>% 
@@ -100,6 +102,7 @@ GSE33341_ecoli_human_metadata = eset_human %>%
     # bac_strain = "bacterial strain:ch1"
     ) %>% 
   mutate(site_infection = str_to_lower(site_infection),
+         organism = "Human",
          pathogen = if_else(pathogen == "-", "Healthy", pathogen),
          status = if_else(pathogen == "Healthy", pathogen, "infected"),
          timepoint = "0",
@@ -126,20 +129,173 @@ GSE33341_ecoli_mouse_human_metadata %>%
 GSE33341_ecoli_mouse_human_metadata =
   readRDS(file = here("tables", "GSE33341_ecoli_mouse_human_metadata.rds"))
 
-#Get expression data
+#Get expression data -----
+#Mouse
 GSE33341_mouse_eset <- exprs(eset_mouse) %>% 
   as.data.frame() %>% 
-  rownames_to_column("")
-GSE33341_human_eset <- exprs(eset_human) %>% as.data.frame()
+  select(GSE33341_ecoli_mouse_human_metadata %>% 
+           filter(organism == "Mus musculus") %>% 
+           pull(geo_sample)) %>% 
+  rownames_to_column("probe_id") 
 
-GSE33341_human_eset %>% 
-  bind_cols(GSE33341_mouse_eset)
+#Human
+GSE33341_human_eset <- exprs(eset_human) %>% 
+  as.data.frame() %>% 
+  select(GSE33341_ecoli_mouse_human_metadata %>% 
+           filter(organism == "Human") %>% 
+           pull(geo_sample)) %>% 
+  rownames_to_column("probe_id")
+```
+
+Annotate genes
+```{r}
+#Annotate genes ------
+#Mouse -----
+#Annotate data and calculate log2fc
+GSE33341_mouse_expression_metadata  = GSE33341_mouse_eset %>% 
+  pivot_longer(cols = 2:125,
+               names_to = "geo_sample",
+               values_to = "value_raw") %>% 
+  inner_join(GSE33341_ecoli_mouse_human_metadata, 
+             by = "geo_sample") 
+
+#Get value from day 0 and calculate Log2FC
+GSE33341_log2fc_sample = GSE33341_mouse_expression_metadata %>% 
+  filter(organism == "Mus musculus",
+         status == "Healthy",
+         host_strain == "C57BL/6J",
+         batch == "8") %>% 
+  select(probe_id, comparison, batch, subject_num, day0_value_raw = value_raw) %>% 
+  inner_join(GSE33341_mouse_expression_metadata %>% 
+               filter(timepoint != "0",
+                      host_strain == "C57BL/6J",
+                      batch == "8"),
+             by = join_by("probe_id", "comparison", "batch", "subject_num")) %>% 
+  mutate(log2fc = value_raw - day0_value_raw)
+
+#Check duplicates
+GSE33341_log2fc_sample %>% 
+  filter(subject_id == "Mouse_C57BL/6J_Animal1_Batch8",
+         probe_id == "1415670_at")
 
 ```
 
 
+```{r}
+########### Filter and annotate probes -----
+## Set up biomart
+ensembl_mart <- useMart("ensembl")
+ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
+
+## Get the MGI symbol
+gene_id <- GSE33341_log2fc_sample$probe_id %>% unique()
+# listAttributes(ensembl_mart)
+#Annotate
+annot <- getBM(
+  attributes = c("affy_mouse430_2",
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "mgi_symbol",
+                 "description"),
+  filters = "affy_mouse430_2",
+  values = gene_id,
+  mart = ensembl_mart)
+
+#Gene lookup table
+HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez %>% 
+  rename(human_symbol = HGNC_symbol,
+         mouse_symbol =MGI.symbol,
+         HS.Entrez = Human.Entrez,
+         MM.Entrez = Mouse.Ortholog) %>% 
+  mutate(HS.Entrez = as.character(HS.Entrez),
+         MM.Entrez = as.character(MM.Entrez))
+
+#Filter genes with highest median expression
+GSE33341_mouse_counts_log2_summary_annotated_probes = GSE33341_log2fc_sample %>% 
+  group_by(probe_id) %>% 
+  summarize(mean = mean(value_raw, na.rm = TRUE),
+            median = median(value_raw, na.rm = T)) %>%  
+  inner_join(annot %>% 
+              rename(probe_id = affy_mouse430_2), 
+            by = "probe_id") %>% 
+  group_by(entrezgene_id) %>% 
+  slice_max(median, n = 1) %>% 
+  select(probe_id, entrezgene_id, mgi_symbol) %>% 
+  distinct() %>%
+  
+  #Filter probes from the original table
+  inner_join(GSE33341_log2fc_sample, 
+             by = "probe_id") %>% 
+  
+  #Annotate hgnc symbols
+  inner_join(HS_MM_Symbol_Entrez %>% 
+               clean_names() %>% 
+               rename(mgi_symbol = mouse_symbol) %>% 
+               select(mgi_symbol, human_symbol), 
+             by = join_by("mgi_symbol")) 
+
+#Filter human symbol by entrez
+GSE33341_mouse_counts_log2_summary_annotated_probes = GSE33341_mouse_counts_log2_summary_annotated_probes %>% 
+  #Filter entrez ids with the highest median
+  inner_join(GSE33341_mouse_counts_log2_summary_annotated_probes %>%
+               select(probe_id, entrezgene_id, human_symbol, value_raw) %>%
+               group_by(human_symbol, entrezgene_id) %>%
+               summarize(median = median(value_raw, na.rm = T)) %>% 
+               ungroup() %>% 
+               select(entrezgene_id) %>% 
+               distinct(),
+             by = "entrezgene_id") %>% 
+  ungroup()
+
+GSE33341_mouse_counts_log2_summary_annotated_probes %>% 
+dplyr::summarise(n = dplyr::n(), .by = c(human_symbol, timepoint, subject_id)) |>
+  dplyr::filter(n > 1L)
+
+GSE33341_mouse_counts_log2_summary_annotated_probes
+
+#Save
+GSE33341_mouse_counts_log2_summary_annotated_probes %>% 
+  saveRDS(file = here("tables", "GSE33341_mouse_counts_log2_summary_annotated_probes.rds"))
+```
 
 
+
+#### Import
+```{r}
+#Import
+GSE33341_mouse_counts_log2_summary_annotated_probes =
+  readRDS(file = here("tables", "GSE33341_mouse_counts_log2_summary_annotated_probes.rds"))
+
+#Pivot wider
+GSE33341_log2fc_sample_wide
+
+#Get duplicated genes
+GSE33341_mouse_symbol_dupes = GSE33341_mouse_counts_log2_summary_annotated_probes %>%
+  ungroup() %>% 
+  select(human_symbol, subject_id, timepoint, log2fc) %>% 
+  distinct() %>% 
+  dplyr::summarise(n = dplyr::n(), .by = c(human_symbol, timepoint, subject_id)) |>
+  dplyr::filter(n > 1L)
+
+GSE33341_mouse_counts_log2_summary_annotated_probes %>%
+  ungroup() %>% 
+  select(human_symbol, subject_id, timepoint, log2fc) %>% 
+  distinct() %>% 
+  filter(human_symbol %in% c(GSE33341_mouse_symbol_dupes$human_symbol %>% unique())) %>% 
+  arrange(subject_id, human_symbol) %>% 
+  
+
+  # group_by(human_symbol, timepoint) %>% 
+  pivot_wider(names_from = subject_id,
+              values_from = log2fc)
+
+GSE33341_mouse_counts_log2_summary_annotated_probes %>% 
+  filter(subject_id == "Mouse_C57BL/6J_Animal1_Batch8",
+         probe_id == "1415670_at")
+  
+#Print
+GSE33341_log2fc_sample_wide
+```
 
 
 
