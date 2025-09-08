@@ -41,7 +41,7 @@ if (length(bioc_missing) > 0) {
 }
 
 # Load packages (CRAN + Bioconductor)
-invisible(lapply(c(required_pa  ckages, bioc_pkgs), function(pkg) {
+invisible(lapply(c(required_packages, bioc_pkgs), function(pkg) {
   suppressPackageStartupMessages(library(pkg, character.only = TRUE))
 }))
 
