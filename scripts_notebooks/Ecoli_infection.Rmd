@@ -148,6 +148,7 @@ GSE33341_human_eset <- exprs(eset_human) %>%
 ```
 
 Annotate genes
+This procedure was done using only one batch
 ```{r}
 #Annotate genes ------
 #Mouse -----
@@ -161,11 +162,13 @@ GSE33341_mouse_expression_metadata  = GSE33341_mouse_eset %>%
 
 #Get value from day 0 and calculate Log2FC
 GSE33341_log2fc_sample = GSE33341_mouse_expression_metadata %>% 
+  #Filter batch
   filter(organism == "Mus musculus",
          status == "Healthy",
          host_strain == "C57BL/6J",
          batch == "8") %>% 
   select(probe_id, comparison, batch, subject_num, day0_value_raw = value_raw) %>% 
+  #Filter batch
   inner_join(GSE33341_mouse_expression_metadata %>% 
                filter(timepoint != "0",
                       host_strain == "C57BL/6J",
@@ -210,7 +213,7 @@ HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez %>%
   mutate(HS.Entrez = as.character(HS.Entrez),
          MM.Entrez = as.character(MM.Entrez))
 
-#Filter genes with highest median expression
+#Filter probe_ids with highest median expression for the same entrezgene_id
 GSE33341_mouse_counts_log2_summary_annotated_probes = GSE33341_log2fc_sample %>% 
   group_by(probe_id) %>% 
   summarize(mean = mean(value_raw, na.rm = TRUE),
@@ -234,27 +237,54 @@ GSE33341_mouse_counts_log2_summary_annotated_probes = GSE33341_log2fc_sample %>%
                select(mgi_symbol, human_symbol), 
              by = join_by("mgi_symbol")) 
 
-#Filter human symbol by entrez
-GSE33341_mouse_counts_log2_summary_annotated_probes = GSE33341_mouse_counts_log2_summary_annotated_probes %>% 
-  #Filter entrez ids with the highest median
-  inner_join(GSE33341_mouse_counts_log2_summary_annotated_probes %>%
-               select(probe_id, entrezgene_id, human_symbol, value_raw) %>%
-               group_by(human_symbol, entrezgene_id) %>%
+#Filter entrez ids with the highest median for the same symbol ------
+
+#Get one entrez_id by human symbol
+entrez_ids_highest_median = GSE33341_mouse_counts_log2_summary_annotated_probes %>%
+               select(probe_id, entrezgene_id, human_symbol, mgi_symbol, value_raw) %>%
+               group_by(human_symbol, mgi_symbol, entrezgene_id) %>%
+               #Get entrezids with highest median
                summarize(median = median(value_raw, na.rm = T)) %>% 
+               slice_max(median, n = 1) %>%
                ungroup() %>% 
-               select(entrezgene_id) %>% 
-               distinct(),
-             by = "entrezgene_id") %>% 
-  ungroup()
+               select(human_symbol, mgi_symbol, entrezgene_id, median) %>% 
+               distinct() %>% 
+    summarise(n = n(), .by = c(human_symbol), mgi_symbol, entrezgene_id, median)
 
-GSE33341_mouse_counts_log2_summary_annotated_probes %>% 
-dplyr::summarise(n = dplyr::n(), .by = c(human_symbol, timepoint, subject_id)) |>
-  dplyr::filter(n > 1L)
+#Get not duplicated genes
+entrez_ids_highest_median_notduplicated = entrez_ids_highest_median %>% 
+  filter(n == 1L) %>% 
+  distinct()
 
-GSE33341_mouse_counts_log2_summary_annotated_probes
+#Filter randomly entrezids that have the same value for the same gene (human and mouse)
+entrez_ids_highest_median_duplicated = entrez_ids_highest_median %>%
+  filter(n > 1L) %>%
+  distinct() %>%
+  group_by(human_symbol) %>%
+  #Filter irrespective to the mgi_symbol
+  slice_sample(n = 1) %>%
+  select(human_symbol, mgi_symbol, entrezgene_id, median)
+
+#Merge tables
+entrez_ids_selected = entrez_ids_highest_median_notduplicated %>% 
+               bind_rows(entrez_ids_highest_median_duplicated) %>% 
+               select(human_symbol, mgi_symbol, entrezgene_id)
+
+#Annotate expression table
+GSE33341_mouse_counts_log2_summary_annotated_genes = GSE33341_mouse_counts_log2_summary_annotated_probes %>% 
+  ungroup() %>% 
+  inner_join(entrez_ids_selected %>% distinct(),
+             by = join_by("human_symbol", "mgi_symbol", "entrezgene_id"))%>% 
+  distinct()
+
+#Check if the duplicated entrez ids were filtered out
+GSE33341_mouse_counts_log2_summary_annotated_genes %>%          
+        filter(human_symbol == "APOC4-APOC2",
+               timepoint == "2",
+               subject_id == "Mouse_C57BL/6J_Animal1_Batch8")
 
 #Save
-GSE33341_mouse_counts_log2_summary_annotated_probes %>% 
+GSE33341_mouse_counts_log2_summary_annotated_genes %>% 
   saveRDS(file = here("tables", "GSE33341_mouse_counts_log2_summary_annotated_probes.rds"))
 ```
 
@@ -267,34 +297,189 @@ GSE33341_mouse_counts_log2_summary_annotated_probes =
   readRDS(file = here("tables", "GSE33341_mouse_counts_log2_summary_annotated_probes.rds"))
 
 #Pivot wider
-GSE33341_log2fc_sample_wide
-
-#Get duplicated genes
-GSE33341_mouse_symbol_dupes = GSE33341_mouse_counts_log2_summary_annotated_probes %>%
-  ungroup() %>% 
-  select(human_symbol, subject_id, timepoint, log2fc) %>% 
-  distinct() %>% 
-  dplyr::summarise(n = dplyr::n(), .by = c(human_symbol, timepoint, subject_id)) |>
-  dplyr::filter(n > 1L)
-
-GSE33341_mouse_counts_log2_summary_annotated_probes %>%
-  ungroup() %>% 
-  select(human_symbol, subject_id, timepoint, log2fc) %>% 
-  distinct() %>% 
-  filter(human_symbol %in% c(GSE33341_mouse_symbol_dupes$human_symbol %>% unique())) %>% 
-  arrange(subject_id, human_symbol) %>% 
-  
-
-  # group_by(human_symbol, timepoint) %>% 
+GSE33341_log2fc_sample_wide = GSE33341_mouse_counts_log2_summary_annotated_probes %>% 
+  select(human_symbol, subject_id, timepoint, log2fc) %>%
+  group_by(human_symbol, timepoint) %>% 
   pivot_wider(names_from = subject_id,
-              values_from = log2fc)
-
-GSE33341_mouse_counts_log2_summary_annotated_probes %>% 
-  filter(subject_id == "Mouse_C57BL/6J_Animal1_Batch8",
-         probe_id == "1415670_at")
+              values_from = log2fc) %>% 
+  ungroup()  %>% 
+  mutate(timepoint = fct_reorder(timepoint, timepoint %>% as.numeric()))
   
 #Print
 GSE33341_log2fc_sample_wide
+```
+
+
+#### Correlation plots, pairwise
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
+#Plot correlation between animals ------
+#Change params in geoms
+#Density
+my_dens <- function(data, mapping, ...) {
+  ggplot(data = data, mapping=mapping) +
+    geom_density(alpha = 0.2, color = "black")
+}
+#Points
+my_point <- function(data, mapping, ...) {
+  ggplot(data = data, mapping = mapping) +
+    geom_point(alpha = 0.8, ...)  
+}
+
+#All timepoints
+mouse_correlation_ggpairs_alldays = ggpairs(GSE33341_log2fc_sample_wide,
+                                    columns = 3:7,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = "All days, GSE33341, C57BL/6J, E. coli infection", 
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point)
+                                    ) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("2" = "#caf0f8",
+                                "6" = "#219ebc",
+                                "12" = "#669bbc",
+                                "24" = "#4361ee")) +
+  scale_fill_manual(values = c("2" = "#caf0f8",
+                                "6" = "#219ebc",
+                                "12" = "#669bbc",
+                                "24" = "#4361ee"))
+
+mouse_correlation_ggpairs_alldays
+#Save
+mouse_correlation_ggpairs_alldays %>%
+  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_alldays_Ecoli_GSE33341.png"),
+         height = 10,
+         width = 10)
+beep()
+
+
+
+#Timepoint 2
+timepoint_select = 2
+mouse_correlation_ggpairs_day2 = ggpairs(GSE33341_log2fc_sample_wide %>% 
+                                              filter(timepoint == 2) %>% 
+                                              mutate(timepoint = as.character(timepoint),
+                                                     timepoint = fct_reorder(timepoint, as.numeric(timepoint))),
+                                    columns = 3:7,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select, "GSE33341, C57BL/6J, E.coli"), 
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point)
+                                    ) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("2" = "#caf0f8",
+                                "6" = "#219ebc",
+                                "12" = "#669bbc",
+                                "24" = "#4361ee")) +
+  scale_fill_manual(values = c("2" = "#caf0f8",
+                                "6" = "#219ebc",
+                                "12" = "#669bbc",
+                                "24" = "#4361ee"))
+
+mouse_correlation_ggpairs_day2
+#Save
+mouse_correlation_ggpairs_day2 %>%
+  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_day2_Ecoli_GSE33341.png"),
+         height = 10,
+         width = 10)
+beep()
+
+#Timepoint 6
+timepoint_select = 6
+mouse_correlation_ggpairs_day6 = ggpairs(GSE33341_log2fc_sample_wide %>% 
+                                              filter(timepoint == timepoint_select) %>% 
+                                              mutate(timepoint = as.character(timepoint),
+                                                     timepoint = fct_reorder(timepoint, as.numeric(timepoint))),
+                                    columns = 3:7,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select, "GSE33341, C57BL/6J, E.coli"), 
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point)
+                                    ) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("2" = "#caf0f8",
+                                "6" = "#219ebc",
+                                "12" = "#669bbc",
+                                "24" = "#4361ee")) +
+  scale_fill_manual(values = c("2" = "#caf0f8",
+                                "6" = "#219ebc",
+                                "12" = "#669bbc",
+                                "24" = "#4361ee"))
+
+mouse_correlation_ggpairs_day6
+#Save
+mouse_correlation_ggpairs_day6 %>%
+  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_day6_Ecoli_GSE33341.png"),
+         height = 10,
+         width = 10)
+beep()
+
+#Timepoint 12
+timepoint_select = 12
+mouse_correlation_ggpairs_day12 = ggpairs(GSE33341_log2fc_sample_wide %>% 
+                                              filter(timepoint == timepoint_select) %>% 
+                                              mutate(timepoint = as.character(timepoint),
+                                                     timepoint = fct_reorder(timepoint, as.numeric(timepoint))),
+                                    columns = 3:7,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select, "GSE33341, C57BL/6J, E.coli"), 
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point)
+                                    ) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("2" = "#caf0f8",
+                                "6" = "#219ebc",
+                                "12" = "#669bbc",
+                                "24" = "#4361ee")) +
+  scale_fill_manual(values = c("2" = "#caf0f8",
+                                "6" = "#219ebc",
+                                "12" = "#669bbc",
+                                "24" = "#4361ee"))
+
+mouse_correlation_ggpairs_day12
+#Save
+mouse_correlation_ggpairs_day12 %>%
+  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_day12_Ecoli_GSE33341.png"),
+         height = 10,
+         width = 10)
+beep()
+
+#Timepoint 24
+timepoint_select = 24
+mouse_correlation_ggpairs_day24 = ggpairs(GSE33341_log2fc_sample_wide %>% 
+                                              filter(timepoint == timepoint_select) %>% 
+                                              mutate(timepoint = as.character(timepoint),
+                                                     timepoint = fct_reorder(timepoint, as.numeric(timepoint))),
+                                    columns = 3:7,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select, "GSE33341, C57BL/6J, E.coli"), 
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point)
+                                    ) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("2" = "#caf0f8",
+                                "6" = "#219ebc",
+                                "12" = "#669bbc",
+                                "24" = "#4361ee")) +
+  scale_fill_manual(values = c("2" = "#caf0f8",
+                                "6" = "#219ebc",
+                                "12" = "#669bbc",
+                                "24" = "#4361ee"))
+
+mouse_correlation_ggpairs_day24
+#Save
+mouse_correlation_ggpairs_day24 %>%
+  ggsave(filename = here("Figures", "mouse_correlation_ggpairs_day24_Ecoli_GSE33341.png"),
+         height = 10,
+         width = 10)
+beep()
+
+
+
 ```
 
 
