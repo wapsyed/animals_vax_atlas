@@ -147,8 +147,9 @@ GSE33341_human_eset <- exprs(eset_human) %>%
   rownames_to_column("probe_id")
 ```
 
-Annotate genes
-This procedure was done using only one batch
+#### Mouse
+##### Annotate genes
+This procedure was done using only one batch (8)
 ```{r}
 #Annotate genes ------
 #Mouse -----
@@ -168,13 +169,21 @@ GSE33341_log2fc_sample = GSE33341_mouse_expression_metadata %>%
          host_strain == "C57BL/6J",
          batch == "8") %>% 
   select(probe_id, comparison, batch, subject_num, day0_value_raw = value_raw) %>% 
+  #Get the mean expression value for healthy
+  group_by(probe_id, comparison, batch) %>% 
+  summarize(n = n(),
+            #Mean of healthy
+            day0_value_raw = sum(day0_value_raw)/n,
+            batch) %>% 
+  select(probe_id, day0_value_raw) %>% 
   #Filter batch
   inner_join(GSE33341_mouse_expression_metadata %>% 
                filter(timepoint != "0",
                       host_strain == "C57BL/6J",
                       batch == "8"),
-             by = join_by("probe_id", "comparison", "batch", "subject_num")) %>% 
-  mutate(log2fc = value_raw - day0_value_raw)
+             by = join_by("probe_id", "comparison", "batch")) %>% 
+  mutate(log2fc = value_raw - day0_value_raw) %>% 
+  distinct() 
 
 #Check duplicates
 GSE33341_log2fc_sample %>% 
@@ -290,7 +299,7 @@ GSE33341_mouse_counts_log2_summary_annotated_genes %>%
 
 
 
-#### Import
+Import
 ```{r}
 #Import
 GSE33341_mouse_counts_log2_summary_annotated_probes =
@@ -310,7 +319,7 @@ GSE33341_log2fc_sample_wide
 ```
 
 
-#### Correlation plots, pairwise
+##### Correlation plots, pairwise
 ```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
 #Plot correlation between animals ------
 #Change params in geoms
@@ -479,7 +488,7 @@ mouse_correlation_ggpairs_day24 %>%
 beep()
 ```
 
-#### PCA
+##### PCA
 
 ```{r fig.height=4, fig.width=5}
 #Import metadata
@@ -543,7 +552,7 @@ pca_raw
 ```
 
 
-#### BTMs
+##### BTMs
 ```{r}
 #New BTM Annotation
 ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
@@ -579,41 +588,6 @@ dge_btm_mean_process = GSE33341_genes_btm %>%
 
 dge_btm_mean_process
 ```
-
-
-```{r}
-#Define colors
-btm_annotation %>% pull(group) %>% unique()
-
-immune_colors = c("SIGNAL TRANSDUCTION" = "#708d81",
-                  "CELL CYCLE" = "#06d6a0",
-                  "ECM AND MIGRATION" = "#52b788",
-                  "ENERGY METABOLISM" = "#95d5b2", 
-                  "INNATE RESPONSE" = "#184e77",
-                  "NEUTROPHILS" = "#219ebc",
-                  "NK CELLS" = "#a2d2ff",
-                  "IFN"= "#4361ee",
-                  "MONOCYTES" = "#4cc9f0",
-                  "PLATELETS" = "#7209b7",
-                  "B CELLS" = "#e5383b",
-                  "T CELLS" = "#f72585")
-immune_order = c("SIGNAL TRANSDUCTION",
-                  "CELL CYCLE",
-                  "ECM AND MIGRATION",
-                  "ENERGY METABOLISM", 
-                  "INNATE RESPONSE",
-                  "NEUTROPHILS",
-                  "NK CELLS",
-                  "IFN",
-                  "MONOCYTES",
-                  "PLATELETS",
-                  "B CELLS",
-                  "T CELLS")
-
-```
-
-
-##### Ggplot manual
 ```{r fig.height=8, fig.width=10}
 #Sample 5 participants
 set.seed(31415)
@@ -695,3 +669,472 @@ ggplot(aes(x = participant_1_value, y = participant_2_value, color = group)) +
        title = paste("GSE33341, Mouse, E. coli infection, Day", timepoint_selected))
 
 ```
+
+
+
+
+#### Human
+
+##### Annotate genes
+There is a batch effect 
+```{r}
+#Annotate genes ------
+#Mouse -----
+#Annotate data and calculate log2fc
+GSE33341_human_expression_metadata  = GSE33341_human_eset %>% 
+  pivot_longer(cols = 2:63,
+               names_to = "geo_sample",
+               values_to = "value_raw") %>% 
+  inner_join(GSE33341_ecoli_mouse_human_metadata, 
+             by = "geo_sample") 
+
+#There is a batch effect
+#   batch   status  n
+# 1  2034 infected  7
+# 2  2287  Healthy 43
+# 3  2287 infected  7
+# 4  2739 infected  5
+
+#Get value from day 0 and calculate Log2FC
+GSE33341_human_log2fc_sample = GSE33341_human_expression_metadata %>% 
+  #Filter batch
+  filter(organism == "Human",
+         status == "Healthy") %>% 
+  select(probe_id, participant_id = subject_id, status, day0_value_raw = value_raw) %>% 
+  group_by(probe_id, status) %>% 
+  summarize(n = n(),
+            #Mean of healthy
+            day0_value_raw = sum(day0_value_raw)/n) %>% 
+  select(probe_id, day0_value_raw) %>% 
+  #Join by probe id to infected participants
+  inner_join(GSE33341_human_expression_metadata %>% 
+               filter(site_infection == "urinary tract"), #1 lung, 19 urinary tract),
+             by = join_by("probe_id")) %>% 
+  mutate(log2fc = value_raw - day0_value_raw) %>% 
+  select(probe_id:subject_id, batch:status, log2fc)
+
+#Check duplicates
+GSE33341_human_log2fc_sample %>% 
+  filter(subject_id == "Ecoli_human_urinary tract_GSM824707",
+         probe_id == "1007_s_at") #OK
+
+```
+
+
+```{r}
+########### Filter and annotate probes -----
+## Set up biomart
+ensembl_mart <- useMart("ensembl")
+ensembl_mart <- useDataset("hsapiens_gene_ensembl", mart = ensembl_mart)
+
+## Get the MGI symbol
+gene_id <- GSE33341_human_log2fc_sample$probe_id %>% unique()
+listAttributes(ensembl_mart)%>% View()
+#Annotate
+#[HG-U133A_2] Affymetrix Human Genome U133A 2.0 Array
+annot <- getBM(
+  attributes = c("affy_hg_u133a_2",
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "hgnc_symbol",
+                 "description"),
+  filters = "affy_hg_u133a_2",
+  values = gene_id,
+  mart = ensembl_mart)
+
+#Gene lookup table
+HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez %>% 
+  rename(human_symbol = HGNC_symbol,
+         mouse_symbol =MGI.symbol,
+         HS.Entrez = Human.Entrez,
+         MM.Entrez = Mouse.Ortholog) %>% 
+  mutate(HS.Entrez = as.character(HS.Entrez),
+         MM.Entrez = as.character(MM.Entrez))
+```
+
+
+```{r}
+#Filter probe_ids with highest median expression for the same entrezgene_id
+GSE33341_human_counts_log2_summary_annotated_probes = GSE33341_human_log2fc_sample %>% 
+  group_by(probe_id) %>% 
+  summarize(mean = mean(value_raw, na.rm = TRUE),
+            median = median(value_raw, na.rm = T)) %>%  
+  inner_join(annot %>% 
+              rename(probe_id = affy_hg_u133a_2,
+                     human_symbol = hgnc_symbol), 
+            by = "probe_id") %>% 
+  group_by(entrezgene_id) %>% 
+  slice_max(median, n = 1) %>% 
+  select(probe_id, entrezgene_id, human_symbol) %>% 
+  distinct() %>%
+  
+  #Filter probes from the original table
+  inner_join(GSE33341_human_log2fc_sample, 
+             by = "probe_id") %>% 
+  
+  #Annotate hgnc symbols
+  inner_join(HS_MM_Symbol_Entrez %>% 
+               clean_names() %>% 
+               select(human_symbol), 
+             by = join_by("human_symbol")) 
+
+#Filter entrez ids with the highest median for the same symbol ------
+
+#Get one entrez_id by human symbol
+entrez_ids_highest_median = GSE33341_human_counts_log2_summary_annotated_probes %>%
+               select(probe_id, entrezgene_id, human_symbol, value_raw) %>%
+               group_by(human_symbol, entrezgene_id) %>%
+               #Get entrezids with highest median
+               summarize(median = median(value_raw, na.rm = T)) %>% 
+               slice_max(median, n = 1) %>%
+               ungroup() %>% 
+               select(human_symbol, entrezgene_id, median) %>% 
+               distinct() %>% 
+    summarise(n = n(), .by = c(human_symbol), entrezgene_id, median)
+
+#Get not duplicated genes
+entrez_ids_highest_median_notduplicated = entrez_ids_highest_median %>% 
+  filter(n == 1L) %>% 
+  distinct()
+
+#Filter randomly entrezids that have the same value for the same gene (human and mouse)
+entrez_ids_highest_median_duplicated = entrez_ids_highest_median %>%
+  filter(n > 1L) %>%
+  distinct() %>%
+  group_by(human_symbol) %>%
+  #Filter entrez_ids randomly
+  slice_sample(n = 1) %>%
+  select(human_symbol, entrezgene_id, median)
+
+#Merge tables
+entrez_ids_selected = entrez_ids_highest_median_notduplicated %>% 
+               bind_rows(entrez_ids_highest_median_duplicated) %>% 
+               select(human_symbol, entrezgene_id)
+
+#Annotate expression table
+GSE33341_human_counts_log2_summary_annotated_genes = GSE33341_human_counts_log2_summary_annotated_probes %>% 
+  ungroup() %>% 
+  inner_join(entrez_ids_selected %>% distinct(),
+             by = join_by("human_symbol","entrezgene_id"))%>% 
+  ungroup() %>% 
+  distinct()
+
+#Check if the duplicated entrez ids were filtered out
+GSE33341_human_counts_log2_summary_annotated_genes %>%          
+        filter(human_symbol == "MAGOH",
+               subject_id == "Ecoli_human_urinary tract_GSM824707") %>% 
+  
+  distinct()
+
+#Save
+GSE33341_human_counts_log2_summary_annotated_genes %>% 
+  saveRDS(file = here("tables", "GSE33341_human_counts_log2_summary_annotated_probes.rds"))
+```
+
+
+##### Import
+```{r}
+#Import
+GSE33341_human_counts_log2_summary_annotated_probes =
+  readRDS(file = here("tables", "GSE33341_human_counts_log2_summary_annotated_probes.rds"))
+
+#Check duplicates
+GSE33341_human_counts_log2_summary_annotated_probes %>% 
+  ungroup() %>% 
+dplyr::summarise(n = dplyr::n(), .by = c(entrezgene_id, human_symbol, subject_id)) |>
+  dplyr::filter(n > 1L) %>% 
+  select(human_symbol, entrezgene_id) %>% 
+  distinct()
+
+#Pivot wider
+GSE33341_human_log2fc_sample_wide = GSE33341_human_counts_log2_summary_annotated_probes %>% 
+  select(human_symbol, status, subject_id, log2fc) %>%
+  group_by(human_symbol) %>% 
+  pivot_wider(names_from = subject_id,
+              values_from = log2fc) %>% 
+  ungroup()
+  
+#Print
+GSE33341_human_log2fc_sample_wide
+```
+
+
+##### Correlation plots, pairwise
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
+#Plot correlation between animals ------
+#Change params in geoms
+#Density
+my_dens <- function(data, mapping, ...) {
+  ggplot(data = data, mapping=mapping) +
+    geom_density(alpha = 0.2, color = "black")
+}
+#Points
+my_point <- function(data, mapping, ...) {
+  ggplot(data = data, mapping = mapping) +
+    geom_point(alpha = 0.8, ...)  
+}
+
+
+# Plot correlations for human -------
+participant_id_selected = GSE33341_human_counts_log2_summary_annotated_probes %>% 
+  ungroup() %>% 
+  select(subject_id) %>% 
+  distinct() %>% 
+  slice_sample(n = 5) %>% 
+  pull()
+
+#All timepoints
+human_correlation_ggpairs_alldays = ggpairs(GSE33341_human_log2fc_sample_wide %>% 
+                                              select(human_symbol, status, participant_id_selected),
+                                    columns = 3:7,
+                                    mapping = ggplot2::aes(color = status,
+                                                           fill = status),
+                                    title = "GSE33341, Human, E. coli infection", 
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point), 
+                                    ) +
+  theme_vaxgo() +
+  scale_color_manual(values = "#219ebc") +
+  scale_fill_manual(values = "#219ebc") 
+
+human_correlation_ggpairs_alldays
+
+#Save
+human_correlation_ggpairs_alldays %>%
+  ggsave(filename = here("Figures", "human_correlation_ggpairs_alldays_Ecoli_GSE33341.png"),
+         height = 10,
+         width = 10)
+beep()
+```
+
+
+##### PCA
+
+```{r fig.height=4, fig.width=5}
+#Import metadata
+annotation_samples_pca = GSE33341_human_counts_log2_summary_annotated_probes %>% 
+  select(sample = subject_id, subject_id, status, organism, batch) %>% 
+  distinct()
+
+# PCA with raw values
+clean_matrix_raw = GSE33341_human_counts_log2_summary_annotated_probes %>% 
+  select(sample = subject_id, entrezgene_id, log2fc) %>% 
+  filter(!entrezgene_id == "") %>% 
+  distinct() %>%
+  pivot_wider(names_from = "sample",
+              values_from = "log2fc") %>% 
+  column_to_rownames("entrezgene_id") %>% 
+  as.matrix()
+
+clean_matrix_raw[!is.finite(clean_matrix_raw)] <- 0
+
+pca_raw <- prcomp(t(clean_matrix_raw), scale. = TRUE)
+pca_raw_df <- as_tibble(pca_raw$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_raw$x)) %>% 
+  left_join(annotation_samples_pca, by = "sample")
+
+#Plot
+pca_raw <- pca_raw_df %>%
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = batch,
+      fill = batch,
+      shape = organism,
+      label = sample) +
+  geom_point(size = 3, 
+             alpha = 1, 
+             pch = 24, 
+             color = "black") +
+  theme_vaxgo() +
+  # guides(fill = "none") +
+ # scale_color_manual(values = "#219ebc") +
+ #  scale_fill_manual(values = "#219ebc") +
+  labs(title = "Human, E. coli, GSE33341",
+       shape = "Organism",
+       fill = "Batch") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank())
+pca_raw 
+
+```
+
+##### BTMs
+```{r}
+#New BTM Annotation
+ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
+btm_annotation = read.table(file = here("VaxGO",  "BTM functional groups V3.txt"), sep="\t", header=TRUE) %>% 
+  clean_names() %>% 
+  rename(id = name) %>% 
+  filter(group != "")
+
+btm_annotation_genes = ImmuneGO_BTM_grouped_genes %>% 
+               inner_join(btm_annotation %>% 
+                            rename(process = id), 
+                          by = "process") %>% 
+               rename(symbol = genes)
+
+#Annotate genes by BTM
+GSE33341_human_genes_btm = GSE33341_human_counts_log2_summary_annotated_probes %>% 
+  ungroup() %>% 
+  rename(mm_entrez = entrezgene_id) %>% 
+  select(symbol = human_symbol, participant_id = subject_id, geo_sample, status, log2fc) %>% 
+  inner_join(btm_annotation_genes, by = "symbol")
+
+
+dge_human_btm_mean_process = GSE33341_human_genes_btm %>%
+  mutate(condition = "infected") %>% 
+  group_by(participant_id, process) %>% 
+  summarize(mean_log2fc = mean(log2fc)) %>%
+  pivot_wider(names_from = "participant_id", values_from = "mean_log2fc") %>% 
+  inner_join(btm_annotation_genes %>% 
+               select(process, group, subgroup) %>% 
+               distinct(),
+             by = "process") %>% 
+  ungroup()
+
+dge_human_btm_mean_process
+```
+```{r fig.height=8, fig.width=10}
+#Sample 5 participants
+set.seed(31415)
+
+#Create table
+ggpairs_data_dge_human_btm_mean_process = dge_human_btm_mean_process %>%  
+  ungroup()
+
+sample_participants_5 = GSE33341_human_counts_log2_summary_annotated_probes %>% 
+  ungroup() %>% 
+  select(subject_id) %>% 
+  distinct() %>% 
+  slice_sample(n = 5) %>% 
+  pull()
+
+plot_data <-
+  #Pivot longer, 1st participant
+  ggpairs_data_dge_human_btm_mean_process %>%
+  # filter(timepoint == timepoint_selected) %>% 
+  select(group, process, sample_participants_5) %>%
+  pivot_longer(cols = !c("group", "process"), 
+               names_to = "participant_1", 
+               values_to = "participant_1_value") %>%
+  
+  #Add a column to the 2nd participant
+  inner_join(
+    ggpairs_data_dge_human_btm_mean_process %>%
+      # filter(timepoint == timepoint_selected) %>% 
+      select(group, process, sample_participants_5) %>%
+      pivot_longer(cols = !c("group", "process"), 
+                   names_to = "participant_2",
+                   values_to = "participant_2_value"),
+    by = c("process", "group")) %>%
+  #Remove pares idênticos (mesma variável)
+  filter(participant_1 != participant_2) %>%
+  
+  #Remove dupes (ex: A-B e B-A → A-B)
+  mutate(pair_min = pmin(participant_1, participant_2),
+         pair_max = pmax(participant_1, participant_2)) %>%
+  distinct(process, pair_min, pair_max, .keep_all = TRUE) %>% 
+  
+  # Arrange participants to create a pairwise matrix
+  mutate(
+    participant_1 = factor(participant_1, levels = sample_participants_5),
+    participant_2 = factor(participant_2, levels = rev(sample_participants_5)))
+
+
+#Calculate correlation
+cor_labels <- plot_data %>%
+  group_by(participant_1, participant_2) %>%
+  summarise(cor_value = cor(participant_1_value, participant_2_value, use = "pairwise.complete.obs", method = "pearson"),
+            .groups = "drop") %>%
+  mutate(r_squared = cor_value ^ 2,
+         cor_label = paste0("r = ", round(cor_value, 2), ", R² = ", round(r_squared, 2)))
+
+max_lim = max(plot_data$participant_1_value, plot_data$participant_2_value) + 0.5
+min_lim = min(plot_data$participant_1_value, plot_data$participant_2_value) - 0.5
+
+#Plot
+plot_data %>% 
+ggplot(aes(x = participant_1_value, y = participant_2_value, color = group)) +
+  geom_point(alpha = 1) +
+  stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+    geom_label(data = cor_labels,
+            aes(x = 0, y = Inf, label = cor_label), 
+            hjust = 0.5, vjust = 1, inherit.aes = FALSE, size = 3) +
+  facet_grid(participant_2 ~ participant_1, scales = "free", drop = T) +
+  theme_vaxgo() +
+  ylim(min_lim, max_lim) +
+  xlim(min_lim, max_lim) +
+  theme(strip.text = element_text(size = 8),
+        legend.position = "right") +
+  scale_color_manual(values = immune_colors) +
+  labs(x = "Log2FC", 
+       y = "Log2FC", 
+       color = "",
+       title = paste("GSE33341, Human, E. coli infection"))
+
+```
+
+
+
+
+
+### Compare Human vs Mouse
+
+```{r}
+#Unite Mouse and Human datasets. Samples.
+human_mouse_saureus_log2fc_samples = 
+#Mouse
+GSE19668_counts_log2_summary_annotated_probes %>%
+  ungroup() %>% 
+  select(human_symbol, log2fc, participant_id, value_raw, 
+         timepoint, pathogen = treatment,
+         value_raw_ref = day0_value_raw) %>% 
+  mutate(organism = "Mouse") %>% 
+  
+  #Human
+  bind_rows(GSE33341_counts_log2_summary_annotated_probes %>% 
+  ungroup() %>% 
+  select(human_symbol = hgnc_symbol, log2fc, value_raw, value_raw_ref, 
+         participant_id, timepoint, pathogen) %>% 
+  mutate(organism = "Human"))
+
+#Calculate the mean log2fc
+human_mouse_saureus_log2fc_avg = human_mouse_saureus_log2fc_samples %>% 
+  group_by(organism, human_symbol, timepoint) %>% 
+  summarize(
+            #Calculate the mean
+            mean_log2fc = mean(log2fc),
+            
+            #Calculate pvalue, t test
+            p_value = tryCatch(
+      t.test(value_raw, value_raw_ref, paired = TRUE, )$p.value,
+      error = function(e) NA),
+    .groups = "drop") %>%
+  mutate(p_adj = p.adjust(p_value, method = "BH")) %>% 
+  filter(human_symbol != "") %>% 
+  ungroup() %>% 
+  filter(timepoint %in% c(1, 2)) %>% 
+  mutate(timepoint = "1-2")
+
+#Pivot wider
+human_mouse_saureus_log2fc_avg_wide = human_mouse_saureus_log2fc_avg %>% 
+  select(organism, human_symbol, timepoint, mean_log2fc) %>% 
+  pivot_wider(names_from = "organism",
+              values_from = "mean_log2fc") %>% 
+  #Add padj columns
+  inner_join(human_mouse_saureus_log2fc_avg %>%
+               select(organism, human_symbol, timepoint, p_adj) %>%
+               pivot_wider(names_from = "organism",
+                           values_from = "p_adj") %>%
+               rename(padj_human = Human, padj_mouse = Mouse))
+
+```
+
+
+
+
