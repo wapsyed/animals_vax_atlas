@@ -1087,24 +1087,32 @@ ggplot(aes(x = participant_1_value, y = participant_2_value, color = group)) +
 
 ```{r}
 #Unite Mouse and Human datasets. Samples.
-human_mouse_saureus_log2fc_samples = 
+human_mouse_ecoli_log2fc_samples = 
 #Mouse
-GSE19668_counts_log2_summary_annotated_probes %>%
+GSE33341_mouse_counts_log2_summary_annotated_probes %>%
   ungroup() %>% 
-  select(human_symbol, log2fc, participant_id, value_raw, 
-         timepoint, pathogen = treatment,
-         value_raw_ref = day0_value_raw) %>% 
+  select(human_symbol, log2fc, participant_id = subject_id, 
+         pathogen, 
+         value_raw_ref = day0_value_raw, 
+         value_raw,
+         timepoint) %>% 
   mutate(organism = "Mouse") %>% 
   
   #Human
-  bind_rows(GSE33341_counts_log2_summary_annotated_probes %>% 
+  bind_rows(GSE33341_human_counts_log2_summary_annotated_probes %>% 
   ungroup() %>% 
-  select(human_symbol = hgnc_symbol, log2fc, value_raw, value_raw_ref, 
-         participant_id, timepoint, pathogen) %>% 
-  mutate(organism = "Human"))
+  select(human_symbol, log2fc,
+         value_raw_ref = day0_value_raw, 
+         value_raw,
+         participant_id = subject_id, pathogen) %>% 
+  mutate(organism = "Human",
+         timepoint = "Hospitalization"))
+```
 
+
+```{r}
 #Calculate the mean log2fc
-human_mouse_saureus_log2fc_avg = human_mouse_saureus_log2fc_samples %>% 
+human_mouse_ecoli_log2fc_avg = human_mouse_ecoli_log2fc_samples %>% 
   group_by(organism, human_symbol, timepoint) %>% 
   summarize(
             #Calculate the mean
@@ -1117,24 +1125,154 @@ human_mouse_saureus_log2fc_avg = human_mouse_saureus_log2fc_samples %>%
     .groups = "drop") %>%
   mutate(p_adj = p.adjust(p_value, method = "BH")) %>% 
   filter(human_symbol != "") %>% 
-  ungroup() %>% 
-  filter(timepoint %in% c(1, 2)) %>% 
-  mutate(timepoint = "1-2")
+  ungroup()
 
-#Pivot wider
-human_mouse_saureus_log2fc_avg_wide = human_mouse_saureus_log2fc_avg %>% 
-  select(organism, human_symbol, timepoint, mean_log2fc) %>% 
-  pivot_wider(names_from = "organism",
-              values_from = "mean_log2fc") %>% 
-  #Add padj columns
-  inner_join(human_mouse_saureus_log2fc_avg %>%
-               select(organism, human_symbol, timepoint, p_adj) %>%
-               pivot_wider(names_from = "organism",
-                           values_from = "p_adj") %>%
-               rename(padj_human = Human, padj_mouse = Mouse))
+#Pivot wider to compare human to different mouse times
+#Human
+human_mouse_ecoli_log2fc_avg_wide = 
+  
+  #Human
+  human_mouse_ecoli_log2fc_avg %>% 
+  filter(organism == "Human") %>% 
+  select(human_symbol, 
+         timepoint_human = timepoint, 
+         mean_log2fc_human = mean_log2fc,
+         p_value_human = p_value,
+         p_adj_human = p_adj) %>% 
+  inner_join(
+  #Mouse
+  human_mouse_ecoli_log2fc_avg %>% 
+  filter(organism == "Mouse") %>% 
+  select(human_symbol, 
+         timepoint_mouse = timepoint, 
+         mean_log2fc_mouse = mean_log2fc,
+         p_value_mouse = p_value,
+         p_adj_mouse = p_adj) %>% 
+    mutate(timepoint_mouse = fct_reorder(paste0(timepoint_mouse, "h"), c(timepoint_mouse %>% as.numeric()))),
+  by = "human_symbol") 
 
+human_mouse_ecoli_log2fc_avg_wide
+
+
+#Get immune and non immune genes
+human_mouse_ecoli_log2fc_avg_wide_degs_immune_nonimmune = human_mouse_ecoli_log2fc_avg_wide %>%
+  mutate(gene_type = "all") %>% 
+  bind_rows(
+  #Classify as immune or non_immune 
+    human_mouse_ecoli_log2fc_avg_wide %>% 
+  mutate(gene_type = if_else(human_symbol %in% ImmuneGO_BTM_grouped_genes$genes,
+                             "immune",
+                             "non_immune"))) %>%
+  #Filter DEGs in both organisms, same sign
+  filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05 &
+      sign(mean_log2fc_human) == sign(mean_log2fc_mouse)) %>%
+  group_by(timepoint_human, timepoint_mouse, gene_type)
+
+#Summary
+degs_immune_nonimmune_summary = human_mouse_ecoli_log2fc_avg_wide_degs_immune_nonimmune %>% 
+  summarize(n_genes = n(), .groups = "drop")
+
+# Calculate the correlation
+cor_data <- human_mouse_ecoli_log2fc_avg_wide_degs_immune_nonimmune %>%
+  # filter(p_adj_human <= 0.05 | p_adj_mouse <= 0.05) %>%
+  group_by(timepoint_human, timepoint_mouse, gene_type) %>%
+  summarize(
+    cor_test = list(cor.test(mean_log2fc_mouse, mean_log2fc_human,
+                             method = "pearson", use = "complete.obs")),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    cor_value = map_dbl(cor_test, ~ .x$estimate),
+    p_value   = map_dbl(cor_test, ~ .x$p.value),
+    label_pos_x = map_dbl(cor_test, ~ max(human_mouse_ecoli_log2fc_avg_wide$mean_log2fc_mouse, na.rm = TRUE)),
+    label_pos_y = map_dbl(cor_test, ~ max(human_mouse_ecoli_log2fc_avg_wide$mean_log2fc_human + 1, na.rm = TRUE)),
+    label = paste0("r = ", round(cor_value, 2), 
+                   ", p = ", signif(p_value, 2))
+  )
+
+  cor_data
+  
+  
 ```
 
+```{r fig.height=3, fig.width=10}
+
+human_mouse_ecoli_log2fc_avg_wide_scatterplot 
+
+human_mouse_ecoli_log2fc_avg_wide %>% 
+  filter(p_adj_human <= 0.05 | p_adj_mouse <= 0.05) %>% 
+  
+  #Plot
+  ggplot() +
+  aes(x = mean_log2fc_mouse,
+      y = mean_log2fc_human) +
+  
+  #All DEGs
+  geom_point(color = "gray90") +
+  
+  #Facet
+  facet_grid(~timepoint_human~timepoint_mouse) +
+  
+  #DEGs in both organisms
+  geom_point(color = "#4DBBD5FF",
+             fill = "#4DBBD5FF",
+             alpha = 1.5,
+             size = 1,
+             pch = 21,
+             data = human_mouse_ecoli_log2fc_avg_wide %>%
+               #Filter DEGs in both organisms, same sign
+               filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05 & sign(mean_log2fc_human) == sign(mean_log2fc_mouse))) +
+  
+  #Immune DEGs
+  geom_point(color = "#4361ee",
+             fill = "#4361ee",
+             alpha = 1.5,
+             size = 1,
+             pch = 21,
+             data = human_mouse_ecoli_log2fc_avg_wide %>%
+               filter(human_symbol %in% c(ImmuneGO_BTM_grouped_genes$genes)) %>% 
+               #Filter DEGs in both organisms, same sign
+               filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05 & sign(mean_log2fc_human) == sign(mean_log2fc_mouse))) +
+  
+  #Add linear models
+  stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
+  stat_smooth(method = "lm", geom = "line", color = "#4DBBD5FF", alpha = 0.5, se = F, size = 1,
+              data = human_mouse_ecoli_log2fc_avg_wide %>%
+               filter(human_symbol %in% c(ImmuneGO_BTM_grouped_genes$genes)) %>% 
+               #Filter DEGs in both organisms, same sign
+               filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05 & sign(mean_log2fc_human) == sign(mean_log2fc_mouse))) +
+  
+    #Add lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  
+  #Add correlation metrics (Pearson)
+  geom_label(
+    data = cor_data %>% filter(gene_type == "immune"),
+    aes(x = 4, y = 7, label = label),
+    inherit.aes = FALSE,
+    fill = "white",
+    hjust = 1,
+    vjust = 1,
+    size = 2) +
+  
+  #Adjust the axes range
+  ylim(-4, 7) +
+  
+  #Theme
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size =10),
+        axis.text.y = element_text(size = 10),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
+  theme(legend.position = "top",
+        legend.direction = "horizontal") +
+  labs(x = "Mouse L2FC",
+       y = "Human L2FC",
+       title= "Correlation plot, Log2-Fold Change, GSE19668 and GSE33341 ")
+
+
+```
 
 
 
