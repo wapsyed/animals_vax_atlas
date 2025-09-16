@@ -1,0 +1,510 @@
+---
+title: "Exploring other datasets"
+author: "Wasim Aluísio Prates-Syed"
+date: "2025-07-23"
+output: 
+  html_document: 
+    toc: TRUE
+    toc_depth: 4
+    code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval=FALSE, cache = TRUE)
+```
+
+
+# Exploring other datasets: A general analysis
+
+## Import required codes
+```{r}
+# install.packages("here")
+library(here)
+source(here("scripts_notebooks", "required.R"))
+```
+
+## Found in translation
+Ref: Normand, R., Du, W., Briller, M. et al. Found In Translation: a machine learning model for mouse-to-human inference. Nat Methods 15, 1067–1073 (2018). https://doi.org/10.1038/s41592-018-0214-9
+Github: https://github.com/shenorrLabTRDF/FIT.mouse2man 
+
+- Standard (ST): which include human and mouse datasets that were conducted in separate experiments;
+- Reference (RF), in which the human and mouse datasets were directly contrasted in a publication authored by researchers who had generated at least one of the datasets.
+- CSP IDs can be enumarated by different comparisons with different mice strains, for example A/J and CD1 mice, and timpoints (not clearly stated).
+```{r}
+#Install model package
+# library(devtools)
+# devtools::install_github('shenorrLabTRDF/FIT.mouse2man')
+library(FIT.mouse2man)
+
+#Import files
+pca_rotations = FIT.mouse2man::pca_rotations
+best_models = FIT.mouse2man::best_models
+slopes_per_gene_V2.0 = FIT.mouse2man::slopes_per_gene_V2.0
+
+#Gene lookup table
+HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez %>% 
+  rename(human_symbol = HGNC_symbol,
+         mouse_symbol =MGI.symbol,
+         HS.Entrez = Human.Entrez,
+         MM.Entrez = Mouse.Ortholog) %>% 
+  mutate(HS.Entrez = as.character(HS.Entrez),
+         MM.Entrez = as.character(MM.Entrez))
+
+# MM_Entrez_symbol_desc = FIT.mouse2man::MM_Entrez_symbol_desc
+# Psoriasis_classifier_neg = FIT.mouse2man::Psoriasis_classifier_neg
+# StaphInfection_classifier_pos = FIT.mouse2man::StaphInfection_classifier_pos
+
+#Training data
+AllData_V2.0 = FIT.mouse2man::AllData_V2.0 %>% 
+  mutate(csp_id_short = str_remove(CSP_ID, "Microarrays_RF_"),
+         csp_id_short = str_remove(csp_id_short, "Microarrays_ST_"),
+         csp_id_short = str_remove(csp_id_short, "RNAseq_ST_"),
+         csp_id_short = str_remove(csp_id_short, "RNAseq_RF_")) %>% 
+  inner_join(HS_MM_Symbol_Entrez, 
+             by = join_by("HS.Entrez", "MM.Entrez")) %>% 
+  separate(csp_id_short, into = c("del", "csp_id_index")) %>% 
+  select(-del)
+  
+AllData_V2.0$csp_id_index %>% unique()
+
+```
+
+
+## Filter datasets
+Get metadata for datasets on Supplementary Files of FIT paper and filter datasets with blood-derived samples
+```{r}
+#Get metadata for datasets on Supplementary Files of FIT paper and filter datasets with blood-derived samples
+#Import
+fit_training_datasets_metadata <- read_excel(here("FIT_Mouse2man", "41592_2018_214_MOESM3_ESM.xlsx"))
+
+#Clean grouped header
+fit_training_datasets_metadata_newcols = fit_training_datasets_metadata %>% 
+  slice_head(n = 2) %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  
+  #Fill sub columns
+  rownames_to_column("V0") %>% 
+  
+  mutate(V1 = if_else(is.na(V1), V0, V1),
+         V0 = ifelse(str_detect(V0, "^\\.\\.\\.\\d+$"), NA, V0),
+         V1 = ifelse(str_detect(V1, "^\\.\\.\\.\\d+$"), NA, V1)) %>% 
+  
+  #Fill columns
+  fill(V0, .direction = "down") %>% 
+  fill(V1, .direction = "down") %>% 
+  
+  #Fill columns manually
+  mutate(V2 = if_else(V0 == V1, V0, V2),
+         V3 = if_else(V0 == V1, V0, NA),
+         V3 = if_else(is.na(V2), paste0(V0,"_", V1), V2),
+         V2 = if_else(is.na(V2), V3, V2),
+         V3 = if_else(V2 == "Disease" & V0 != "Disease", 
+                      paste0(V0, "_", V1, "_", V2), 
+                      V3),
+         V3 = if_else(V2 == "Control" & V0 != "Control", 
+                      paste0(V0, "_", V1, "_", V2), 
+                      V3),
+         #Clean table further
+         V3 = str_remove(V3, " Data"),
+         V3 = make_clean_names(V3)) %>% 
+  select(V3)
+
+#Set new names
+fit_training_datasets_metadata_clean = fit_training_datasets_metadata %>% 
+  filter(!row_number() %in% c(1:2)) %>% 
+  setNames(fit_training_datasets_metadata_newcols %>% pull()) %>% 
+  fill(disease, .direction = "down")
+
+fit_training_datasets_metadata_clean %>% 
+  saveRDS(file = here("FIT_Mouse2man", "fit_training_datasets_metadata_clean.rds"))
+  
+#Get datasets with blood-derived samples only, in both organisms
+fit_training_datasets_blood = fit_training_datasets_metadata_clean %>% 
+  filter(str_detect(human_tissue_control, "Blood"),
+         str_detect(mouse_tissue_disease, "Blood"))
+
+AllData_V2.0_blood = AllData_V2.0 %>% 
+  filter(CSP_ID %in% c(fit_training_datasets_blood$comparison_id %>% unique())) 
+
+AllData_V2.0_blood %>% 
+  saveRDS(here("new_models", "AllData_FIT_training_blood.rds"))
+
+```
+
+
+##Import
+```{r}
+#Import data
+fit_training_datasets_metadata_clean = read_rds(file = here("FIT_Mouse2man", "fit_training_datasets_metadata_clean.rds"))
+AllData_V2.0_blood = read_rds(here("new_models", "AllData_FIT_training_blood.rds"))
+ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
+
+```
+
+## Plot distributions
+```{r fig.height=8, fig.width=10}
+AllData_V2.0_distributions_plot = AllData_V2.0 %>% 
+  clean_names() %>% 
+  pivot_longer(cols = c(fc_hs:qval_mm),
+               names_to = "metric",
+               values_to = "value") %>% 
+  mutate(organism = if_else(str_detect(metric, "mm"),"Mouse", "Human")) %>% 
+  filter(metric %in% c("fc_hs", "fc_mm")) %>% 
+  mutate(metric = if_else(str_detect(metric, "fc"), "fc", metric)) %>% 
+  ggplot() +
+  aes(x = value, fill = organism) +
+  geom_histogram( position = position_identity(), alpha = 0.5, bins = 50) +
+  facet_wrap(~disease, 
+             scale = "free_y", axes = "all" 
+             # strip.position="right"
+             ) +
+  scale_y_continuous(expand = c(0.01, 0.01), n.breaks = 3) +
+  scale_x_continuous(limits = c(-2, 2)) +
+    scale_fill_manual(
+  values = c(
+    FIT = "#CE1800FF", 
+    Mouse = "#546E7AFF",
+    Human = "#4DBBD5FF"))+
+    scale_color_manual(
+  values = c(
+    FIT = "#CE1800FF", 
+    Mouse = "#546E7AFF",
+    Human = "#4DBBD5FF"))+
+    theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", angle = 0, hjust = 0), 
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "Organism",
+       x = "Log2-fold change",
+       y = "Frequency",
+       title = "All samples")
+
+AllData_V2.0_blood_distributions_plot = AllData_V2.0_blood %>% 
+  clean_names() %>% 
+  pivot_longer(cols = c(fc_hs:qval_mm),
+               names_to = "metric",
+               values_to = "value") %>% 
+  mutate(organism = if_else(str_detect(metric, "mm"),"Mouse", "Human")) %>% 
+  filter(metric %in% c("fc_hs", "fc_mm")) %>% 
+  mutate(metric = if_else(str_detect(metric, "fc"), "fc", metric)) %>% 
+  ggplot() +
+  aes(x = value, fill = organism) +
+  geom_histogram( position = position_identity(), alpha = 0.5, bins = 50) +
+  facet_wrap(~disease, 
+             scale = "free_y", axes = "all",
+             ncol = 1
+             # strip.position="right"
+             ) +
+  scale_y_continuous(expand = c(0.01, 0.01), n.breaks = 3) +
+  scale_x_continuous(limits = c(-2, 2)) +
+    scale_fill_manual(
+  values = c(
+    Mouse = "#546E7AFF",
+    Human = "#4DBBD5FF"))+
+    scale_color_manual(
+  values = c(
+    Mouse = "#546E7AFF",
+    Human = "#4DBBD5FF"))+
+    theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", angle = 0, hjust = 0), 
+        panel.spacing.y = unit(0.8, "lines"),
+        plot.margin = margin(0.5, 1, 0.2, 1, "cm"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "Organism",
+       x = "Log2-fold change",
+       y = "Frequency",
+       title = "Blood samples")
+
+
+#Plot all
+AllData_V2.0_distributions_all = AllData_V2.0_distributions_plot + AllData_V2.0_blood_distributions_plot +
+  plot_layout(widths = c(1, 0.15),
+              guides = "collect",
+              axes = "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+#Save
+AllData_V2.0_distributions_all %>% 
+  ggsave(filename = here("Figures", "FIT_Training data_distributions_all.png"),
+         width = 10,
+         height = 10)
+
+```
+
+
+
+##Correlation plots
+```{r fig.height=12, fig.width=10}
+# Calculate the correlation
+cor_data <- AllData_V2.0_blood %>%
+  clean_names() %>%
+  filter(qval_hs <= 0.05 | qval_mm <= 0.05) %>%
+  mutate(csp_id_index = fct_relevel(csp_id_index, as.character(1:30))) %>%
+  group_by(disease, csp_id_index) %>%
+  summarize(
+    cor_value = cor(fc_mm, fc_hs, method = "pearson", use = "complete.obs"),
+    label_pos_x = max(fc_mm, na.rm = TRUE),
+    label_pos_y = max(fc_hs, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(label = paste0("r = ", round(cor_value, 2)))
+
+
+#Log2FC scatterplot
+blood_l2fc_scatterplot = AllData_V2.0_blood %>%
+  clean_names() %>%
+  mutate(csp_id_index = fct_relevel(csp_id_index, as.character(1:30))) %>% 
+  filter(qval_hs <= 0.05 | qval_mm <= 0.05) %>% 
+  
+  #Plot
+  ggplot() +
+  aes(x = fc_mm,
+      y = fc_hs) +
+  
+  facet_nested_wrap(~disease+paste("Comparison", csp_id_index), scales = "free", nest_line = T) +
+  
+  #All DEGs
+  geom_point(color = "gray90") +
+  
+  #DEGs in both organisms
+  geom_point(color = "#4DBBD5FF",
+             fill = "#4DBBD5FF",
+             alpha = 1.5,
+             size = 1,
+             pch = 21,
+             
+             #Get only DEGs with the same sign (positive correlation)
+             data = AllData_V2.0_blood %>%
+               clean_names() %>%
+               #Filter DEGs in both organisms, same sign
+               filter(qval_hs <= 0.05 & qval_mm <= 0.05 & sign(fc_hs) == sign(fc_mm))) +
+  
+  #Immune DEGs
+  geom_point(color = "#4361ee",
+             fill = "#4361ee",
+             alpha = 1.5,
+             size = 1,
+             pch = 21,
+             data = AllData_V2.0_blood %>%
+               clean_names() %>%
+               filter(human_symbol %in% c(ImmuneGO_BTM_grouped_genes$genes)) %>% 
+               filter(qval_hs <= 0.05 & qval_mm <= 0.05 & sign(fc_hs) == sign(fc_mm))) +
+  
+  #Add linear models
+  stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
+  
+  #Add lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  
+  scale_x_continuous(breaks = c(0, 1, 2, 5, 7, 10, -1, -2, -5, -7, -10)) +
+  scale_y_continuous(breaks = c(0, 1, 2, 5, 7, 10, -1, -2, -5, -7, -10)) +
+  #Add correlation metrics
+  geom_label(
+    data = cor_data,
+    aes(x = label_pos_x, y = label_pos_y, label = label),
+    inherit.aes = FALSE,
+    fill = "white",
+    hjust = 1,
+    vjust = 1,
+    size = 3
+  ) +
+  
+  #Theme
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size =8),
+        axis.text.y = element_text(size = 8),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
+  theme(legend.position = "none",
+        legend.direction = "horizontal") +
+  labs(x = "Mouse L2FC",
+       y = "Human L2FC",
+       title= "Correlation plot, Log2-Fold Change")
+
+blood_l2fc_scatterplot
+
+#Save
+blood_l2fc_scatterplot %>% 
+  ggsave(filename = here("Figures", "FIT_TrainingData_blood_l2fc_scatterplot.png"),
+         height = 12,
+         width = 10)
+
+```
+
+
+
+
+
+### Annotate genes
+```{r fig.height=8, fig.width=8}
+
+## Plot correlation-----
+# cov_genes_FIT_training = AllData_V2.0 %>% 
+#   clean_names() %>% 
+#   select(hs_entrez, mean_human = fc_hs, mean_mouse = fc_mm) %>% 
+#   inner_join(HS_MM_Symbol_Entrez %>%
+#                clean_names() %>%
+#                select(human_symbol = hgnc_symbol,
+#                       hs_entrez = human_entrez) %>% 
+#                mutate(hs_entrez = as.character(hs_entrez)),
+#              by = "hs_entrez") %>% 
+#   arrange(human_symbol) %>% 
+#   group_by(human_symbol) %>% 
+#   summarize(sd_human = sd(mean_human),
+#             cov = cov(mean_human, mean_mouse),
+#             mean_human_time = mean(mean_human),
+#             mean_mouse_time = mean(mean_mouse)) %>% 
+#   arrange(-cov)
+# 
+# cov_genes_FIT_training %>% filter(abs(cov) > 0.001) #15891 genes from 6,373 (92.9%)
+# cov_genes_FIT_training %>% filter(abs(cov) > 0.01) #11320 genes from 6,373 (50.3%)
+# cov_genes_FIT_training %>% filter(abs(cov) > 0.1) #1151 genes
+# cov_genes_FIT_training %>% filter(abs(cov) > 0.2) #356 genes
+# cov_genes_FIT_training %>% filter(abs(cov) > 0.3) #186 genes
+# 
+# 
+# genes_vary_human_all_FIT = cov_genes_FIT_training %>% 
+#   filter(abs(mean_human_time) >= 0.1,
+#         abs(mean_mouse_time) <= 0.1) %>% 
+#   arrange(-abs(cov))
+# 
+# genes_vary_mouse_all_FIT = cov_genes_FIT_training %>% 
+#   filter(abs(mean_mouse_time) >= 0.1,
+#                 abs(mean_human_time) <= 0.1) %>% 
+#   arrange(-abs(cov))
+# 
+# genes_vary_human_mouse_all_FIT = cov_genes_FIT_training %>% 
+#   filter(abs(mean_human_time) >= 0.1,
+#          abs(mean_mouse_time) >= 0.1) %>% 
+#   arrange(-abs(cov))
+# 
+# genes_not_vary_human_mouse_all_FIT = cov_genes_FIT_training %>% 
+#    filter(abs(mean_human_time) <= 0.1, 
+#           abs(mean_mouse_time) <= 0.1) %>%  
+#   arrange(-abs(cov))
+# 
+# cov_genes_FIT_training %>% filter(abs(mean_human_time) > 0.1) #3,962
+# cov_genes_FIT_training %>% filter(abs(mean_human_time) > 0.2) #2191
+# 
+# cov_genes_FIT_training %>% filter(abs(mean_mouse_time) > 0.1) #3363
+# cov_genes_FIT_training %>% filter(abs(mean_mouse_time) > 0.2) #1631
+# 
+# cov_genes_FIT_training %>% filter(abs(mean_mouse_time) < 0.1) #3,010
+# cov_genes_FIT_training %>% filter(abs(mean_mouse_time) < 0.2) #4742
+# 
+# 
+# 
+# genes_vary_human_all_FIT #5,787
+# genes_vary_mouse_all_FIT #1,807
+# genes_not_vary_human_mouse_all_FIT #6,476
+# genes_vary_human_mouse_all_FIT #2,355
+
+# #Plot
+# genes_vary_human = cov_genes_FIT_training %>% 
+#   ggplot() +
+#   aes(x = mean_human_time,
+#       y = mean_mouse_time) +
+#     geom_point(color = "#3182bd", fill = NA, pch = 21) +
+#   scale_x_continuous(limits = c(-1.5, 1.5)) +
+#   scale_y_continuous(limits = c(-1.5, 1.5)) +
+#     gghighlight(abs(mean_human_time) >= 0.1,
+#                 abs(mean_mouse_time) <= 0.1,
+#               use_direct_label = FALSE, 
+#               unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+#   geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
+#                   data = cov_genes_FIT_training %>% 
+#                     filter(abs(mean_human_time) > 0.1,
+#                 abs(mean_mouse_time) <= 0.1) %>% 
+#                   arrange(-abs(cov)) %>% 
+#                   slice_head(n = 10)) +
+#    theme_vaxgo() +
+#   labs(title = "Which genes vary only in human?",
+#        subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1.")
+# 
+# genes_vary_mouse = cov_genes_FIT_training %>% 
+#   ggplot() +
+#   aes(x = mean_human_time,
+#       y = mean_mouse_time) +
+#     geom_point(color = "#90A4AEFF", fill = NA, pch = 21) +
+#   scale_x_continuous(limits = c(-1.5, 1.5)) +
+#   scale_y_continuous(limits = c(-1.5, 1.5)) +
+#   gghighlight(abs(mean_mouse_time) >= 0.1,
+#                 abs(mean_human_time) <= 0.1,
+#               use_direct_label = FALSE,
+#               unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+#   geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
+#                   data = cov_genes_FIT_training %>% 
+#                     filter(abs(mean_mouse_time) >= 0.1,
+#                 abs(mean_human_time) <= 0.1) %>% 
+#                   arrange(-abs(cov)) %>% 
+#                   slice_head(n = 10)) +
+# 
+#   theme_vaxgo() +
+#   labs(title = "Which genes vary only in mouse?",
+#        subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1") 
+# 
+# 
+# genes_vary_mouse_human = cov_genes_FIT_training %>% 
+#   ggplot() +
+#   aes(x = mean_human_time,
+#       y = mean_mouse_time) +
+#   geom_point(color = "black", fill = NA, pch = 21) +
+#   scale_x_continuous(limits = c(-1.5, 1.5)) +
+#   scale_y_continuous(limits = c(-1.5, 1.5)) +
+#   gghighlight(abs(mean_human_time) >= 0.1,
+#                 abs(mean_mouse_time) >= 0.1,
+#                             unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+#   geom_label_repel(aes(label = human_symbol), max.overlaps = 20, force_pull = 4, size = 3,
+#                   data = cov_genes_FIT_training %>% 
+#                     filter(abs(mean_human_time) >= 0.1,
+#                 abs(mean_mouse_time) >= 0.1) %>% 
+#                   arrange(-abs(cov)) %>% 
+#                   slice_head(n = 10)) +
+#   theme_vaxgo() +
+#   labs(title = "Which genes vary in both human and mouse?",
+#        subtitle = "Top 10 genes with highest covariance. Mean cutoff > 0.1")
+# 
+# genes_notvary_mouse_human = cov_genes_FIT_training %>% 
+#   ggplot() +
+#   aes(x = mean_human_time,
+#       y = mean_mouse_time) +
+#   geom_point(color = "black", fill = NA, pch = 21) +
+#   scale_x_continuous(limits = c(-1.5, 1.5)) +
+#   scale_y_continuous(limits = c(-1.5, 1.5)) +
+#   gghighlight(abs(mean_human_time) <= 0.1,
+#                 abs(mean_mouse_time) <= 0.1,
+#               unhighlighted_params = list(alpha = 0.2, fill = NA)) +
+#   geom_label_repel(aes(label = human_symbol), 
+#                   # color = "red",
+#                   max.overlaps = 20, force_pull = 4, size = 3, 
+#                   data = cov_genes_FIT_training %>% 
+#                     filter(abs(mean_human_time) <= 0.1, 
+#                              abs(mean_mouse_time) <= 0.1) %>%  
+#                     arrange(-abs(cov)) %>% 
+#                     slice_head(n = 10)) +
+#   theme_vaxgo() +
+#   labs(title = "Which genes do not vary in both human and mouse?",
+#        subtitle = "Top 10 genes with highest covariance. Mean cutoff < 0.1")
+#   
+# 
+# #Plot all
+# genes_vary_mouse + genes_vary_human + genes_vary_mouse_human + genes_notvary_mouse_human +
+#   plot_layout(guides = "collect", axes = "collect", axis_titles =  "collect",
+#               ncol =  2)
+  
+```
+
+
