@@ -1,0 +1,293 @@
+---
+title: "DataCuration"
+output: html_document
+---
+
+#Required
+
+```{r}
+# install.packages("here") if needed
+install.packages("here")
+library(here)
+source(here("scripts_notebooks", "required.R"))
+```
+
+#Data curation \## BioProject
+
+```{r}
+#Data curation --------
+## BioProject
+
+#Import dataset
+animals_vaccines_bioproject_result <- read_csv(here("tables", "animals_vaccines_bioproject_result.csv"), 
+    col_names = FALSE)
+
+#Clean table
+datacuration_clean = animals_vaccines_bioproject_result %>%
+ drop_na() %>% 
+  mutate(study = if_else(X1 =="Title", X2, NA)) %>% 
+  fill(study, .direction = c("down")) %>% 
+  pivot_wider(names_from = X1, values_from = X2) %>% 
+  select(-study) %>% 
+  clean_names() %>% 
+  mutate(title = str_remove(title, "^\\d+\\.\\s"),
+         organism = str_remove(organism, "Organism: "),
+         organism = str_remove(organism, "Taxonomy ID "),
+         bio_project_accession = str_remove(bio_project_accession, "BioProject Accession: "),
+         id = str_remove(id, "ID: "))
+
+datacuration_clean
+
+#Save
+datacuration_clean %>% 
+  write_csv(here("tables", "datacuration_step2.csv"))
+```
+
+```{r fig.height=5, fig.width=7}
+
+#Import
+datacuration_clean = read_csv(here("tables", "datacuration_step2.csv"))
+
+#Visualize
+datacuration_clean %>%
+  group_by(organism) %>% 
+  summarize(n_organism = n()) %>% 
+  # filter(!str_detect(organism,"Homo sapiens")) %>% 
+  arrange(-n_organism) %>% 
+  ggplot() +
+  aes(x = n_organism,
+      y = organism %>% fct_reorder(n_organism)) +
+  geom_col(fill = "black") + 
+  theme_light()+
+  geom_text(aes(label = n_organism),
+            hjust = -0.2,
+            size =3) +
+  scale_x_continuous(expand = c(0.01,0.01),
+                     limits = c(0, 900)) +
+  theme(
+    legend.position = c(0.95,0.5),
+    plot.caption = element_text(hjust = 0, size = 5),
+    axis.text.x = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    axis.text.y = element_text(size = 10,
+                               color = "black",
+                               angle = 0),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    plot.title = element_text(size = 15),
+    axis.title.y = element_text(color = "black"),
+    panel.border = element_blank(),
+    panel.grid.major.y = element_line(size = 0, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    panel.grid.major.x = element_line(size = 0.25, 
+                                    linetype = 2,
+                                    color = "gray75"),
+    axis.line.x = element_line(size = 0.5,
+                               colour = "black",
+                               linetype = 1),
+    axis.line.y = element_line(size = 0 ,
+                               colour = "black",
+                               linetype = 1),
+    axis.ticks.x = element_line(size = 0.5, color = "black"),
+    axis.ticks.y = element_line(size = 0.5, color = "black"),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(1, 1, 0, 0, "cm")
+  ) +
+    labs(x = "Frequency",
+       y = "",
+       title = "BioProject data curation",
+       subtitle = "Immunization and vaccination datasets",
+       caption = "Search terms: (('vaccine'[All Fields] OR 'immunization'[All Fields]\nOR 'vaccinated'[All Fields] OR 'vaccination'[All Fields] OR 'vaccines'[All Fields]) AND 'transcriptome gene expression'[Filter]\n AND 'material transcriptome'[Filter] AND 'capture_whole'[Filter] AND 'org mammals'[Filter] AND 'Mus musculus'[Organism]") 
+  
+```
+
+### BioProject metadata
+
+```{r}
+
+### BioProject metadata -------
+#Filter only Mus musculus vaccination datasets
+mice_vaccination_mining = datacuration_clean %>% 
+  filter(str_detect(organism,"Mus musculus")) %>% 
+  filter(!str_detect(str_to_lower(title), "cancer|tumor|autoimmune|drug")) %>% 
+  filter(str_detect(str_to_lower(title), "vaccin|immuniz"))
+
+#Get metadata for one dataset
+bioprojectid = mice_vaccination_mining$id[[1]]
+bioproject_meta = entrez_summary(db = "bioproject", id = bioprojectid) %>% 
+  as.tibble() %>% 
+  select(project_name,
+         project_description,
+         organism_name,
+         project_id,
+         project_data_type,
+         project_target_material,
+         project_target_capture,
+         organism_name)
+
+
+#Loop for every dataset
+bioproject_ids <- mice_vaccination_mining$id
+bioproject_metadata_df <- map_dfr(bioproject_ids, ~
+  entrez_summary(db = "bioproject", id = .x) %>%
+    as.list() %>%
+    as_tibble() %>%
+    select(
+      project_name,
+      project_description,
+      organism_name,
+      project_data_type,
+      project_target_material,
+      project_target_capture
+    ) %>%
+    mutate(bioproject_id = .x)
+)
+
+#Filter out data
+bioproject_metadata_df = bioproject_metadata_df %>% 
+  filter(!str_detect(project_description, "cancer|neoantigen|tumor|autoimmune|drug|opioid"))
+
+#Save
+bioproject_metadata_df %>% 
+  write_excel_csv2(here("tables", "mice_vaccination_mining2.csv"))
+
+#Import
+mice_vaccination_mining2 <- read_delim(here("table", "mice_vaccination_mining2.csv"), 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+#Print
+bioproject_metadata_df = mice_vaccination_mining2
+
+```
+
+##GEO
+Get metadata from GEO
+```{r}
+##GEO Metadata -----
+#Get metadata 
+#Single ------
+# query NCBI GEO 
+# geo_ids <- "GSE120661"
+# terms <- entrez_db_searchable(db = "gds")  # for reference: searchable fields
+# # first, get additional information about this series, including its db ID.
+# series <- entrez_search(db = "gds",
+#                         term = glue("{geo_ids}[ACCN] AND gse[ETYP]"), )
+# # use the ID to fetch details, including the sample table
+# series_summary = entrez_summary(db = "gds", id = series$ids)
+# 
+# series_summary_df = data_frame(bioproject = series_summary$bioproject,
+#                                uid = series_summary$uid,
+#                                gse= series_summary$gse,
+#                                gds= series_summary$gds,
+#                                title_series= series_summary$title,
+#                                summary= series_summary$summary,
+#                                gpl= series_summary$gpl,
+#                                seriestitle = series_summary$seriestitle,
+#                                n_samples= series_summary$n_samples,
+#                                platformtitle= series_summary$platformtitle,
+#                                platformtaxa = series_summary$platformtaxa,
+#                                ptechtype = series_summary$ptechtype) %>% 
+#   mutate(gpl = paste0("GPL", gpl))
+# 
+# 
+# #Annotate platform
+# platform_human_1_5000 <- read_csv(here("tables", "platform_human_1-5000.csv"))
+# platform_human_5000_6821 <- read_csv(here("tables", "platform_human_5000-6821.csv"))
+# platform_mouse <- read_csv(here("tables", "platform_mouse.csv"))
+# 
+# gpl_annotation_human_mouse = platform_mouse %>% 
+#   bind_rows(platform_human_1_5000,
+#             platform_human_5000_6821) %>% 
+#   clean_names() %>% 
+#   rename(gpl = accession,
+#          title_platform = title)
+# 
+# #Save
+# gpl_annotation_human_mouse %>% 
+#   saveRDS(file = here("tables", "gpl_annotation_human_mouse.rds"))
+# 
+# #Import
+# gpl_annotation_human_mouse = 
+#   readRDS(file = here("tables", "gpl_annotation_human_mouse.rds"))
+# 
+# #Join
+# series_summary_df %>% 
+#   inner_join(gpl_annotation, by = "gpl")
+
+```
+
+
+```{r}
+#Multiple -------
+gpl_annotation_human_mouse = 
+  readRDS(file = here("tables", "gpl_annotation_human_mouse.rds"))
+
+geo_ids = read_delim(here("tables", "gds_result.txt"), delim = "\n", col_names = F) %>%
+  mutate(X1 = str_c("GSE", X1, sep = "") %>%
+           str_remove(., "200")) %>% 
+  pull()
+
+text = readLines(here("tables", "gds_result (1).txt"))
+text_collapsed <- paste(text, collapse = "\n")
+gse_ids <- str_extract_all(geo_ids, "GSE\\d+\\b") %>% unlist() %>% unique()
+
+
+geo_metadata_df <- map_dfr(gse_ids, ~ {
+  result <- entrez_search("gds", term = glue("{.x}[ACCN] AND gse[ETYP]"))
+
+  if (length(result$ids) == 0) {
+    return(tibble(gse = .x, error = "Not found"))
+  }
+
+  summary <- entrez_summary(db = "gds", id = result$ids) %>% as.list()
+
+  tibble(field = names(summary), value = summary) %>%
+    pivot_wider(names_from = field, values_from = value) %>%
+    mutate(gse = .x)
+})
+
+
+
+geo_metadata_df = geo_metadata_df %>% 
+  drop_na(uid) %>% 
+  rename(title_series = title) %>% 
+  mutate(bioproject_id = str_remove(bioproject, "PRJNA"),
+           gpl = paste0("GPL", gpl)) %>% 
+  select(uid, gse_id = accession, 
+         title_series, summary,
+         gpl, taxon, entrytype, gdstype, pdat, suppfile, pubmedids, bioproject)
+
+
+#Save
+geo_metadata_df %>% 
+  saveRDS(file = here("tables", "geo_metadata_df.rds"))
+
+```
+
+##Merge GEO and Bioproject metadata
+
+```{r}
+#Merge metadata from GEO with manually annotated
+BEPE_DataCuration_Step4 <- read_csv(here("tables", "BEPE_DataCuration - BioProject_Step4_HumanAtlas_Export.csv"))
+geo_metadata_df =
+  readRDS(file = here("tables", "geo_metadata_df.rds")) %>% 
+  select(gse_id, gpl,gdstype, taxon, pdat, suppfile, pubmedids)
+
+BEPE_DataCuration_Annotation = BEPE_DataCuration_Step4 %>% 
+    select(title, project_description, gse_id = gse, keywords, notes, timepoints, time_type, doses, vaccine_type, target_pathogen, target_antigen, adjuvanted, sample_source, administration_route, sequencing, organism_name, raw_data_available) %>% 
+  inner_join(geo_metadata_df, by = "gse_id") 
+  
+
+```
+
+
+```{r}
+#Save
+mice_vaccination_annotated %>% 
+  write_csv(here("tables", "mice_vaccination_annotated.csv"))
+
+#Print
+mice_vaccination_annotated
+```
