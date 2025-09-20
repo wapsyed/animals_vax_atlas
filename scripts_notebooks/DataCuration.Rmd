@@ -270,7 +270,7 @@ geo_metadata_df %>%
 
 ```{r}
 #Merge metadata from GEO with manually annotated
-AnimalVax_DataCuration_Step4 <- read_excel(here("tables", "BEPE_DataCuration_Manual_19-09-25.xlsx"), 
+AnimalVax_DataCuration_Step4 <- read_excel(here("tables", "AnimalVax_DataCuration_20-09-25.xlsx"), 
     sheet = "BioProject_Step4_HumanAtlas_Yes")
 
 geo_metadata_df =
@@ -279,8 +279,11 @@ geo_metadata_df =
 
 
 AnimalVax_DataCuration_Annotated = AnimalVax_DataCuration_Step4 %>% 
-  rename(gse_id = gse) %>% 
+  #Join annotation
+   rename(gse_id = gse) %>% 
   inner_join(geo_metadata_df, by = "gse_id") %>% 
+  
+  #Arrange columns
   select(
          title,
          project_description,
@@ -304,19 +307,31 @@ AnimalVax_DataCuration_Annotated = AnimalVax_DataCuration_Step4 %>%
          suppfile,
          pubmedids
          ) %>% 
+  
+  #Separate rows with multiple entries
   separate_rows(sample_source, sep = "//") %>% 
   separate_rows(administration_route, sep = "//") %>%
   separate_rows(target_antigen, target_pathogen, sep = "//") %>% 
   separate_rows(adjuvanted, sep = "//") %>%
+  
+  
+  #Handling the GPL/RNA assay methods
+  #Separate multiple GPL entries
+  mutate(gpl = str_replace(gpl, ";", "//")) %>%
+  separate_rows(gpl, sequencing, 
+                sep = "//") %>%
+  #Complete entries without GPLs
+  mutate(gpl = ifelse(grepl("GPL", gpl), gpl, paste0("GPL", gpl))) %>% 
+  #Check gds_type (Manual vs GEOQuery)
   mutate(sequencing = case_when(gdstype == "Expression profiling by array"~"Microarray",
                                 gdstype == "Expression profiling by RT-PCR" ~ "RT-PCR",
                                 T ~sequencing)) %>% 
+  
+  #Separate main sample source from specific sample
   separate(
-    sample_source,
-    into = c("sample_source", "sample_source_sub"),
+    sample_source, into = c("main_sample_source", "specific_sample_source"),
     sep = " \\(|\\)",
     remove = TRUE,
-    # remove a coluna original
     extra = "drop",
     fill = "right"
   )
@@ -326,19 +341,8 @@ AnimalVax_DataCuration_Annotated %>%
 
 
 
-BEPE_DataCuration_Blood = BEPE_DataCuration_Step4 %>% 
-    select(title, project_description, gse_id = gse, keywords, notes, timepoints, time_type, doses, vaccine_type, target_pathogen, target_antigen, adjuvanted, sample_source, administration_route, sequencing) %>% 
-  inner_join(geo_metadata_df, by = "gse_id") %>% 
-  mutate(sequencing = if_else(gdstype == "Expression profiling by array", "Microarray", sequencing)) %>% 
-  filter(str_detect(sample_source, "Blood|PBMCs")) %>% 
-  arrange(target_pathogen) %>% 
-  select(target_pathogen, target_antigen, vaccine_type, 
-         adjuvanted, administration_route,
-         sample_source, 
-         sequencing, gpl,
-         timepoints, time_type,
-         keywords, notes) %>% 
-  separate_rows(administration_route, sample_source, sep = "//")
+AnimalVax_DataCuration_Blood = AnimalVax_DataCuration_Annotated %>% 
+  filter(str_detect(main_sample_source, "Blood|PBMCs"))
   
 ```
 
