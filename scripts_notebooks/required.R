@@ -6,7 +6,7 @@ required_packages <- c(
   "janitor", "readr", "paletteer", "beepr", "preprocessCore", "maditr", 
   "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
-  "pracma",
+  "pracma", "ggnewscale",
   "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath"
 )
 
@@ -279,6 +279,20 @@ cluster_by_day <- function(df, day_column = "day", condition_column = "condition
 }
 
 #Colors --------
+
+colors_all <- c(
+  "#4361ee",
+  "#4DBBD5FF",
+  "#90A4AEFF",
+  "#06d6a0",
+  "#caf0f8",
+  "#4cc9f0",
+  "#669bbc",
+  "purple",
+  "gray80"
+)
+
+
 colors_immune = list(organism = c("FIT" = "#4361ee",
                                   "Mouse" = "#4DBBD5FF",
                                   "Human" = "#90A4AEFF"),

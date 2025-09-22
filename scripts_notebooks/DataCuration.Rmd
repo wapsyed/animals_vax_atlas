@@ -349,7 +349,11 @@ AnimalVax_DataCuration_Annotated = AnimalVax_DataCuration_Step4 %>%
     remove = TRUE,
     extra = "drop",
     fill = "right"
-  )
+  ) %>% 
+  distinct()
+
+AnimalVax_DataCuration_Annotated %>% 
+  get_dupes()
   
 AnimalVax_DataCuration_Annotated %>% 
   View()
@@ -381,8 +385,8 @@ AnimalVax_DataCuration_Annotated_sunburst = AnimalVax_DataCuration_Annotated %>%
          # doses,
          pathogen_type, 
          target_pathogen,
-         vaccine_type, 
          target_antigen, 
+                  vaccine_type, 
          adjuvanted,
          administration_route,
          main_sample_source, 
@@ -524,14 +528,379 @@ datacuration_blood_sankey_ggplot = ggplot(sankey_df, aes(x = x,
   theme_alluvial(base_size = 12) +
   theme(legend.position = "none")
 
-datacuration_blood_sankey_ggplot %>% 
-  ggsave(filename = here("DataCuration", "datacuration_blood_sankey_ggplot.png"),
-         width = 10,
-         height = 10)
 # ggplotly(sankey_ggplot)
 
 ```
 
+Heatmap
+All datasets
+```{r fig.height=21, fig.width=10}
+heatmap_df = AnimalVax_DataCuration_Annotated %>%
+  select(pathogen_type, 
+         target_pathogen,
+         target_antigen,
+         vaccine_type, 
+         adjuvanted,
+         administration_route,
+         main_sample_source,
+         specific_sample_source,
+         sequencing,  
+         gse_id) %>% 
+  #Handling duplicate gse ids
+   group_by(gse_id) %>%
+   mutate(gse_id_unique = paste0(gse_id, "_", row_number()))  %>%
+  ungroup(gse_id) %>% 
+  select(-gse_id) %>% 
+   pivot_longer(cols = -gse_id_unique,
+                names_to = "variable",
+                values_to = "value") %>% 
+  mutate(variable = fct_relevel(variable, c("pathogen_type",
+                                            "target_pathogen",
+                                            "target_antigen",
+                                            "vaccine_type",
+                                            "adjuvanted",
+                                            "administration_route",
+                                            "main_sample_source",
+                                            "specific_sample_source",
+                                            "sequencing")))
+
+
+#Color categories
+colors_all <- c("#90A4AEFF", "#4DBBD5FF", "#4361ee")
+paleta <- colorRampPalette(colors_all)
+cores_15 <- paleta(100)
+levels_heatmap <- unique(na.omit(heatmap_df$value))
+levels_heatmap <- levels_heatmap[!levels_heatmap %in% c("NA", "No")]
+
+# sorteia cores para eles
+set.seed(123) # opcional, pra reprodutibilidade
+colors_random <- sample(cores_15, length(levels_heatmap), replace = TRUE)
+
+# monta a paleta completa
+palette_final <- c(setNames(colors_random, levels_heatmap))
+
+
+#Clustering
+heatmap_wide <- heatmap_df %>%
+  select(gse_id_unique, variable, value) %>%
+  pivot_wider(names_from = variable, values_from = value) %>% 
+  mutate(gse_id_unique = as.character(gse_id_unique))
+
+
+#Clusterize by pathogen type
+
+#Virus
+heatmap_numeric <- heatmap_wide %>%
+  filter(pathogen_type == "Virus") %>% 
+  mutate(across(-gse_id_unique, ~as.integer(as.factor(.))))
+dist_matrix <- dist(heatmap_numeric %>% select(-gse_id_unique), 
+                    method = "euclidean")
+hc <- hclust(dist_matrix, method = "ward.D2")
+ordered_gse_virus <- heatmap_numeric$gse_id_unique[hc$order]
+
+#Bacteria
+heatmap_numeric <- heatmap_wide %>%
+  filter(pathogen_type == "Bacteria") %>% 
+  mutate(across(-gse_id_unique, ~as.integer(as.factor(.))))
+dist_matrix <- dist(heatmap_numeric %>% select(-gse_id_unique), 
+                    method = "euclidean")
+hc <- hclust(dist_matrix, method = "ward.D2")
+ordered_gse_bacteria <- heatmap_numeric$gse_id_unique[hc$order]
+
+#Fungi
+heatmap_numeric <- heatmap_wide %>%
+  filter(pathogen_type == "Fungi") %>% 
+  mutate(across(-gse_id_unique, ~as.integer(as.factor(.))))
+dist_matrix <- dist(heatmap_numeric %>% select(-gse_id_unique), 
+                    method = "euclidean")
+hc <- hclust(dist_matrix, method = "ward.D2")
+ordered_gse_fungi <- heatmap_numeric$gse_id_unique[hc$order]
+
+#Protozoa
+heatmap_numeric <- heatmap_wide %>%
+  filter(pathogen_type == "Protozoa") %>% 
+  mutate(across(-gse_id_unique, ~as.integer(as.factor(.))))
+dist_matrix <- dist(heatmap_numeric %>% select(-gse_id_unique), 
+                    method = "euclidean")
+hc <- hclust(dist_matrix, method = "ward.D2")
+ordered_gse_protozoa <- heatmap_numeric$gse_id_unique[hc$order]
+
+# reorder
+heatmap_df <- heatmap_df %>%
+  mutate(gse_id_unique = fct_relevel(gse_id_unique, c(ordered_gse_virus, ordered_gse_bacteria,ordered_gse_fungi ,ordered_gse_protozoa)) %>% fct_rev())
+
+#Plot
+heatmap_plot = heatmap_df %>% 
+  ggplot(aes(x = variable, y = gse_id_unique,
+             label = value)) +
+  
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "pathogen_type"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "pathogen_type") +
+  new_scale_fill() +
+  
+   #Layer
+  geom_tile(data = ~filter(.x, variable == "target_pathogen"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "target_pathogen") +
+  new_scale_fill() +
+  
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "target_antigen"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "target_antigen") +
+   new_scale_fill() +
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "vaccine_type"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "vaccine_type") +
+   new_scale_fill() +
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "adjuvanted"),
+            aes(fill = value),
+            na.rm = T) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "adjuvanted") +
+   new_scale_fill() +
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "administration_route"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "administration_route") +
+   new_scale_fill() +
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "main_sample_source"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "main_sample_source") +
+   new_scale_fill() +
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "specific_sample_source"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                     na.value = "transparent",
+                    name = "specific_sample_source") +
+   new_scale_fill() +
+   #Layer
+  geom_tile(data = ~filter(.x, variable == "sequencing"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "sequencing") +
+  theme_vaxgo() +
+  # facet_wrap(~variable, scales = "free_x", nrow = 1) +
+  geom_text(size = 2, color = "white", fontface = "bold") +
+  #Do not visualize the legends here
+  theme(strip.text = element_blank(), 
+        # axis.text.y = element_text(size = 5),
+        panel.spacing = unit(0, "lines"),
+    legend.position = "none", 
+    # legend.direction = "vertical", 
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 8)
+  )  
+  
+heatmap_plot
+  
+```
+
+
+Blood only
+```{r fig.height=21, fig.width=10}
+heatmap_df = AnimalVax_DataCuration_Blood %>%
+  select(pathogen_type, 
+         target_pathogen,
+         target_antigen,
+         vaccine_type, 
+         adjuvanted,
+         administration_route,
+         main_sample_source,
+         specific_sample_source,
+         sequencing,  
+         gse_id) %>% 
+  #Handling duplicate gse ids
+   group_by(gse_id) %>%
+   mutate(gse_id_unique = paste0(gse_id, "_", row_number()))  %>%
+  ungroup(gse_id) %>% 
+  select(-gse_id) %>% 
+   pivot_longer(cols = -gse_id_unique,
+                names_to = "variable",
+                values_to = "value") %>% 
+  mutate(variable = fct_relevel(variable, c("pathogen_type",
+                                            "target_pathogen",
+                                            "target_antigen",
+                                            "vaccine_type",
+                                            "adjuvanted",
+                                            "administration_route",
+                                            "main_sample_source",
+                                            "specific_sample_source",
+                                            "sequencing")))
+
+
+#Color categories
+colors_all <- c("#90A4AEFF", "#4DBBD5FF", "#4361ee")
+paleta <- colorRampPalette(colors_all)
+cores_15 <- paleta(100)
+levels_heatmap <- unique(na.omit(heatmap_df$value))
+levels_heatmap <- levels_heatmap[!levels_heatmap %in% c("NA", "No")]
+
+# sorteia cores para eles
+set.seed(123) # opcional, pra reprodutibilidade
+colors_random <- sample(cores_15, length(levels_heatmap), replace = TRUE)
+
+# monta a paleta completa
+palette_final <- c(setNames(colors_random, levels_heatmap))
+
+
+#Clustering
+heatmap_wide <- heatmap_df %>%
+  select(gse_id_unique, variable, value) %>%
+  pivot_wider(names_from = variable, values_from = value) %>% 
+  mutate(gse_id_unique = as.character(gse_id_unique))
+
+
+#Clusterize by pathogen type
+
+#Virus
+heatmap_numeric <- heatmap_wide %>%
+  filter(pathogen_type == "Virus") %>% 
+  mutate(across(-gse_id_unique, ~as.integer(as.factor(.))))
+dist_matrix <- dist(heatmap_numeric %>% select(-gse_id_unique), 
+                    method = "euclidean")
+hc <- hclust(dist_matrix, method = "ward.D2")
+ordered_gse_virus <- heatmap_numeric$gse_id_unique[hc$order]
+
+#Bacteria
+heatmap_numeric <- heatmap_wide %>%
+  filter(pathogen_type == "Bacteria") %>% 
+  mutate(across(-gse_id_unique, ~as.integer(as.factor(.))))
+dist_matrix <- dist(heatmap_numeric %>% select(-gse_id_unique), 
+                    method = "euclidean")
+hc <- hclust(dist_matrix, method = "ward.D2")
+ordered_gse_bacteria <- heatmap_numeric$gse_id_unique[hc$order]
+
+#Protozoa
+heatmap_numeric <- heatmap_wide %>%
+  filter(pathogen_type == "Protozoa") %>% 
+  mutate(across(-gse_id_unique, ~as.integer(as.factor(.))))
+dist_matrix <- dist(heatmap_numeric %>% select(-gse_id_unique), 
+                    method = "euclidean")
+hc <- hclust(dist_matrix, method = "ward.D2")
+ordered_gse_protozoa <- heatmap_numeric$gse_id_unique[hc$order]
+
+# reorder
+heatmap_df <- heatmap_df %>%
+  mutate(gse_id_unique = fct_relevel(gse_id_unique, c(ordered_gse_virus, ordered_gse_bacteria,ordered_gse_protozoa)) %>% fct_rev())
+```
+
+
+```{r fig.height=5, fig.width=10}
+#Plot
+heatmap_plot_blood = heatmap_df %>% 
+  
+  ggplot(aes(x = variable, y = gse_id_unique,
+             label = value)) +
+  
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "pathogen_type"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "pathogen_type") +
+  new_scale_fill() +
+  
+   #Layer
+  geom_tile(data = ~filter(.x, variable == "target_pathogen"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "target_pathogen") +
+  new_scale_fill() +
+  
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "target_antigen"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "target_antigen") +
+   new_scale_fill() +
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "vaccine_type"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "vaccine_type") +
+   new_scale_fill() +
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "adjuvanted"),
+            aes(fill = value),
+            na.rm = T) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "adjuvanted") +
+   new_scale_fill() +
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "administration_route"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "administration_route") +
+   new_scale_fill() +
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "main_sample_source"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "main_sample_source") +
+   new_scale_fill() +
+  #Layer
+  geom_tile(data = ~filter(.x, variable == "specific_sample_source"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                     na.value = "transparent",
+                    name = "specific_sample_source") +
+   new_scale_fill() +
+   #Layer
+  geom_tile(data = ~filter(.x, variable == "sequencing"),
+            aes(fill = value)) +
+  scale_fill_manual(values = c(palette_final),
+                    na.value = "transparent",
+                    name = "sequencing") +
+  theme_vaxgo() +
+  # facet_wrap(~variable, scales = "free_x", nrow = 1) +
+  geom_text(size = 2, color = "white", fontface = "bold") +
+  #Do not visualize the legends here
+  theme(strip.text = element_blank(), 
+        # axis.text.y = element_text(size = 5),
+        panel.spacing = unit(0, "lines"),
+    legend.position = "none", 
+    # legend.direction = "vertical", 
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 8)
+  )  +
+  labs(x = "",
+       y = "")
+  
+heatmap_plot_blood
+
+heatmap_plot_blood %>% 
+  ggsave(filename = here("Figures", "AnimalVax_DataCuration_Blood_heatmap.png"),
+         width = 10,
+         height = 5)
+  
+```
 
 
 ```{r}
