@@ -6,7 +6,7 @@ required_packages <- c(
   "janitor", "readr", "paletteer", "beepr", "preprocessCore", "maditr", 
   "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
-  "pracma", "ggnewscale",
+  "pracma", "ggnewscale", "ggprism",
   "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath"
 )
 
@@ -291,6 +291,12 @@ colors_all <- c(
   "purple",
   "gray80"
 )
+
+colors_vaccines = c("Agrippal" = "#669bbc",
+                    "Fluad" = "#219ebc",
+                    "Quadri 2019-2020" = "#4DBBD5FF",
+                    "Engerix" = "#4361ee")
+
 
 
 colors_immune = list(organism = c("FIT" = "#4361ee",
