@@ -16,8 +16,8 @@ bioc_pkgs <- c(
   "org.Hs.eg.db", "DESeq2", "msigdbr", 
   "ape",
   "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
-  "mogene10sttranscriptcluster.db", "fgsea", "arrayQualityMetrics",
-  "EDASeq"
+  "mogene10sttranscriptcluster.db", "fgsea", "arrayQualityMetrics"
+  # "EDASeq"
 )
 # 
 # renv::remove("ape")
