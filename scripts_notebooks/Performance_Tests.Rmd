@@ -1079,10 +1079,17 @@ ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped
 
 ```{r fig.height=4, fig.width=10}
 set.seed(123)
+
+
+genes_df_input = dge_long_genes
+  #Filter immune genes only
+  # filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
+
+filename = "Fluad_All"
+
 ######### UP -----------
 #Do one sided t-test for each model
-dge_long_genes_up = dge_long_genes %>% 
-  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
+dge_long_genes_up = genes_df_input %>% 
   mutate(
     se = (ci_high - ci_low) / (2 * 1.96),
     z = log2fc / se,
@@ -1129,8 +1136,7 @@ normal_prediction = perfect_prediction %>%
          organism = "Normal")
 
 #Get only up and not up genes from models
-models_up = dge_long_genes_up %>% 
-  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
+models_up = genes_df_input %>% 
   mutate(
     se = (ci_high - ci_low) / (2 * 1.96),
     z = log2fc / se,
@@ -1172,6 +1178,84 @@ roc_curve_up_notup = classified_df_probs_up %>%
   mutate(comparison = "Up vs Non-Up")
 
 
+set.seed(123)
+######### DOWN -----------
+#Do one sided t-test for each model
+dge_long_genes_down = genes_df_input %>% 
+  mutate(
+    se = (ci_high - ci_low) / (2 * 1.96),
+    z = log2fc / se,
+    pval_one_sided = pnorm(z, lower.tail = T), #onesided, p(gene) < 0 (left tail)
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    direction = if_else(pval_one_sided_adj < 0.05, "down", "not_down")) %>%
+  select(-adj_p_val) %>% 
+  rename(adj_p_val = pval_one_sided_adj)
+
+#Assign human log2fc direction as truth
+truth_human = dge_long_genes_down %>% 
+  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
+  filter(organism == "Human") %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "organism",
+              values_from = "direction") %>% 
+  rename(truth = Human) %>% 
+  mutate(organism = "Human")
+
+#Generate comparable distributions
+perfect_prediction = truth_human %>%
+  #Invert probabilities
+  mutate(prob = 1 - adj_p_val) %>%
+  rename(pred = truth)
+uniform_prediction = perfect_prediction %>%
+  group_by(timepoint) %>% 
+  mutate(prob = runif(n()),
+         organism = "Uniform")
+
+
+#Get only up and not up genes from models
+models_down = genes_df_input %>% 
+  mutate(
+    se = (ci_high - ci_low) / (2 * 1.96),
+    z = log2fc / se,
+    pval_one_sided = pnorm(z, lower.tail = T), #one sided, less
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    #Invert probabilities
+    pval_one_sided_adj = 1 - pval_one_sided_adj,
+    direction = if_else(pval_one_sided_adj < 0.05, "down", "not_down")) %>%
+  select(-adj_p_val) %>% 
+  rename(adj_p_val = pval_one_sided_adj) %>% 
+  filter(organism != "Human") %>% 
+  mutate(pred = direction,
+         prob = adj_p_val) %>% 
+  #Add controls
+  bind_rows(
+    perfect_prediction,
+    uniform_prediction
+    )
+
+#Get probabilities (DOWN)
+classified_df_probs_down = truth_human %>% 
+  select(symbol, timepoint, truth) %>%
+  inner_join(models_down %>% 
+               select(symbol, timepoint, pred, prob, model = organism),
+             by = join_by("symbol", "timepoint")) %>% 
+  mutate(not_prob = 1 - prob,
+         sum = prob + not_prob,
+         truth = as.factor(truth)) %>% 
+  distinct()
+
+
+#Get ROC
+roc_curve_down_notdown = classified_df_probs_down %>% 
+  filter(model %in% c("Human", "Mouse", "Uniform", "FIT")) %>%
+  select(symbol, timepoint, truth, pred, model, prob, not_prob, sum) %>%
+  group_by(model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Down vs Non-Down")
+```
+
+
+```{r fig.height=4, fig.width=10}
 # #Plot model distributions and negative-control distributions
 # classified_df_probs_up %>% 
 #   ggplot() +
@@ -1216,135 +1300,18 @@ roc_curve_up_notup = classified_df_probs_up %>%
 #     "Shuffle" = "gray80",
 #     "Normal" = "gray80"
 #     ))
-
-############# UP VS NOT UP
-#PLOT ROC Curve
-roc_curve_up_notup_plot = roc_curve_up_notup %>% 
-  ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
-  geom_path(size = 1, alpha = 1) +
-  geom_abline(lty = 3) +
-  theme_vaxgo() +
-  facet_grid(~comparison~paste("Day", timepoint)) + 
-  scale_color_manual(values = c(
-    "Mouse" = "#4DBBD5FF",
-    "FIT"   = "#4361ee",
-    "Human" = "#90A4AEFF",
-    "Uniform" = "gray80"
-    )) +
-  labs(
-  x = "FPR",
-  y = "TPR",
-  color = "Model") + 
-  theme(
-    strip.text = element_text(size = 10),
-    strip.placement = "outside",
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 10, angle = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.text.y = element_text(size = 8),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank()
-  ) +
-  scale_x_continuous(n.breaks = 3) +
-  scale_y_continuous(n.break = 3)
-
-roc_curve_up_notup_plot
-
-roc_curve_up_notup_plot %>%
-  ggsave(filename = here("Figures", "roc_curve_up_notup_plot_Immune.png"),
-         width = 10,
-         height =4)
 ```
-Down vs not-down
-```{r fig.height=4, fig.width=10}
-set.seed(123)
-######### DOWN -----------
-#Do one sided t-test for each model
-dge_long_genes_down = dge_long_genes %>% 
-  #Filter immune genes only
-  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
-  mutate(
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    pval_one_sided = pnorm(z, lower.tail = T), #onesided, p(gene) < 0 (left tail)
-    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    direction = if_else(pval_one_sided_adj < 0.05, "down", "not_down")) %>%
-  select(-adj_p_val) %>% 
-  rename(adj_p_val = pval_one_sided_adj)
 
-#Assign human log2fc direction as truth
-truth_human = dge_long_genes_down %>% 
-  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
-  filter(organism == "Human") %>% 
-  distinct() %>% 
-  pivot_wider(names_from = "organism",
-              values_from = "direction") %>% 
-  rename(truth = Human) %>% 
-  mutate(organism = "Human")
-
-#Generate comparable distributions
-perfect_prediction = truth_human %>%
-  #Invert probabilities
-  mutate(prob = 1 - adj_p_val) %>%
-  rename(pred = truth)
-uniform_prediction = perfect_prediction %>%
-  group_by(timepoint) %>% 
-  mutate(prob = runif(n()),
-         organism = "Uniform")
-
-
-#Get only up and not up genes from models
-models_down = dge_long_genes_down %>% 
-  #Filter immune genes
-  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
-  mutate(
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    pval_one_sided = pnorm(z, lower.tail = T), #one sided, less
-    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    #Invert probabilities
-    pval_one_sided_adj = 1 - pval_one_sided_adj,
-    direction = if_else(pval_one_sided_adj < 0.05, "down", "not_down")) %>%
-  select(-adj_p_val) %>% 
-  rename(adj_p_val = pval_one_sided_adj) %>% 
-  filter(organism != "Human") %>% 
-  mutate(pred = direction,
-         prob = adj_p_val) %>% 
-  #Add controls
-  bind_rows(
-    perfect_prediction,
-    uniform_prediction
-    )
-
-#Get probabilities (DOWN)
-classified_df_probs_down = truth_human %>% 
-  select(symbol, timepoint, truth) %>%
-  inner_join(models_down %>% 
-               select(symbol, timepoint, pred, prob, model = organism),
-             by = join_by("symbol", "timepoint")) %>% 
-  mutate(not_prob = 1 - prob,
-         sum = prob + not_prob,
-         truth = as.factor(truth)) %>% 
-  distinct()
-
-
-#Get ROC
-roc_curve_down_notdown = classified_df_probs_down %>% 
-  filter(model %in% c("Human", "Mouse", "Uniform", "FIT")) %>%
-  select(symbol, timepoint, truth, pred, model, prob, not_prob, sum) %>%
-  group_by(model, timepoint) %>%
-  roc_curve(truth, prob) %>%
-  mutate(comparison = "Down vs Non-Down") 
-
-
-############# DOWN VS NOT DOWN
+Plot
+```{r fig.height=5, fig.width=8}
 #PLOT ROC Curve
-roc_curve_down_notdown_plot = roc_curve_down_notdown %>% 
+roc_curve_plot = roc_curve_up_notup %>% 
+  bind_rows(roc_curve_down_notdown) %>% 
   ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
   geom_path(size = 1, alpha = 1) +
   geom_abline(lty = 3) +
   theme_vaxgo() +
-  facet_grid(~comparison~paste("Day", timepoint)) + 
+  facet_grid(~fct_rev(comparison)~paste("Day", timepoint)) + 
   scale_color_manual(values = c(
     "Mouse" = "#4DBBD5FF",
     "FIT"   = "#4361ee",
@@ -1359,21 +1326,21 @@ roc_curve_down_notdown_plot = roc_curve_down_notdown %>%
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 10, angle = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.text.y = element_text(size = 8),
+    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
+    axis.text.x = element_text(size = 10, angle = 0, hjust = 0.5, vjust = 0.5),
+    axis.text.y = element_text(size = 10),
     panel.spacing.x = unit(0.5, "lines"),
     legend.key = element_blank()
   ) +
   scale_x_continuous(n.breaks = 3) +
   scale_y_continuous(n.break = 3)
 
-roc_curve_down_notdown_plot
+roc_curve_plot
 
-roc_curve_down_notdown_plot %>%
-  ggsave(filename = here("Figures", "roc_curve_down_notdown_plot_Immune.png"),
-         width = 10,
-         height =4)
+roc_curve_plot %>%
+  ggsave(filename = here("Figures", paste0("roc_curve_plot_", filename, ".png")),
+         width = 8,
+         height = 5)
 
 ```
 
