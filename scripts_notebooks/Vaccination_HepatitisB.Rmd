@@ -1098,31 +1098,46 @@ human_mouse_log2fc_samples =
 human_mouse_engerix_metadata =
   readRDS(file = here("tables", "engerixb_human_mouse_engerix_metadata.rds"))
 
-
 #Summarize
 #Calculate the mean log2fc
-human_mouse_log2fc_log2fc_avg = human_mouse_log2fc_samples %>% 
+human_mouse_engerixb_log2fc_avg = human_mouse_log2fc_samples %>% 
   group_by(organism, human_symbol, timepoint) %>% 
   summarize(
-            #Calculate the mean
-            mean_log2fc = mean(log2fc),
-            
-            #Calculate pvalue, t test
-            p_value = tryCatch(
-      t.test(value, day0, paired = TRUE, )$p.value,
-      error = function(e) NA),
-    .groups = "drop") %>%
-  mutate(p_adj = p.adjust(p_value, method = "BH")) %>% 
-  filter(human_symbol != "") %>% 
+    mean_log2fc = mean(log2fc, na.rm = TRUE),
+    sd_log2fc   = sd(log2fc, na.rm = TRUE),
+    se_log2fc   = sd(log2fc, na.rm = TRUE) / sqrt(n()),   # erro padrão
+    
+    # Test t paired
+    ttest = list(tryCatch(
+      t.test(value, day0, paired = TRUE),
+      error = function(e) NULL
+    )),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    p_value = map_dbl(ttest, ~ if (!is.null(.x)) .x$p.value else NA_real_),
+    ci_low  = map_dbl(ttest, ~ if (!is.null(.x)) .x$conf.int[1] else NA_real_),
+    ci_high = map_dbl(ttest, ~ if (!is.null(.x)) .x$conf.int[2] else NA_real_),
+    t_stat  = map_dbl(ttest, ~ if (!is.null(.x)) .x$statistic else NA_real_),
+    df      = map_dbl(ttest, ~ if (!is.null(.x)) .x$parameter else NA_real_),
+    p_adj   = p.adjust(p_value, method = "BH")
+  ) %>%
+  select(-ttest) %>% 
+  filter(human_symbol != "") %>%
   ungroup()
 
+
+#Save
+human_mouse_engerixb_log2fc_avg %>% 
+  saveRDS(here("tables", "human_mouse_engerixb_log2fc_avg.rds"))
+
 #Pivot wider
-human_mouse_log2fc_log2fc_avg_wide = human_mouse_log2fc_log2fc_avg %>% 
+human_mouse_engerixb_log2fc_avg_wide = human_mouse_engerixb_log2fc_avg %>% 
   select(organism, human_symbol, timepoint, mean_log2fc) %>% 
   pivot_wider(names_from = "organism",
               values_from = "mean_log2fc") %>% 
   #Add padj columns
-  inner_join(human_mouse_log2fc_log2fc_avg %>%
+  inner_join(human_mouse_engerixb_log2fc_avg %>%
                select(organism, human_symbol, timepoint, p_adj) %>%
                pivot_wider(names_from = "organism",
                            values_from = "p_adj") %>%
@@ -1131,7 +1146,7 @@ human_mouse_log2fc_log2fc_avg_wide = human_mouse_log2fc_log2fc_avg %>%
   drop_na()
 
 # Calculate the correlation
-cor_data <- human_mouse_log2fc_log2fc_avg_wide %>%
+cor_data <- human_mouse_engerixb_log2fc_avg_wide %>%
   group_by(timepoint) %>% 
   filter(padj_human <= 0.05 | padj_human <= 0.05) %>%
   summarize(
@@ -1146,7 +1161,7 @@ cor_data <- human_mouse_log2fc_log2fc_avg_wide %>%
 ```{r fig.height=6, fig.width=3}
 ylim_range = c(-2.5, 2.5)
 xlim_range = c(-2.5, 2.5)
-human_mouse_log2fc_log2fc_avg_wide_scatterplot = human_mouse_log2fc_log2fc_avg_wide %>% 
+human_mouse_log2fc_log2fc_avg_wide_scatterplot = human_mouse_engerixb_log2fc_avg_wide %>% 
   
   #Filter DEGs only
   filter(padj_human <= 0.05 | padj_mouse <= 0.05) %>%
@@ -1173,7 +1188,7 @@ human_mouse_log2fc_log2fc_avg_wide_scatterplot = human_mouse_log2fc_log2fc_avg_w
              alpha = 1.5,
              size = 1,
              pch = 21,
-             data = human_mouse_log2fc_log2fc_avg_wide %>%
+             data = human_mouse_engerixb_log2fc_avg_wide %>%
                #Filter DEGs in both organisms, same sign
                filter(padj_human <= 0.05 & padj_mouse <= 0.05 & sign(Human) == sign(Mouse))) +
   
@@ -1183,7 +1198,7 @@ human_mouse_log2fc_log2fc_avg_wide_scatterplot = human_mouse_log2fc_log2fc_avg_w
              alpha = 1.5,
              size = 1,
              pch = 21,
-             data = human_mouse_log2fc_log2fc_avg_wide %>%
+             data = human_mouse_engerixb_log2fc_avg_wide %>%
                filter(human_symbol %in% c(ImmuneGO_BTM_grouped_genes$genes)) %>% 
                #Filter DEGs in both organisms, same sign
                filter(padj_human <= 0.05 & padj_mouse <= 0.05 & sign(Human) == sign(Mouse))) +
@@ -1191,7 +1206,7 @@ human_mouse_log2fc_log2fc_avg_wide_scatterplot = human_mouse_log2fc_log2fc_avg_w
   #Add linear models
   stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
   stat_smooth(method = "lm", geom = "line", color = "#4DBBD5FF", alpha = 0.5, se = F, size = 1,
-              data = human_mouse_log2fc_log2fc_avg_wide %>%
+              data = human_mouse_engerixb_log2fc_avg_wide %>%
                filter(human_symbol %in% c(ImmuneGO_BTM_grouped_genes$genes)) %>% 
                #Filter DEGs in both organisms, same sign
                filter(padj_human <= 0.05 & padj_mouse <= 0.05 & sign(Human) == sign(Mouse))) +
@@ -2332,31 +2347,61 @@ example_samples_btm_correlation_all_timepoints_summary_plot
 
 
 
-# Classification metrics
+#Performance tests
+## ROC Curve
+Do for one direction (up and then down)
+Do one sided t test for mouse, fit, and human
+Positive control: Human
+Neg control: Random permutation
 
-#### ROC Curve Do for one direction (up and then down)
 
-Do one sided t test limma for mouse, fit, and human Positive control:
-Human Neg control: Random permutation
-
-Import
-
+Import data
 ```{r}
-#Import DEGs table
-dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds"))
 #ImmuneGO ontologies
 ImmuneGO_Mouse_Manual_genes <- read_excel(here("VaxGO", "ImmuneGO_Mouse.xlsx")) %>% 
  separate_rows(genes)
 immunego_btm_manual_grouped = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genesets.csv"))
 ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
+
+#Import DEGs table
+human_mouse_engerixb_log2fc_avg =
+  readRDS(file = here("tables", "human_mouse_engerixb_log2fc_avg.rds"))
+
+dge_long_genes = human_mouse_engerixb_log2fc_avg  %>% 
+  rename(log2fc = mean_log2fc, se = se_log2fc, sd = sd_log2fc, adj_p_val = p_adj, symbol = human_symbol) 
+
+#Use only same genes
+dge_long_genes = dge_long_genes %>% 
+  filter(organism == "Mouse") %>% 
+  select(symbol) %>% 
+  distinct() %>% 
+  inner_join(dge_long_genes %>%
+               filter(organism == "Human") %>%
+               select(symbol) %>%
+               distinct(), 
+             by = "symbol") %>% 
+  inner_join(dge_long_genes,
+             by = "symbol")
+
 ```
 
-```{r fig.height=4, fig.width=10}
+Calculate ROC curve
+```{r fig.height=4, fig.width=6}
 set.seed(123)
+
+######### Input -----
+
+filename = "EngerixB_AllGenes"
+filename_title ="EngerixB,\nAll genes"
+
+genes_df_input = dge_long_genes 
+  # Filter immune genes only
+  # filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
+
+
 ######### UP -----------
 #Do one sided t-test for each model
-dge_long_genes_up = dge_long_genes %>% 
-  # filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
+dge_long_genes_up = genes_df_input %>% 
   mutate(
     se = (ci_high - ci_low) / (2 * 1.96),
     z = log2fc / se,
@@ -2381,30 +2426,13 @@ perfect_prediction = truth_human %>%
   mutate(prob = adj_p_val) %>%
   rename(pred = truth)
 
-permutation_prediction = perfect_prediction %>%
-  group_by(timepoint) %>% 
-  mutate(prob = randperm(prob),
-         organism = "Permutation")
-
 uniform_prediction = perfect_prediction %>%
   group_by(timepoint) %>% 
   mutate(prob = runif(n()),
          organism = "Uniform")
 
-shuffle_prediction = perfect_prediction %>%
-  group_by(timepoint) %>% 
-  mutate(prob = sample(prob),
-         organism = "Shuffle")
-
-normal_prediction = perfect_prediction %>% 
-  group_by(timepoint) %>% 
-  mutate(prob = rnorm(n(), mean = 0.5, sd = 0.1),
-         prob= pmin(pmax(prob, 0), 1),
-         organism = "Normal")
-
 #Get only up and not up genes from models
-models_up = dge_long_genes_up %>% 
-  # filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
+models_up = genes_df_input %>% 
   mutate(
     se = (ci_high - ci_low) / (2 * 1.96),
     z = log2fc / se,
@@ -2420,9 +2448,7 @@ models_up = dge_long_genes_up %>%
   bind_rows(
     perfect_prediction,
     permutation_prediction,
-    uniform_prediction,
-    shuffle_prediction,
-    normal_prediction
+    uniform_prediction
     )
 
 #Get probabilities (UP)
@@ -2445,100 +2471,9 @@ roc_curve_up_notup = classified_df_probs_up %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Up vs Non-Up")
 
-
-# #Plot model distributions and negative-control distributions
-# classified_df_probs_up %>% 
-#   ggplot() +
-#   aes(x = prob)+
-#   facet_grid(~model~paste("Day", timepoint), scales = "free") +
-#   geom_density(
-#     aes(color = model,
-#         y = after_stat(density)),
-#     size = 1)  +
-#   theme_vaxgo() +
-#   guides(color = F) +
-#   theme(strip.text.y = element_text(angle = 0, hjust = 0)) +
-#   scale_color_manual(values = c(
-#     "Mouse" = "#4DBBD5FF",
-#     "FIT"   = "#4361ee",
-#     "Human" = "#90A4AEFF",
-#     "Permutation" = "gray80",
-#     "Uniform" = "gray80",
-#     "Shuffle" = "gray80",
-#     "Normal" = "gray80"
-#     ))
-
-
-
-# classified_df_probs_down %>% 
-#   ggplot() +
-#   aes(x = prob)+
-#   facet_grid(~model~paste("Day", timepoint), scales = "free") +
-#   geom_density(
-#     aes(color = model,
-#         y = after_stat(density)),
-#     size = 1)  +
-#   theme_vaxgo() +
-#   guides(color = F) +
-#   theme(strip.text.y = element_text(angle = 0, hjust = 0)) +
-#   scale_color_manual(values = c(
-#     "Mouse" = "#4DBBD5FF",
-#     "FIT"   = "#4361ee",
-#     "Human" = "#90A4AEFF",
-#     "Permutation" = "gray80",
-#     "Uniform" = "gray80",
-#     "Shuffle" = "gray80",
-#     "Normal" = "gray80"
-#     ))
-
-############# UP VS NOT UP
-#PLOT ROC Curve
-roc_curve_up_notup_plot = roc_curve_up_notup %>% 
-  ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
-  geom_path(size = 1, alpha = 1) +
-  geom_abline(lty = 3) +
-  theme_vaxgo() +
-  facet_grid(~comparison~paste("Day", timepoint)) + 
-  scale_color_manual(values = c(
-    "Mouse" = "#4DBBD5FF",
-    "FIT"   = "#4361ee",
-    "Human" = "#90A4AEFF",
-    "Uniform" = "gray80"
-    )) +
-  labs(
-  x = "FPR",
-  y = "TPR",
-  color = "Model") + 
-  theme(
-    strip.text = element_text(size = 10),
-    strip.placement = "outside",
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 10, angle = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.text.y = element_text(size = 8),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank()
-  ) +
-  scale_x_continuous(n.breaks = 3) +
-  scale_y_continuous(n.break = 3)
-
-roc_curve_up_notup_plot
-
-roc_curve_up_notup_plot %>%
-  ggsave(filename = here("Figures", "HepB_roc_curve_up_notup_plot.png"),
-         width = 10,
-         height =4)
-```
-
-Down vs not-down
-
-```{r fig.height=4, fig.width=10}
-set.seed(123)
 ######### DOWN -----------
 #Do one sided t-test for each model
-dge_long_genes_down = dge_long_genes %>% 
-  #Filter immune genes only
-  # filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
+dge_long_genes_down = genes_df_input %>% 
   mutate(
     se = (ci_high - ci_low) / (2 * 1.96),
     z = log2fc / se,
@@ -2563,6 +2498,7 @@ perfect_prediction = truth_human %>%
   #Invert probabilities
   mutate(prob = 1 - adj_p_val) %>%
   rename(pred = truth)
+
 uniform_prediction = perfect_prediction %>%
   group_by(timepoint) %>% 
   mutate(prob = runif(n()),
@@ -2570,9 +2506,7 @@ uniform_prediction = perfect_prediction %>%
 
 
 #Get only up and not up genes from models
-models_down = dge_long_genes_down %>% 
-  #Filter immune genes
-  # filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique())) %>%
+models_down = genes_df_input %>% 
   mutate(
     se = (ci_high - ci_low) / (2 * 1.96),
     z = log2fc / se,
@@ -2587,10 +2521,7 @@ models_down = dge_long_genes_down %>%
   mutate(pred = direction,
          prob = adj_p_val) %>% 
   #Add controls
-  bind_rows(
-    perfect_prediction,
-    uniform_prediction
-    )
+  bind_rows(perfect_prediction, uniform_prediction)
 
 #Get probabilities (DOWN)
 classified_df_probs_down = truth_human %>% 
@@ -2604,23 +2535,55 @@ classified_df_probs_down = truth_human %>%
   distinct()
 
 
+
 #Get ROC
 roc_curve_down_notdown = classified_df_probs_down %>% 
-  filter(model %in% c("Human", "Mouse", "Uniform", "FIT")) %>%
+  filter(model %in% c("Human", "Mouse", "Uniform")) %>%
   select(symbol, timepoint, truth, pred, model, prob, not_prob, sum) %>%
   group_by(model, timepoint) %>%
   roc_curve(truth, prob) %>%
-  mutate(comparison = "Down vs Non-Down") 
+  mutate(comparison = "Down vs Non-Down")
+
+#Calculate AUC --------
+#Get AUC
+auc_results = classified_df_probs_down %>%
+  group_by(model, timepoint) %>%
+  yardstick::roc_auc(truth, prob) %>% 
+  mutate(comparison = "Down vs Non-Down") %>% 
+  bind_rows(
+    classified_df_probs_up %>%
+      group_by(model, timepoint) %>%
+      yardstick::roc_auc(truth, prob) %>%
+      mutate(comparison = "Up vs Non-Up")) %>% 
+  mutate(.estimate = round(.estimate, 2)) %>% 
+  rename(roc_auc = .estimate)
+
+#Merge data -------
+roc_curve_data = roc_curve_up_notup %>% 
+  bind_rows(roc_curve_down_notdown) %>% 
+  left_join(auc_results, 
+            by = c("model", "comparison", "timepoint")) %>% 
+  mutate(condition = "EngerixB_Vaccination",
+         filename = filename)
+
+roc_curve_data %>% 
+  saveRDS(file = here("tables", paste0("roc_curve_data_", filename, ".rds")))
+
+auc_results
+roc_curve_data 
+
+```
 
 
-############# DOWN VS NOT DOWN
-#PLOT ROC Curve
-roc_curve_down_notdown_plot = roc_curve_down_notdown %>% 
+```{r fig.height=4, fig.width=6}
+##### PLOT ROC Curve ------
+roc_curve_plot = roc_curve_up_notup %>% 
+  bind_rows(roc_curve_down_notdown) %>% 
   ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
   geom_path(size = 1, alpha = 1) +
   geom_abline(lty = 3) +
   theme_vaxgo() +
-  facet_grid(~comparison~paste("Day", timepoint)) + 
+  facet_grid(~fct_rev(comparison)~paste0(timepoint, "h")) + 
   scale_color_manual(values = c(
     "Mouse" = "#4DBBD5FF",
     "FIT"   = "#4361ee",
@@ -2628,6 +2591,7 @@ roc_curve_down_notdown_plot = roc_curve_down_notdown %>%
     "Uniform" = "gray80"
     )) +
   labs(
+    title = filename_title, 
   x = "FPR",
   y = "TPR",
   color = "Model") + 
@@ -2635,200 +2599,24 @@ roc_curve_down_notdown_plot = roc_curve_down_notdown %>%
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 10, angle = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.text.y = element_text(size = 8),
+    strip.text.y = element_text(size = 10,),
+    axis.text.x = element_text(size = 10, angle = 0, hjust = 0.5, vjust = 0.5),
+    axis.text.y = element_text(size = 10),
     panel.spacing.x = unit(0.5, "lines"),
     legend.key = element_blank()
   ) +
   scale_x_continuous(n.breaks = 3) +
   scale_y_continuous(n.break = 3)
 
-roc_curve_down_notdown_plot
 
-roc_curve_down_notdown_plot %>%
-  ggsave(filename = here("Figures", "HepB_roc_curve_down_notdown_plot.png"),
-         width = 10,
-         height =4)
+roc_curve_plot
 
-```
-
-#### Classification of DEGs, distributions
-
-```{r}
-# Suponha um exemplo
-log2fc <- 1.2
-ci_low <- 0.8
-ci_high <- 1.6
-se <- (ci_high - ci_low) / (2 * 1.96)
-
-# Geração de x para a curva
-x_vals <- seq(log2fc - 4*se, log2fc + 4*se, length.out = 500)
-y_vals <- dnorm(x_vals, mean = log2fc, sd = se)
-
-# Criar o data.frame
-df_curve <- data.frame(x = x_vals, y = y_vals)
-
-# Plot
-ggplot(df_curve, aes(x = x, y = y)) +
-  geom_line(color = "blue") +
-  geom_vline(xintercept = c(ci_low, ci_high), linetype = "dashed", color = "red") +
-  geom_vline(xintercept = log2fc, linetype = "solid", color = "black") +
-  theme_vaxgo() +
-  labs(title = "Normal distribution from log2FC ± CI",
-       x = "log2 Fold Change",
-       y = "Density")
-```
-
-```{r}
-#Manual example
-dge_long_genes_up_example = dge_long_genes_down%>% 
-  filter(organism == "Human",
-         symbol == "TLR4") %>% 
-  slice(3)
-
-# Parameters
-condition = dge_long_genes_up_example$condition
-log2fc <- dge_long_genes_up_example$log2fc
-# log2fc <- -0.15
-ci_low <- dge_long_genes_up_example$ci_low
-ci_high <- dge_long_genes_up_example$ci_high
-z = dge_long_genes_up_example$z
-pval_one_sided = pnorm(z, lower.tail = T) #one sided, higher
-se <- dge_long_genes_up_example$se
-direction = dge_long_genes_up_example$direction
-df <- 120  #samples
-
-# Null parameters
-se_null <- se # Same SE
-ci_low_null <- 0 - qt(0.975, df) * se_null
-ci_high_null <- 0 + qt(0.975, df) * se_null
-
-# x values (scaled for t-distribution)
-x_vals <- seq(log2fc - 4*se, log2fc + 4*se, length.out = 500)
-x_vals_null <- seq(-4*se, 4*se, length.out = 500)
-
-# t-distribution densities
-y_vals <- dt((x_vals - log2fc)/se, df = df) / se
-y_vals_null <- dt(x_vals_null / se_null, df = df) / se_null
-
-# Data frames
-df_curve_gene <- data.frame(x = x_vals, y = y_vals, distribution = "Observed")
-df_curve_null <- data.frame(x = x_vals_null, y = y_vals_null, distribution = "Null")
-actual_null_dist <- bind_rows(df_curve_gene, df_curve_null)
-
-# Plot
-
-# Destaque da cauda inferior da distribuição nula
-shade_df_superior <- df_curve_null %>%
-  filter(x >= log2fc) 
-
-shade_df_inferior <- df_curve_gene %>%
-  filter(x <= log2fc) 
-
-ggplot(actual_null_dist, aes(x = x, y = y, color = distribution)) +
-  geom_line(size = 1.2) +
-  
-  # Área sombreada da cauda superior
-  geom_area(data = shade_df_superior, aes(x = x, y = y), fill = "black", alpha = 0.3, inherit.aes = FALSE) +
-  
-  # Área sombreada da cauda inferior
-  geom_area(data = shade_df_inferior, aes(x = x, y = y), fill = "lightblue", alpha = 0.3, inherit.aes = FALSE) +
-  
-  # Linhas de referência
-  geom_vline(xintercept = c(ci_high_null), linetype = "dashed", color = "black") +
-  geom_vline(xintercept = c(ci_low), linetype = "dashed", color = "lightblue") +
-  geom_vline(xintercept = log2fc, linetype = "solid", color = "lightblue") +
-  geom_vline(xintercept = 0, linetype = "solid", color = "black") +
-  
-  scale_y_continuous(expand = c(0.01, 0.01)) +
-  theme_vaxgo() +
-  labs(title = paste0(condition, ", ", "adj_pval = ", as.character(pval_one_sided), ", ", direction),
-       subtitle = condition,
-       x = "log2 Fold Change",
-       y = "Density") +
-  scale_color_manual(values = c("Observed" = "lightblue", "Null" = "black"))
+roc_curve_plot %>%
+  ggsave(filename = here("Figures", paste0("roc_curve_plot_", filename, ".png")),
+         width = 6,
+         height = 4)
 
 ```
 
-Automated Generate distributions for multiple genes
 
-```{r}
 
-#Plot T distributions
-plot_t_distribution <- function(df, df_samples = 10, n_points = 500) {
-  # df: data frame containing condition, log2fc, ci_low, ci_high, se columns
-  # df_samples: degrees of freedom for t-distribution (default 120)
-  # n_points: number of points for the curves
-  
-  # Function to create a plot for one row (one condition)
-  create_plot <- function(row) {
-    condition <- row$condition
-    log2fc <- row$log2fc
-    ci_low <- row$ci_low
-    ci_high <- row$ci_high
-    se <- row$se
-    adj_p_val = row$adj_p_val
-    direction = row$direction
-    df <- df_samples
-    
-    
-    # Null parameters (mean=0, same SE)
-    se_null <- se
-    ci_low_null <- 0 - qt(0.975, df) * se_null
-    ci_high_null <- 0 + qt(0.975, df) * se_null
-    
-    # x ranges for observed and null
-    x_vals <- seq(log2fc - 4*se, log2fc + 4*se, length.out = n_points)
-    x_vals_null <- seq(-4*se_null, 4*se_null, length.out = n_points)
-    
-    # t-distribution densities
-    y_vals <- dt((x_vals - log2fc) / se, df = df) / se
-    y_vals_null <- dt(x_vals_null / se_null, df = df) / se_null
-    
-    # Data frames for plotting
-    df_curve_gene <- data.frame(x = x_vals, y = y_vals, distribution = "Observed")
-    df_curve_null <- data.frame(x = x_vals_null, y = y_vals_null, distribution = "Null")
-    actual_null_dist <- bind_rows(df_curve_gene, df_curve_null)
-    
-    # Plot
-    p <- ggplot(actual_null_dist, aes(x = x, y = y, color = distribution)) +
-      geom_line(size = 1.2) +
-      geom_vline(xintercept = c(ci_high_null), linetype = "dashed", color = "black") +
-      geom_vline(xintercept = c(ci_low), linetype = "dashed", color = "lightblue") +
-      geom_vline(xintercept = log2fc, linetype = "solid", color = "lightblue") +
-      geom_vline(xintercept = 0, linetype = "solid", color = "black") +
-      theme_vaxgo() +
-      theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
-            legend.position = "top") +
-      labs(title = paste0(condition, ", ", "adj_pval = ", round(adj_p_val, 4), ", ", direction),
-           x = "log2 Fold Change",
-           y = "Density") +
-      scale_color_manual(values = c("Observed" = "lightblue", "Null" = "black"))
-    
-    return(p)
-  }
-  
-  # Apply the plotting function to each row
-  plots <- lapply(seq_len(nrow(df)), function(i) create_plot(df[i, ]))
-  
-  # Optionally, name the list by conditions
-  names(plots) <- df$condition
-  
-  return(plots)
-}
-```
-
-Run
-
-```{r fig.height=8, fig.width=12}
-
-df_example <- dge_long_genes_up %>%
-  filter(symbol == "TLR8") %>%
-  distinct(condition, .keep_all = TRUE)  # One row per condition
-
-plots_list <- plot_t_distribution(df_example, df_samples = 100)
-
-wrap_plots(plots_list, guides = "collect") +
-  plot_annotation(title = df_example$symbol, theme = theme(legend.position = "top"))
-```
