@@ -1,9 +1,13 @@
 ---
 title: "Frameworks"
 output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
 ---
 
-#Download datasets
+# Download datasets
+
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
 
 #Download datasets
@@ -35,7 +39,6 @@ eset %>%
 
 ```
 
-
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
 #Import
 GSE120661_eset = readRDS(here("tables", "GSE120661_exprs.rds"))
@@ -56,8 +59,8 @@ GSE120661_exprs_distribution %>%
   geom_histogram()
 ```
 
-
 #### Get metadata
+
 ```{r}
 #Import
 GSE120661_metadata = read_csv(here("tables", "GSE120661_metadata.csv")) 
@@ -76,6 +79,7 @@ GSE120661_metadata %>% saveRDS(here("tables", "GSE120661_metadata.rds"))
 ```
 
 Import
+
 ```{r}
 #Import
 GSE120661_metadata = readRDS(here("tables", "GSE120661_metadata.rds"))
@@ -102,6 +106,7 @@ GSE120661_counts_not_normalized_log2 = GSE120661_counts_not_normalized_log2 %>%
 ```
 
 ### Annotate genes
+
 ```{r}
 ## Set up biomart
 ensembl_mart <- useMart("ensembl")
@@ -142,16 +147,18 @@ GSE120661_counts_not_normalized_log2_summary = GSE120661_counts_not_normalized_l
 #Print out the annotated table
 GSE120661_counts_not_normalized_log2_summary
 ```
-Stats
-- 39,430 probes in the microarray,
-- 39,392 that were annotated in BiomaRt (~99.90%)
-- 37,983 probes had a correspondent mgi symbol (96.33% of probes in microarray)
-- 31,140 probes had a correspondent entrez id (78.97% of probes in microarray)
-- 30,787 probes with entrez id also had a correspondent mgi_symbol (78.08% of probes in microarray)
-- 22,435 probes have an entrez gene id. As this is the input in FIT, we used this to filter, not mgi_symbol (56.89% of probes in microarray)
-- 21,744 genes were filtered by the highest median (55.14% were kept from the microarray)
-- 86 Dupes. The duplication is due to different mgi_symbols. Same Entrez IDs can correspond to different mgi_symbol
-- 20849 probes were used (52.87%)
+
+Stats - 39,430 probes in the microarray, - 39,392 that were annotated in
+BiomaRt (\~99.90%) - 37,983 probes had a correspondent mgi symbol
+(96.33% of probes in microarray) - 31,140 probes had a correspondent
+entrez id (78.97% of probes in microarray) - 30,787 probes with entrez
+id also had a correspondent mgi_symbol (78.08% of probes in
+microarray) - 22,435 probes have an entrez gene id. As this is the input
+in FIT, we used this to filter, not mgi_symbol (56.89% of probes in
+microarray) - 21,744 genes were filtered by the highest median (55.14%
+were kept from the microarray) - 86 Dupes. The duplication is due to
+different mgi_symbols. Same Entrez IDs can correspond to different
+mgi_symbol - 20849 probes were used (52.87%)
 
 ```{r}
 # Stats
@@ -227,10 +234,118 @@ GSE120661_samples_pbmc %>%
 ```
 
 
+# Differential gene expression
+
+```{r}
+#Differential gene expression ----
+#Matrix
+matrix_genes = human_mouse_fluad_matrix
+#Filter samples
+human_mouse_matrix = matrix_genes %>% 
+  as.data.frame() %>% 
+  select(c(human_mouse_metadata %>% 
+           filter(organism == "Mouse") %>% 
+             pull(sample_id))) %>% 
+  as.matrix()
+
+#Create Expression Set
+eset_mouse <- ExpressionSet(
+  assayData = human_mouse_matrix,
+  phenoData = AnnotatedDataFrame(human_mouse_metadata %>% 
+                                   column_to_rownames("sample_id") %>% 
+                                   filter(organism == "Mouse")))
+
+#Save
+eset_mouse %>% saveRDS(file = here("tables", "Example_eset_mouse.rds"))
+
+#Create model matrix
+design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
+                       eset_mouse) 
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+# Estimate the correlation between measurements made on the same subject (paired-samples)
+corfit <- duplicateCorrelation(eset_mouse, 
+                               design = design, 
+                               block = eset_mouse$participant_id)
+corfit$consensus
+
+#Fit Limma model
+fit <- lmFit(eset_mouse, design, 
+             block = eset_mouse$participant_id, 
+             correlation = corfit$consensus) #Use inter-subject correlation as input into the linear model fit
+
+#Get conditions
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+#Test for Fluad
+cont.matrix <- makeContrasts(conditionFluad_4_PBMC - conditionFluad_0_PBMC,
+                             conditionFluad_8_PBMC - conditionFluad_0_PBMC,
+                             conditionFluad_24_PBMC - conditionFluad_0_PBMC,
+                             conditionFluad_48_PBMC - conditionFluad_0_PBMC,
+                             conditionFluad_72_PBMC - conditionFluad_0_PBMC,
+                             conditionFluad_168_PBMC - conditionFluad_0_PBMC,
+                             levels=design)
+#Get contrasts
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- treat(fit2, lfc = 0.0)
+
+#Get DEGs
+
+## For every contrast
+results_list <- lapply(1:ncol(fit2), function(i) {
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+  })
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs and clean dataset
+all_degs_mouse = all_contrasts_degs %>% 
+  select(comparison, everything()) %>% 
+  mutate(comparison = str_replace(comparison, "\\.\\.\\.", "_") %>% 
+           str_replace(., "timepoint", "Time") %>% 
+           str_replace(., "treatment", "")) %>% 
+  separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef")) %>% 
+  mutate(comparisonRef = str_replace(comparisonRef, "treatment", "Time0")) %>% 
+  mutate(condition = case_when(comparisonA == "conditionFluad_4_PBMC"	~ "Fluad_4_PBMC",
+                               comparisonA == "conditionFluad_8_PBMC"	~ "Fluad_8_PBMC",
+                               comparisonA == "conditionFluad_24_PBMC"	~ "Fluad_24_PBMC",
+                               comparisonA == "conditionFluad_48_PBMC"	~ "Fluad_48_PBMC",
+                               comparisonA == "conditionFluad_72_PBMC"	~ "Fluad_72_PBMC",
+                               comparisonA == "conditionFluad_168_PBMC"	~ "Fluad_168_PBMC",
+                               T~comparisonA)) %>% 
+  select(condition, everything())
+	
+# #Save
+# all_degs_mouse %>% saveRDS(file = here("tables", "GSE120661_degs_mouse.rds"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #Genes correlation, intra- and inter-species
 
 Import
+
 ```{r}
 #Import
 human_mouse_fluad_raw_qn_log2fc = 
@@ -239,20 +354,34 @@ human_mouse_fluad_raw_qn_log2fc_avg =
   readRDS(file = here("tables", "human_mouse_fluad_raw_qn_log2fc_avg.rds"))
 
 human_mouse_fluad_metadata = readRDS(file = here("tables", "human_mouse_fluad_metadata.rds"))
+human_mouse_fluad_metadata_grouped = human_mouse_fluad_metadata %>% 
+  group_by(organism, vaccine, timepoint) %>% 
+  summarize(n = n()) %>% 
+  ungroup()
 
 
-#Input
+#Input -------
 results_log2fc = human_mouse_fluad_raw_qn_log2fc %>% 
   filter(measure == "value_raw",
          timepoint %in% c(1, 3, 7))
-results_log2fc_avg = human_mouse_fluad_raw_qn_log2fc_avg %>% 
+
+results_log2fc_avg_ttest = human_mouse_fluad_raw_qn_log2fc_avg %>% 
   filter(measure == "value_raw",
          timepoint %in% c(1, 3, 7))
+
+results_log2fc_avg = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds")) %>% 
+  select(symbol, vaccine, organism, timepoint, avg_log2fc = log2fc, pval = p_value, pval_adj = adj_p_val, ci_low, ci_high) %>% 
+  mutate(timepoint = as.character(timepoint)) %>% 
+  inner_join(human_mouse_fluad_metadata_grouped, 
+             by = join_by("organism", "vaccine", "timepoint")) %>% 
+  filter(timepoint %in% c(1, 3, 7))
+
+#Metadata
 results_metadata = human_mouse_fluad_metadata
 ```
 
-
 Line plot of DEGs by timepoint
+
 ```{r fig.height=5, fig.width=3}
 #Get DEGs from either organisms
 human_or_mouse_degs = results_log2fc_avg %>% 
@@ -265,26 +394,51 @@ human_or_mouse_degs = results_log2fc_avg %>%
 
 human_and_mouse_degs_summary = human_or_mouse_degs %>% 
   group_by(timepoint) %>% 
-  summarize(n_genes = n())
+  summarize(n_genes = n(),
+            test = "Limma")
+
+
+#Compare with t test
+human_or_mouse_degs_ttest = results_log2fc_avg_ttest %>% 
+  select(symbol, organism, timepoint, pval_adj) %>% 
+  pivot_wider(names_from = "organism",
+              values_from = "pval_adj") %>% #14150 genes
+  filter(Mouse <= 0.05) %>%  
+  select(symbol, timepoint) %>% 
+  distinct()
+
+human_and_mouse_degs_summary_ttest = human_or_mouse_degs_ttest %>% 
+  group_by(timepoint) %>% 
+  summarize(n_genes = n(),
+            test = "t-Test")
 
 human_and_mouse_degs_summary_plot = human_and_mouse_degs_summary %>% 
+  bind_rows(human_and_mouse_degs_summary_ttest) %>% 
   ggplot() +
   aes(x = as.numeric(timepoint),
-      y = n_genes) +
-  geom_col(fill = "#4DBBD5FF", width = 0.3) +
+      y = n_genes,
+      fill = test) +
+  geom_col(width = 0.6, position = position_dodge2()) +
+  scale_fill_manual(values = c("t-Test" = "gray",
+                               "Limma" = "#4DBBD5FF")) +
   scale_x_continuous(breaks = c(1, 3, 7), expand = c(0.01, 0.01)) +
   scale_y_continuous(expand = c(0,0)) +
   theme_vaxgo() +
   labs(title = "Total shared DEGs, by day",
        x = "Day",
-       y = "Total genes") +
-  theme(legend.position = "none",
+       y = "Total genes",
+       fill = "Test") +
+  theme(legend.position = "top",
         axis.line.y = element_blank(),
         panel.grid.major.y = element_line(color = "gray75", linetype = 3),
-        axis.ticks.y = element_line(color = "gray75")) +
-  guides(fill = "none") 
+        axis.ticks.y = element_line(color = "gray75")) 
 
 human_and_mouse_degs_summary_plot
+
+human_and_mouse_degs_summary_plot %>% 
+  ggsave(filename = here("Figures", "human_and_mouse_degs_summary_plot_ttest_VS_Limma.png"),
+         width = 5,
+         height = 5)
 ```
 
 ## 1 individual vs 1 individual
@@ -374,9 +528,6 @@ correlation_long_all_mouse_human_timepoints_summary %>%
   saveRDS(file = here("tables", "example_correlation_genes_long_all_mouse_human_timepoints_summary.rds"))
 
 ```
-
-
-
 
 ## Bootstrap
 
@@ -503,22 +654,43 @@ correlation_bootstrap_summary <- bootstrapped_human_mouse_cors %>%
     .groups = "drop") %>% 
   mutate(timepoint = as.character(timepoint),
          unit = "Day")
+```
 
+```{r fig.height=5, fig.width=3}
+#Unite results
+correlation_long_all_mouse_human_timepoints_summary_df = correlation_long_all_mouse_human_timepoints_summary %>% 
+  separate(timepoint, into = c("unit", "timepoint"), remove = T) %>% 
+  filter(timepoint %in% c("1", "3", "7")) %>% 
+  bind_rows(correlation_bootstrap_summary %>% 
+              mutate(comparison = "Bootstrap"))
 
 # Prints the summarized result
-correlation_bootstrap_summary_plot = correlation_bootstrap_summary %>% 
+correlation_bootstrap_summary_plot = correlation_long_all_mouse_human_timepoints_summary_df %>% 
+  filter(comparison %in% c("Bootstrap", "Mouse vs. Human")) %>% 
   ggplot() +
   aes(x = as.numeric(timepoint),
       y = mean,
       group = comparison,
       color = comparison,
       fill = comparison) +
-  geom_line(size = 1) +
   geom_textline(aes(label = comparison), 
+                data = . %>% filter(comparison == "Bootstrap"),
                 size = 3, 
-                vjust = 1,
+                vjust = -0.5,
+                hjust = 0,
+                linewidth = 1) +
+  
+  geom_textline(aes(label = comparison), 
+                data = . %>% filter(comparison == "Mouse vs. Human"),
+                size = 3, 
+                vjust = 1.3,
                 hjust = 0.8,
                 linewidth = 1) +
+  
+    scale_color_manual(values = c("Mouse vs. Human" = "#4361ee",
+                                "Bootstrap" = "#06d6a0",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
   
   geom_errorbar(aes(ymin = ci_lower, 
                   ymax = ci_upper), width = 0.2,
@@ -534,13 +706,17 @@ correlation_bootstrap_summary_plot = correlation_bootstrap_summary %>%
   theme(legend.position = "none") +
   guides(fill = "none") 
 
+correlation_bootstrap_summary_plot %>% 
+  ggsave(filename = here("Figures", "correlation_bootstrap_summary_plot.png"),
+         width = 3,
+         height = 5)
+
+correlation_bootstrap_summary_plot
+
 ```
 
-
-
-
-
 Line plot of correlation
+
 ```{r fig.height=5, fig.width=3}
 #Import
 correlation_long_all_mouse_human_timepoints_summary = 
@@ -549,9 +725,9 @@ correlation_long_all_mouse_human_timepoints_summary =
 
 correlation_long_all_mouse_human_timepoints_summary_df = correlation_long_all_mouse_human_timepoints_summary %>% 
   separate(timepoint, into = c("unit", "timepoint"), remove = T) %>% 
-  filter(timepoint %in% c("1", "3", "7")) %>% 
-  bind_rows(correlation_bootstrap_summary %>% 
-              mutate(comparison = "Bootstrap"))
+  filter(timepoint %in% c("1", "3", "7"))
+  # bind_rows(correlation_bootstrap_summary %>% 
+  #             mutate(comparison = "Bootstrap"))
 
 #Plot
 correlation_long_all_mouse_human_timepoints_summary_plot = correlation_long_all_mouse_human_timepoints_summary_df %>% 
@@ -639,16 +815,12 @@ correlation_long_all_mouse_human_timepoints_summary_plot %>%
   
 ```
 
-
-
-
-
-
-
 #BTMs correlation, intra- and inter-species
 
 #### Samples' means
+
 Annotate genes log2fc table with BTMs
+
 ```{r}
 #Import BTMs annotation table
 btm_annotation_genes =
@@ -686,8 +858,8 @@ dge_btm_mean_process %>%
 
 ```
 
-
 #### Import data from different organisms
+
 ```{r}
 #Genes L2FC table annotated with BTMs
 example_dge_btm_mean_process_samples =
@@ -721,9 +893,10 @@ example_dge_btm_mean_process_sample_wide
   
 ```
 
-#### Summarize interindividual correlation
+#### Summarize inter-individual correlation
 
 ##### 1 individual vs 1 individual
+
 ```{r}
 # --- 1) Mouse vs Human, same timepoint ---
 #Get timepoints
@@ -889,31 +1062,14 @@ example_samples_btm_correlation_all_timepoints_summary %>%
   saveRDS(file = here("tables", "example_samples_btm_correlation_all_timepoints_summary.rds"))
 ```
 
-#####Bootstrap
+##### Bootstrap
 
 ```{r}
 
 ```
 
+##### Plot scatterplot
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#####Plot scatterplot
 ```{r fig.height=3, fig.width=3}
 #Scatterplot
 example_samples_btm_correlation_all_timepoints_summary_plot = example_samples_btm_correlation_all_timepoints_summary %>% 
@@ -980,70 +1136,64 @@ correlation_long_all_btm_mouse_human_timepoints_summary_plot
   
 ```
 
+# Performance tests 
 
+## ROC Curve 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#Performance tests
-## ROC Curve
-Do for one direction (up and then down)
-Do one sided t test for mouse, fit, and human
-Positive control: Human
-Neg control: Random permutation
-
+Do for one direction (up and then down) Do one sided t test for mouse,
+fit, and human Positive control: Human Neg control: Random permutation
 
 Import data
+
 ```{r}
-library(pracma)
 #Import DEGs table
-dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds"))
+dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds")) 
 #ImmuneGO ontologies
-ImmuneGO_Mouse_Manual_genes <- read_excel(here("VaxGO", "ImmuneGO_Mouse.xlsx")) %>% 
- separate_rows(genes)
-immunego_btm_manual_grouped = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genesets.csv"))
 ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
+
+
+#All genes
+genes_roc_allgenes = dge_long_genes
+#Filter immune genees
+genes_roc_allgenes_immunegenes = dge_long_genes %>% 
+  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
+
+  
+#Only DEGs
+degs_genes_human = dge_long_genes %>% 
+  filter(adj_p_val <= 0.05, 
+         organism == "Human") %>% 
+  select(symbol, timepoint)
+#All DEGs
+genes_roc_DEGs_immune = dge_long_genes %>% 
+  inner_join(degs_genes_human,
+             by = join_by("symbol", "timepoint")) %>% 
+  #Filter immune genes only
+  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
+#Immune DEGs
+genes_roc_DEGs_immune = dge_long_genes %>% 
+  inner_join(degs_genes_human,
+             by = join_by("symbol", "timepoint")) %>% 
+  #Filter immune genes only
+  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
 ```
 
+### All genes
+
 Calculate ROC curve
+
 ```{r fig.height=4, fig.width=10}
 set.seed(123)
-
 ######### Input -----
-genes_df_input = dge_long_genes
-  #Filter immune genes only
-  # filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
-
+genes_df_input = genes_roc_allgenes
 filename = "Fluad_All"
+# filename = "Fluad_All_Immune"
+# filename = "Fluad_AllDEGs_HumanDEGs"
+# filename = "Fluad_AllDEGs_HumanDEGs_Immune"
+```
 
+
+```{r fig.height=5, fig.width=8}
 ######### UP -----------
 #Do one sided t-test for each model
 dge_long_genes_up = genes_df_input %>% 
@@ -1071,26 +1221,10 @@ perfect_prediction = truth_human %>%
   mutate(prob = adj_p_val) %>%
   rename(pred = truth)
 
-permutation_prediction = perfect_prediction %>%
-  group_by(timepoint) %>% 
-  mutate(prob = randperm(prob),
-         organism = "Permutation")
-
 uniform_prediction = perfect_prediction %>%
   group_by(timepoint) %>% 
   mutate(prob = runif(n()),
          organism = "Uniform")
-
-shuffle_prediction = perfect_prediction %>%
-  group_by(timepoint) %>% 
-  mutate(prob = sample(prob),
-         organism = "Shuffle")
-
-normal_prediction = perfect_prediction %>% 
-  group_by(timepoint) %>% 
-  mutate(prob = rnorm(n(), mean = 0.5, sd = 0.1),
-         prob= pmin(pmax(prob, 0), 1),
-         organism = "Normal")
 
 #Get only up and not up genes from models
 models_up = genes_df_input %>% 
@@ -1108,10 +1242,7 @@ models_up = genes_df_input %>%
   #Add controls
   bind_rows(
     perfect_prediction,
-    permutation_prediction,
-    uniform_prediction,
-    shuffle_prediction,
-    normal_prediction
+    uniform_prediction
     )
 
 #Get probabilities (UP)
@@ -1204,58 +1335,9 @@ roc_curve_down_notdown = classified_df_probs_down %>%
   group_by(model, timepoint) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Down vs Non-Down")
-```
-
-Visualize probability distributions
-```{r fig.height=4, fig.width=10}
-# #Plot model distributions and negative-control distributions
-# classified_df_probs_up %>% 
-#   ggplot() +
-#   aes(x = prob)+
-#   facet_grid(~model~paste("Day", timepoint), scales = "free") +
-#   geom_density(
-#     aes(color = model,
-#         y = after_stat(density)),
-#     size = 1)  +
-#   theme_vaxgo() +
-#   guides(color = F) +
-#   theme(strip.text.y = element_text(angle = 0, hjust = 0)) +
-#   scale_color_manual(values = c(
-#     "Mouse" = "#4DBBD5FF",
-#     "FIT"   = "#4361ee",
-#     "Human" = "#90A4AEFF",
-#     "Permutation" = "gray80",
-#     "Uniform" = "gray80",
-#     "Shuffle" = "gray80",
-#     "Normal" = "gray80"
-#     ))
 
 
-
-# classified_df_probs_down %>% 
-#   ggplot() +
-#   aes(x = prob)+
-#   facet_grid(~model~paste("Day", timepoint), scales = "free") +
-#   geom_density(
-#     aes(color = model,
-#         y = after_stat(density)),
-#     size = 1)  +
-#   theme_vaxgo() +
-#   guides(color = F) +
-#   theme(strip.text.y = element_text(angle = 0, hjust = 0)) +
-#   scale_color_manual(values = c(
-#     "Mouse" = "#4DBBD5FF",
-#     "FIT"   = "#4361ee",
-#     "Human" = "#90A4AEFF",
-#     "Permutation" = "gray80",
-#     "Uniform" = "gray80",
-#     "Shuffle" = "gray80",
-#     "Normal" = "gray80"
-#     ))
-```
-
-Plot curves
-```{r fig.height=5, fig.width=8}
+#Plot curves ------------------
 #PLOT ROC Curve
 roc_curve_plot = roc_curve_up_notup %>% 
   bind_rows(roc_curve_down_notdown) %>% 
@@ -1271,6 +1353,7 @@ roc_curve_plot = roc_curve_up_notup %>%
     "Uniform" = "gray80"
     )) +
   labs(
+    title = filename,
   x = "FPR",
   y = "TPR",
   color = "Model") + 
@@ -1297,87 +1380,7 @@ roc_curve_plot %>%
 ```
 
 
-#Differential gene expression
-```{r}
-#DGE (Mouse normalized with human) ----
-human_mouse_fluad_matrix_mouse = human_mouse_fluad_matrix %>% 
-  as.data.frame() %>% 
-  select(c(human_mouse_fluad_metadata %>% 
-           filter(organism == "Mouse") %>% 
-             pull(sample_id))) %>% 
-  as.matrix()
 
-eset_mouse <- ExpressionSet(
-  assayData = human_mouse_fluad_matrix_mouse,
-  phenoData = AnnotatedDataFrame(human_mouse_fluad_metadata %>% 
-                                   column_to_rownames("sample_id") %>% 
-                                   filter(organism == "Mouse"))
-)
-
-eset_mouse %>% saveRDS(file = here("tables", "GSE120661_eset_mouse_quantile.rds"))
-
-design <- model.matrix(~ condition + 0, eset_mouse) # 0 defines the way we compare the samples
-colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
-
-# Then we estimate the correlation between measurements made on the same subject:
-corfit <- duplicateCorrelation(eset_mouse, 
-                               design = design, 
-                               block = eset_mouse$participant_id)
-corfit$consensus #0.022 (low intra-subject correlation)
-# Then this inter-subject correlation is input into the linear model fit:
-#Fit Limma model
-fit <- lmFit(eset_mouse, design, 
-             block = eset_mouse$participant_id, 
-             correlation = corfit$consensus)
-colnames(design) %>% 
-  as.data.frame() %>% 
-  arrange(.)
-
-#Test for Fluad
-cont.matrix <- makeContrasts(conditionFluad_4_PBMC - conditionFluad_0_PBMC,
-                             conditionFluad_8_PBMC - conditionFluad_0_PBMC,
-                             conditionFluad_24_PBMC - conditionFluad_0_PBMC,
-                             conditionFluad_48_PBMC - conditionFluad_0_PBMC,
-                             conditionFluad_72_PBMC - conditionFluad_0_PBMC,
-                             conditionFluad_168_PBMC - conditionFluad_0_PBMC,
-                             levels=design)
-
-fit2 <- contrasts.fit(fit, cont.matrix)
-fit2 <- treat(fit2, lfc = 0.0)
-
-#Get DEGs
-
-## For every contrast
-results_list <- lapply(1:ncol(fit2), function(i) {
-  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
-    mutate(comparison = colnames(fit2)[i]) %>% 
-    rownames_to_column("symbol")
-  })
-
-# Combine all results
-all_contrasts_degs <- bind_rows(results_list)
-
-# Get all DEGs
-all_degs_mouse = all_contrasts_degs %>% 
-  select(comparison, everything()) %>% 
-  mutate(comparison = str_replace(comparison, "\\.\\.\\.", "_") %>% 
-           str_replace(., "timepoint", "Time") %>% 
-           str_replace(., "treatment", "")) %>% 
-  separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef")) %>% 
-  mutate(comparisonRef = str_replace(comparisonRef, "treatment", "Time0")) %>% 
-  mutate(condition = case_when(comparisonA == "conditionFluad_4_PBMC"	~ "Fluad_4_PBMC",
-                               comparisonA == "conditionFluad_8_PBMC"	~ "Fluad_8_PBMC",
-                               comparisonA == "conditionFluad_24_PBMC"	~ "Fluad_24_PBMC",
-                               comparisonA == "conditionFluad_48_PBMC"	~ "Fluad_48_PBMC",
-                               comparisonA == "conditionFluad_72_PBMC"	~ "Fluad_72_PBMC",
-                               comparisonA == "conditionFluad_168_PBMC"	~ "Fluad_168_PBMC",
-                               T~comparisonA)) %>% 
-  select(condition, everything())
-	
-# #Save
-# all_degs_mouse %>% saveRDS(file = here("tables", "GSE120661_degs_mouse.rds"))
-```
-```
 
 
 
