@@ -817,10 +817,402 @@ correlation_long_all_mouse_human_timepoints_summary_plot %>%
 
 #BTMs correlation, intra- and inter-species
 
-#### Samples' means
+## Mean Log2FC and GSEA
+Compare means and NES
+Import
+```{r}
+#Import datasets ------
+#Import DGE output
+pairwise_human_fit_measures = read_rds(here("FIT_Mouse2man", "pairwise_human_fit_measures.rds"))
+dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds"))
 
+#Import BTMs annotation table
+ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+
+
+#Clean metadata 
+annotation_conditions = dge_long_genes %>% 
+  select(condition, timepoint, model = organism) %>% 
+  distinct()
+
+# Gene set enrichment analysis (GSEA) --------
+#Get calculate means -----
+#Annotate genes by BTM 
+
+dge_btm_process = dge_long_genes %>% 
+  ungroup() %>% 
+  inner_join(btm_annotation_genes, by = "symbol") %>% 
+  filter(immune_set == "BTM by Modules") %>%
+  filter(organism %in% c("Human", "Mouse")) %>% 
+  group_by(condition, timepoint, process)
+
+dge_btm_mean_process = dge_btm_process %>% 
+  summarize(mean_log2fc = mean(log2fc),
+            median_log2fc = median(log2fc),
+            sd_log2fc = sd(log2fc),
+            var_log2fc = var(log2fc),
+            organism,
+            group, subgroup) %>%
+  distinct() %>% 
+  ungroup()
+
+#Print
+dge_btm_mean_process
+```
+
+```{r}
+#Run GSEA for DGE outputs-----
+#Human ImmuneGO/BTMs
+term2gene = ImmuneGO_BTM_grouped_genes %>% 
+  select(process, genes)
+
+#Clean table for GSEA standard
+df_genes2GSEA_human = dge_long_genes %>% 
+  distinct() %>% 
+  select(condition, genes = symbol, log2fold_change = log2fc)  
+
+#Run multiple GSEA and unite means
+gsea_results_immuneGO_Manual_human = autoGSEA(df = df_genes2GSEA_human,
+         TERM2GENE = term2gene,
+         geneset_name = "Human_ImmuneGO") %>% 
+  clean_names() %>% 
+  rename(process = id) %>% 
+  #Unite means and GSEA
+  inner_join(dge_btm_mean_process, by = join_by("process", "condition"))
+  
+  
+#Save
+gsea_results_immuneGO_Manual_human %>% 
+    saveRDS(here("GSEA_ORA", "gsea_results_immuneGO_BTM_Human_Manual.rds"))
+```
+
+#### Plot distributions
+
+```{r fig.height=12, fig.width=10}
+#Pivot to wide GSEA + mean
+dge_btm_gsea_mean_wide = gsea_results_immuneGO_Manual_human %>% 
+  mutate(organism = case_when(str_detect(condition, "Mouse") ~ "Mouse",
+                              str_detect(condition, "Human") ~ "Human",
+                              T~condition)) %>% 
+  select(organism, timepoint, process, group, subgroup, set_size, nes, mean_log2fc, p_adjust, qvalue) %>% 
+  group_by(timepoint, process, subgroup, group, set_size) %>%
+  pivot_wider(names_from = organism,
+    values_from = c(mean_log2fc, nes, p_adjust, qvalue, set_size),
+    names_sep = "_")
+
+#Arrange process by log2fc
+process_order_log2fc = dge_btm_mean_process %>% 
+  select(process, timepoint, organism, mean_log2fc, group) %>%
+  filter(timepoint == 1,
+         organism == "Human") %>% 
+  group_by(organism, timepoint, group) %>% 
+  arrange(-mean_log2fc) %>%
+  pull(process) %>% 
+  unique() 
+
+dge_btm_process_ordered = dge_btm_process %>% 
+  ungroup() %>% 
+    mutate(group = fct_relevel(as.factor(group), c(immune_order)),
+           process = fct_relevel(as.factor(process), c(process_order_log2fc)) %>% fct_rev()) 
+
+labels_process <- dge_btm_gsea_mean_wide %>%
+  ungroup() %>% 
+  distinct(process, p_adjust_Human, p_adjust_Mouse) %>%
+  mutate(label = ifelse(p_adjust_Human <= 0.25 & p_adjust_Mouse < 0.25, 
+                         "bold", "plain"),
+         label_color = ifelse(p_adjust_Human <= 0.25 & p_adjust_Mouse < 0.25, 
+                         "#4DBBD5FF", "gray50"))  %>% 
+  ungroup() %>% 
+  distinct() %>% 
+  mutate(process = fct_relevel(process, process_order_log2fc))
+  
+
+#Plot
+dge_btm_process_distribution = dge_btm_process_ordered %>% 
+  ggplot() +
+  aes(y = process,
+      x = log2fc,
+      color = organism) +
+  facet_grid(~group~paste("Day", timepoint), scales = "free", space = "free") +
+  geom_vline(xintercept = 0, color = "black") +
+  geom_point(pch = "|", alpha = 0.2, 
+             show.legend = F,
+             size = 3) +
+  stat_summary(
+  aes(color = organism),
+  fun.data = mean_se,
+  geom = "errorbar",
+  width = 0,
+  size = 1
+) +
+  stat_summary(
+    aes(fill = organism), 
+    fun = mean,             
+    color = "black",
+    geom = "point",             
+    size = 2,    
+    pch = 21,  
+    alpha = 1,
+    show.legend = T 
+  ) +
+  xlim(-2, 2) +
+  theme_vaxgo() +
+  theme(strip.text.y = element_text(angle = 0, hjust = 0), 
+        axis.ticks.y = element_line(color = "gray", alpha = 0.5),
+        legend.position = "top",
+        axis.text.x = element_text(size = 8),
+        axis.text.y = element_text(size = 8, face = c(labels_process$label), color = c(labels_process$label_color)),
+        axis.line.y = element_blank(),
+        panel.spacing.y = unit(0.3, "lines"),
+        panel.grid.major.x = element_line(alpha = 0.5)) +
+  scale_fill_manual(values = c("Mouse" = "#4DBBD5FF",
+                               "Human" = "#90A4AEFF")) +
+  scale_color_manual(values = c("Mouse" = "#4DBBD5FF",
+                               "Human" = "#90A4AEFF")) +
+    labs(color = "Organism",
+       y = "",
+       x = "Log2FC",
+       fill = "Organism",
+       title = "Mouse vs Human, BTMs genes, mean Log2FC") 
+
+dge_btm_process_distribution 
+
+dge_btm_process_distribution %>% 
+  ggsave(filename = here("Figures", "Example_dge_btm_process_distribution.png"),
+         height = 12, 
+         width = 10)
+  
+```
+
+
+
+
+
+#### Correlation plot (BTM, immune)
+Import
+```{r}
+#Import results -------
+gsea_results_immuneGO_Manual_human = readRDS(here("GSEA_ORA", "gsea_results_immuneGO_BTM_Human_Manual.rds"))
+dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds"))
+
+```
+
+
+Plot correlation
+```{r fig.height=5, fig.width=7}
+#Mouse vs Human
+#Pivot to wide GSEA + mean
+dge_btm_gsea_mean_wide = gsea_results_immuneGO_Manual_human %>% 
+  mutate(organism = case_when(str_detect(condition, "Mouse") ~ "Mouse",
+                              str_detect(condition, "Human") ~ "Human",
+                              T~condition)) %>% 
+  select(organism, timepoint, process, group, subgroup, set_size, nes, mean_log2fc, p_adjust, qvalue) %>% 
+  group_by(timepoint, process, subgroup, group, set_size) %>%
+  pivot_wider(names_from = organism,
+    values_from = c(mean_log2fc, nes, p_adjust, qvalue, set_size),
+    names_sep = "_")
+
+
+#Calculate correlation -----
+
+# Means vs means
+cor_labels <- dge_btm_gsea_mean_wide %>%
+  select(process, timepoint, group, subgroup, Mouse = mean_log2fc_Mouse, Human = mean_log2fc_Human) %>% 
+  group_by(timepoint) %>% 
+  summarise(test_result = list(cor.test(x = Human, 
+                                        y = Mouse, 
+                                        use = "pairwise.complete.obs", 
+                                        method = "pearson")), 
+            .groups = "drop") %>%
+  mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
+         p_value = purrr::map_dbl(test_result, "p.value")) %>%
+  select(-test_result) %>%
+  # Labels
+  mutate(
+    r_squared = cor_value^2,
+    p_label = ifelse(p_value < 0.01,
+                     "p = <0.01",
+                     paste0("p = ", round(p_value, 2))),
+    cor_label = paste0(
+      "r = ", round(cor_value, 2),
+      ", R² = ", round(r_squared, 2),
+      ", ", p_label))
+
+# NES vs NES
+cor_labels_nes <- dge_btm_gsea_mean_wide %>%
+  select(process, timepoint, group, subgroup, Mouse = nes_Mouse, Human = nes_Human) %>% 
+  group_by(timepoint) %>% 
+  summarise(test_result = list(cor.test(x = Human, 
+                                        y = Mouse, 
+                                        use = "pairwise.complete.obs", 
+                                        method = "pearson")), 
+            .groups = "drop") %>%
+  mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
+         p_value = purrr::map_dbl(test_result, "p.value")) %>%
+  select(-test_result) %>%
+  # Labels
+  mutate(
+    r_squared = cor_value^2,
+    p_label = ifelse(p_value < 0.01,
+                     "p = <0.01",
+                     paste0("p = ", round(p_value, 2))),
+    cor_label = paste0(
+      "r = ", round(cor_value, 2),
+      ", R² = ", round(r_squared, 2),
+      ", ", p_label))
+
+```
+
+Plot means
+```{r fig.height=3, fig.width=9}
+#Plot correlation plot (means)
+dge_btm_mean_group_correlation_plot = dge_btm_gsea_mean_wide %>% 
+  mutate(group = fct_relevel(group, c(immune_order)),
+         process = str_wrap(process, width = 15)) %>% 
+  ggplot() +
+  aes(x = mean_log2fc_Mouse,
+      y = mean_log2fc_Human,
+      labels = process) +
+    #Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+  facet_wrap(~timepoint, 
+             # scales = "free"
+             ) +
+  #Plot all points
+  geom_point(aes(fill = group,
+                 color = group),
+             size = 2,
+             alpha = 0.2,
+             pch = 21) +
+  #Plot only significant in both
+  geom_point(aes(fill = group),
+             data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25), 
+             color = "black",
+             size = 2,
+             alpha = 1,
+             pch = 21) +
+
+  scale_fill_manual(values = immune_colors) +
+  scale_color_manual(values = immune_colors) +
+  guides(color = F) +
+  labs(fill = "Immune group",
+       y = "Human (Mean Log2FC)",
+       x = "Model (Mean Log2FC)") +
+  ylim(-2, 2) +
+  xlim(-2, 2) +
+  
+  #Add correlation metrics
+  geom_label(data = cor_labels,
+            aes(x = 0, y = Inf, label = cor_label), 
+            fill= "white",
+            hjust = 0.5, vjust = 1, inherit.aes = FALSE, size = 3) +
+  
+  geom_text_repel(aes(label = process), 
+                  min.segment.length = 0,
+                  data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <=0.25), 
+                  size = 1.5, 
+                  segment.size = 0.2,  
+                  lineheight = 0.8, 
+                  max.overlaps = 200000) +
+  #Theme
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          legend.position = "right",
+          legend.direction = "vertical",
+          legend.text = element_text(size = 8, hjust = 0)
+          )
+
+#Print
+dge_btm_mean_group_correlation_plot
+
+#Save results
+dge_btm_mean_group_correlation_plot %>%
+  ggsave(filename = here("Figures", "Example_dge_btm_mean_group_correlation_plot.png"),
+         width = 9,
+         height = 3)
+```
+
+
+Plot NES
+```{r fig.height=3, fig.width=9}
+#Plot correlation plot (NES)
+dge_btm_nes_group_correlation_plot = dge_btm_gsea_mean_wide %>% 
+  mutate(group = fct_relevel(group, c(immune_order)),
+         process = str_wrap(process, width = 15)) %>% 
+  ggplot() +
+  aes(x = nes_Mouse,
+      y = nes_Human,
+      labels = process) +
+    #Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+  facet_wrap(~timepoint, 
+             # scales = "free"
+             ) +
+  #Plot all points
+  geom_point(aes(fill = group,
+                 color = group),
+             size = 2,
+             alpha = 0.2,
+             pch = 21) +
+  #Plot only significant in both
+  geom_point(aes(fill = group),
+             data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25), 
+             color = "black",
+             size = 2,
+             alpha = 1,
+             pch = 21) +
+
+  scale_fill_manual(values = immune_colors) +
+  scale_color_manual(values = immune_colors) +
+  guides(color = F) +
+  labs(fill = "Immune group",
+       y = "Human (NES)",
+       x = "Model (NES)") +
+  ylim(-4, 4) +
+  xlim(-4, 4) +
+  
+  #Add correlation metrics
+  geom_label(data = cor_labels_nes,
+            aes(x = 0, y = Inf, label = cor_label), 
+            fill= "white",
+            hjust = 0.5, vjust = 1, inherit.aes = FALSE, size = 3) +
+  
+  geom_text_repel(aes(label = process), 
+                  min.segment.length = 0,
+                  data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <=0.25), 
+                  size = 1.5, 
+                  segment.size = 0.2,  
+                  lineheight = 0.8, 
+                  max.overlaps = 200000) +
+  #Theme
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          legend.position = "right",
+          legend.direction = "vertical",
+          legend.text = element_text(size = 8, hjust = 0)
+          )
+
+#Print
+dge_btm_nes_group_correlation_plot
+
+#Save results
+dge_btm_nes_group_correlation_plot %>%
+  ggsave(filename = here("Figures", "Example_dge_btm_nes_group_correlation_plot.png"),
+         width = 9,
+         height = 3)
+```
+
+## Samples' means
 Annotate genes log2fc table with BTMs
-
 ```{r}
 #Import BTMs annotation table
 btm_annotation_genes =
@@ -858,7 +1250,7 @@ dge_btm_mean_process %>%
 
 ```
 
-#### Import data from different organisms
+Import data from different organisms
 
 ```{r}
 #Genes L2FC table annotated with BTMs
@@ -893,9 +1285,9 @@ example_dge_btm_mean_process_sample_wide
   
 ```
 
-#### Summarize inter-individual correlation
+### Summarize inter-individual correlation
 
-##### 1 individual vs 1 individual
+#### 1 individual vs 1 individual
 
 ```{r}
 # --- 1) Mouse vs Human, same timepoint ---
@@ -1062,11 +1454,6 @@ example_samples_btm_correlation_all_timepoints_summary %>%
   saveRDS(file = here("tables", "example_samples_btm_correlation_all_timepoints_summary.rds"))
 ```
 
-##### Bootstrap
-
-```{r}
-
-```
 
 ##### Plot scatterplot
 
