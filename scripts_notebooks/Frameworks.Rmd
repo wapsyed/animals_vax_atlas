@@ -236,6 +236,7 @@ GSE120661_samples_pbmc %>%
 
 # Differential gene expression
 
+Create expression set
 ```{r}
 #Differential gene expression ----
 #Matrix
@@ -257,6 +258,15 @@ eset_mouse <- ExpressionSet(
 
 #Save
 eset_mouse %>% saveRDS(file = here("tables", "Example_eset_mouse.rds"))
+```
+
+
+##Limma
+
+```{r}
+#Import
+eset_mouse = readRDS(file = here("tables", "Example_eset_mouse.rds"))
+
 
 #Create model matrix
 design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
@@ -325,6 +335,85 @@ all_degs_mouse %>% saveRDS(file = here("tables", "Example_GSE120661_degs_mouse.r
 ```
 
 
+## T test
+```{r}
+#Annotate ------
+human_mouse_fluad_raw_qn = human_mouse_fluad_matrix %>% 
+  as.data.frame() %>% 
+  rownames_to_column("symbol") %>% 
+  pivot_longer(-symbol,
+               names_to = "sample_id",
+               values_to = "value_qn") %>% 
+  inner_join(human_mouse_fluad_not_normalized, 
+               by = join_by("symbol", "sample_id")) %>% 
+  inner_join(human_mouse_fluad_metadata,
+             by = "sample_id") %>% 
+  pivot_longer(cols = c(value_qn, value_raw),
+               names_to = "measure",
+               values_to = "value")
+
+#Save
+human_mouse_fluad_raw_qn %>% 
+  saveRDS(file = here("tables", "human_mouse_fluad_raw_qn.rds"))
+
+#Calculate the avg expression
+human_mouse_fluad_raw_qn_avg = human_mouse_fluad_raw_qn %>% 
+  group_by(symbol, organism, timepoint, measure) %>% 
+  summarize(avg = mean(value),
+            n_subjects = n(),
+            sd = sd(value),
+            se = sd/sqrt(n_subjects)) %>% 
+  ungroup()
+
+#Save
+human_mouse_fluad_raw_qn_avg %>% 
+  saveRDS(file = here("tables", "human_mouse_fluad_raw_qn_avg.rds"))
+
+
+# Log2FoldChange ------
+human_mouse_fluad_raw_qn_log2fc <- human_mouse_fluad_raw_qn %>%
+  filter(measure %in% c("value_raw"),
+         # timepoint %in% c(0, 1, 3, 7)
+         ) %>%
+  select(participant_id, symbol, timepoint, value, measure, organism) %>%
+  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_") %>%
+  pivot_longer(cols = starts_with("day_"),
+               names_to = "timepoint",
+               names_prefix = "day_",
+               values_to = "value") %>%
+  group_by(participant_id, symbol, measure) %>% 
+  mutate(day0 = value[timepoint == "0"]) %>%
+  ungroup() %>%
+  mutate(log2fc = value - day0) %>%
+  filter(timepoint != "0")
+
+#Save
+human_mouse_fluad_raw_qn_log2fc %>% 
+  saveRDS(file = here("tables", "human_mouse_fluad_raw_qn_log2fc.rds"))
+
+#Average L2FC
+human_mouse_fluad_raw_qn_log2fc_avg = human_mouse_fluad_raw_qn_log2fc %>% 
+  group_by(symbol, organism, timepoint, measure) %>% 
+  summarize(avg_log2fc = mean(log2fc, na.rm = T),
+            n_subjects = n(),
+            #Dispersion
+            sd = sd(value, na.rm = T),
+            se = sd/sqrt(n_subjects),
+            #Effect size
+            effect_size = avg_log2fc/sd,
+            #Get pval from paired t-test
+    pval = tryCatch(t.test(value, day0, paired = TRUE)$p.value, error = function(e) NA_real_),
+            .groups = "drop") %>% 
+  ungroup() %>% 
+  mutate(ci_low = avg_log2fc - 1.96*se,
+         ci_high = avg_log2fc + 1.96*se,
+         pval_adj = p.adjust(pval, method = "fdr"))
+  
+#Save
+human_mouse_fluad_raw_qn_log2fc_avg %>% 
+  saveRDS(file = here("tables", "human_mouse_fluad_raw_qn_log2fc_avg.rds"))
+
+```
 
 
 
@@ -910,9 +999,9 @@ dge_btm_process_ordered = dge_btm_process %>%
 labels_process <- dge_btm_gsea_mean_wide %>%
   ungroup() %>% 
   distinct(process, p_adjust_Human, p_adjust_Mouse) %>%
-  mutate(label = ifelse(p_adjust_Human <= 0.25 & p_adjust_Mouse < 0.25, 
+  mutate(label = ifelse(p_adjust_Human <= 0.10 & p_adjust_Mouse <= 0.10, 
                          "bold", "plain"),
-         label_color = ifelse(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25, 
+         label_color = ifelse(p_adjust_Human <= 0.10 & p_adjust_Mouse <= 0.10, 
                          "#4DBBD5FF", "gray50"))  %>% 
   ungroup() %>% 
   distinct() %>% 
@@ -1016,7 +1105,7 @@ cor_labels <- dge_btm_gsea_mean_wide %>%
   summarise(test_result = list(cor.test(x = Human, 
                                         y = Mouse, 
                                         use = "pairwise.complete.obs", 
-                                        method = "pearson")), 
+                                        method = "spearman")), 
             .groups = "drop") %>%
   mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
          p_value = purrr::map_dbl(test_result, "p.value")) %>%
@@ -1039,7 +1128,7 @@ cor_labels_nes <- dge_btm_gsea_mean_wide %>%
   summarise(test_result = list(cor.test(x = Human, 
                                         y = Mouse, 
                                         use = "pairwise.complete.obs", 
-                                        method = "pearson")), 
+                                        method = "spearman")), 
             .groups = "drop") %>%
   mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
          p_value = purrr::map_dbl(test_result, "p.value")) %>%
