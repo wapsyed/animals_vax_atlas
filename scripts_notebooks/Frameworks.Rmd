@@ -260,14 +260,19 @@ eset_mouse <- ExpressionSet(
 eset_mouse %>% saveRDS(file = here("tables", "Example_eset_mouse.rds"))
 ```
 
-
-##Limma
-
+Import
 ```{r}
 #Import
 eset_mouse = readRDS(file = here("tables", "Example_eset_mouse.rds"))
+human_mouse_fluad_matrix = eset_mouse %>% 
+  exprs()
+
+```
 
 
+
+##Limma
+```{r}
 #Create model matrix
 design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
                        eset_mouse) 
@@ -337,44 +342,13 @@ all_degs_mouse %>% saveRDS(file = here("tables", "Example_GSE120661_degs_mouse.r
 
 ## T test
 ```{r}
-#Annotate ------
-human_mouse_fluad_raw_qn = human_mouse_fluad_matrix %>% 
-  as.data.frame() %>% 
-  rownames_to_column("symbol") %>% 
-  pivot_longer(-symbol,
-               names_to = "sample_id",
-               values_to = "value_qn") %>% 
-  inner_join(human_mouse_fluad_not_normalized, 
-               by = join_by("symbol", "sample_id")) %>% 
-  inner_join(human_mouse_fluad_metadata,
-             by = "sample_id") %>% 
-  pivot_longer(cols = c(value_qn, value_raw),
-               names_to = "measure",
-               values_to = "value")
+#Import table
+human_mouse_example_raw = readRDS(file = here("tables", "human_mouse_fluad_raw_qn.rds"))
 
-#Save
-human_mouse_fluad_raw_qn %>% 
-  saveRDS(file = here("tables", "human_mouse_fluad_raw_qn.rds"))
-
-#Calculate the avg expression
-human_mouse_fluad_raw_qn_avg = human_mouse_fluad_raw_qn %>% 
-  group_by(symbol, organism, timepoint, measure) %>% 
-  summarize(avg = mean(value),
-            n_subjects = n(),
-            sd = sd(value),
-            se = sd/sqrt(n_subjects)) %>% 
-  ungroup()
-
-#Save
-human_mouse_fluad_raw_qn_avg %>% 
-  saveRDS(file = here("tables", "human_mouse_fluad_raw_qn_avg.rds"))
-
-
-# Log2FoldChange ------
-human_mouse_fluad_raw_qn_log2fc <- human_mouse_fluad_raw_qn %>%
+# Calculate Log2-Fold Change ------
+human_mouse_example_raw_log2fc <- human_mouse_example_raw %>%
   filter(measure %in% c("value_raw"),
-         # timepoint %in% c(0, 1, 3, 7)
-         ) %>%
+         timepoint %in% c("0", "1", "3", "7")) %>%
   select(participant_id, symbol, timepoint, value, measure, organism) %>%
   pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_") %>%
   pivot_longer(cols = starts_with("day_"),
@@ -387,31 +361,180 @@ human_mouse_fluad_raw_qn_log2fc <- human_mouse_fluad_raw_qn %>%
   mutate(log2fc = value - day0) %>%
   filter(timepoint != "0")
 
-#Save
-human_mouse_fluad_raw_qn_log2fc %>% 
-  saveRDS(file = here("tables", "human_mouse_fluad_raw_qn_log2fc.rds"))
-
-#Average L2FC
-human_mouse_fluad_raw_qn_log2fc_avg = human_mouse_fluad_raw_qn_log2fc %>% 
+#Tests
+example_log2fc_avg_paired_ttest_wilcoxon <- human_mouse_example_raw_log2fc %>% 
+  # Group by gene and experimental variables
   group_by(symbol, organism, timepoint, measure) %>% 
-  summarize(avg_log2fc = mean(log2fc, na.rm = T),
-            n_subjects = n(),
-            #Dispersion
-            sd = sd(value, na.rm = T),
-            se = sd/sqrt(n_subjects),
-            #Effect size
-            effect_size = avg_log2fc/sd,
-            #Get pval from paired t-test
-    pval = tryCatch(t.test(value, day0, paired = TRUE)$p.value, error = function(e) NA_real_),
-            .groups = "drop") %>% 
+  summarize(
+    # --- Basic descriptive statistics ---
+    avg_log2fc = mean(log2fc, na.rm = TRUE),  # mean log2 fold change
+    n_subjects = n(),                         # number of samples
+    sd = sd(value, na.rm = TRUE),             # standard deviation
+    se = sd / sqrt(n_subjects),               # standard error
+    effect_size = avg_log2fc / sd,            # Cohen’s d-like effect size
+
+    # --- Paired t-test ---
+    pval_ttest_paired = tryCatch(
+      t.test(value, day0, paired = TRUE, var.equal = FALSE)$p.value,
+      error = function(e) NA_real_
+    ),
+
+    # --- Paired Wilcoxon signed-rank test ---
+    pval_wilcoxon_paired = tryCatch(
+      wilcox.test(value, day0, paired = TRUE)$p.value,
+      error = function(e) NA_real_
+    ),
+
+    # --- Unpaired (independent) t-test ---
+    pval_ttest_unpaired = tryCatch(
+      t.test(value, day0, paired = FALSE, var.equal = FALSE)$p.value,
+      error = function(e) NA_real_
+    ),
+
+    # --- Unpaired (independent) Wilcoxon rank-sum test ---
+    pval_wilcoxon_unpaired = tryCatch(
+      wilcox.test(value, day0, paired = FALSE)$p.value,
+      error = function(e) NA_real_
+    )
+  ) %>% 
   ungroup() %>% 
-  mutate(ci_low = avg_log2fc - 1.96*se,
-         ci_high = avg_log2fc + 1.96*se,
-         pval_adj = p.adjust(pval, method = "fdr"))
-  
+  mutate(
+    # --- Confidence intervals for the mean log2FC ---
+    ci_low = avg_log2fc - 1.96 * se,
+    ci_high = avg_log2fc + 1.96 * se,
+
+    # --- Multiple testing correction (FDR) ---
+    pval_adj_ttest_paired = p.adjust(pval_ttest_paired, method = "fdr"),
+    pval_adj_wilcoxon_paired = p.adjust(pval_wilcoxon_paired, method = "fdr"),
+    pval_adj_ttest_unpaired = p.adjust(pval_ttest_unpaired, method = "fdr"),
+    pval_adj_wilcoxon_unpaired = p.adjust(pval_wilcoxon_unpaired, method = "fdr"),
+
+    # --- Significance classification for paired t-test ---
+    significant_ttest_paired = case_when(
+      pval_adj_ttest_paired <= 0.01 ~ "***",
+      pval_adj_ttest_paired <= 0.05 ~ "**",
+      pval_adj_ttest_paired <= 0.10 ~ "*",
+      TRUE ~ "ns"
+    ),
+
+    # --- Significance classification for paired Wilcoxon ---
+    significant_wilcoxon_paired = case_when(
+      pval_adj_wilcoxon_paired <= 0.01 ~ "***",
+      pval_adj_wilcoxon_paired <= 0.05 ~ "**",
+      pval_adj_wilcoxon_paired <= 0.10 ~ "*",
+      TRUE ~ "ns"
+    ),
+
+    # --- Significance classification for unpaired t-test ---
+    significant_ttest_unpaired = case_when(
+      pval_adj_ttest_unpaired <= 0.01 ~ "***",
+      pval_adj_ttest_unpaired <= 0.05 ~ "**",
+      pval_adj_ttest_unpaired <= 0.10 ~ "*",
+      TRUE ~ "ns"
+    ),
+
+    # --- Significance classification for unpaired Wilcoxon ---
+    significant_wilcoxon_unpaired = case_when(
+      pval_adj_wilcoxon_unpaired <= 0.01 ~ "***",
+      pval_adj_wilcoxon_unpaired <= 0.05 ~ "**",
+      pval_adj_wilcoxon_unpaired <= 0.10 ~ "*",
+      TRUE ~ "ns"
+    )
+  )
+
+#Count DEGs
+example_log2fc_avg_paired_ttest_summary = example_log2fc_avg_paired_ttest_wilcoxon %>% 
+    group_by(organism, timepoint, significant_ttest, significant_wilcoxon) %>% 
+  select(organism, timepoint, starts_with("significant_")) %>%
+  pivot_longer(
+    cols = starts_with("significant_"),
+    names_to = "test",
+    values_to = "significance"
+  ) %>%
+  group_by(organism, timepoint, test, significance) %>%
+  summarise(n = n(), .groups = "drop")
+
+example_log2fc_avg_paired_ttest_summary %>% 
+  filter(significance == "0.05")
+
+
+```
+
+
+```{r}
+# Pacotes necessários
+library(coin)        # Permutation test
+library(boot)        # Bootstrap
+
+# Função auxiliar: bootstrap mean difference
+boot_mean_diff <- function(data, indices) {
+  d <- data[indices, ]
+  return(mean(d$value - d$day0, na.rm = TRUE))
+}
+
+# Tests
+example_log2fc_all_tests <- human_mouse_example_raw_log2fc %>% 
+  group_by(symbol, organism, timepoint, measure) %>% 
+  summarize(
+    # Descriptive statistics
+    avg_log2fc = mean(log2fc, na.rm = TRUE),
+    n_subjects = n(),
+    sd = sd(value, na.rm = TRUE),
+    se = sd / sqrt(n_subjects),
+    effect_size_cohen_d = avg_log2fc / sd,
+
+    # --- PAIRED TESTS ---
+    pval_ttest_paired = tryCatch(
+      t.test(value, day0, paired = TRUE)$p.value, error = function(e) NA_real_),
+
+    pval_wilcoxon_paired = tryCatch(
+      wilcox.test(value, day0, paired = TRUE)$p.value, error = function(e) NA_real_),
+
+    pval_perm_paired = tryCatch(
+      coin::pvalue(coin::oneway_test(value - day0 ~ 1, distribution = coin::approximate(B = 10000))),
+      error = function(e) NA_real_),
+
+    pval_boot_paired = tryCatch({
+      boot_res <- boot(data.frame(value, day0), boot_mean_diff, R = 1000)
+      mean(boot_res$t >= 0) # aproximação de p-valor
+    }, error = function(e) NA_real_),
+
+    # --- INDEPENDENT ---
+    pval_ttest_unpaired = tryCatch(
+      t.test(value, day0, paired = FALSE, var.equal = FALSE)$p.value,
+      error = function(e) NA_real_),
+
+    pval_wilcoxon_unpaired = tryCatch(
+      wilcox.test(value, day0, paired = FALSE)$p.value,
+      error = function(e) NA_real_),
+
+    pval_perm_unpaired = tryCatch(
+      coin::pvalue(coin::independence_test(value ~ day0, distribution = coin::approximate(B = 10000))),
+      error = function(e) NA_real_),
+
+    pval_boot_unpaired = tryCatch({
+      boot_diff <- boot(data.frame(value, day0),
+                        function(d, i) mean(d$value[i], na.rm = TRUE) - mean(d$day0[i], na.rm = TRUE),
+                        R = 1000)
+      mean(boot_diff$t >= 0)
+    }, error = function(e) NA_real_),
+
+    .groups = "drop"
+  ) %>%
+  ungroup() %>%
+  mutate(
+    ci_low = avg_log2fc - 1.96 * se,
+    ci_high = avg_log2fc + 1.96 * se,
+    
+    # FDR adjustment
+    across(starts_with("pval_"), ~ p.adjust(.x, method = "fdr"), 
+           .names = "{.col}_adj")
+  )
+
+
 #Save
-human_mouse_fluad_raw_qn_log2fc_avg %>% 
-  saveRDS(file = here("tables", "human_mouse_fluad_raw_qn_log2fc_avg.rds"))
+example_log2fc_avg_paired_ttest %>% 
+  saveRDS(file = here("tables", "example_log2fc_avg_paired_ttest.rds"))
 
 ```
 
