@@ -321,19 +321,8 @@ all_degs_mouse = all_contrasts_degs %>%
   select(condition, everything())
 	
 # #Save
-# all_degs_mouse %>% saveRDS(file = here("tables", "GSE120661_degs_mouse.rds"))
+all_degs_mouse %>% saveRDS(file = here("tables", "Example_GSE120661_degs_mouse.rds"))
 ```
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -815,7 +804,9 @@ correlation_long_all_mouse_human_timepoints_summary_plot %>%
   
 ```
 
-#BTMs correlation, intra- and inter-species
+#Immune functional analysis
+
+BTMs correlation, intra- and inter-species
 
 ## Mean Log2FC and GSEA
 Compare means and NES
@@ -921,7 +912,7 @@ labels_process <- dge_btm_gsea_mean_wide %>%
   distinct(process, p_adjust_Human, p_adjust_Mouse) %>%
   mutate(label = ifelse(p_adjust_Human <= 0.25 & p_adjust_Mouse < 0.25, 
                          "bold", "plain"),
-         label_color = ifelse(p_adjust_Human <= 0.25 & p_adjust_Mouse < 0.25, 
+         label_color = ifelse(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25, 
                          "#4DBBD5FF", "gray50"))  %>% 
   ungroup() %>% 
   distinct() %>% 
@@ -962,9 +953,11 @@ dge_btm_process_distribution = dge_btm_process_ordered %>%
         axis.ticks.y = element_line(color = "gray", alpha = 0.5),
         legend.position = "top",
         axis.text.x = element_text(size = 8),
-        axis.text.y = element_text(size = 8, face = c(labels_process$label), color = c(labels_process$label_color)),
+        axis.text.y = element_text(size = 8, face = c(labels_process$label), 
+                                   color = c(labels_process$label_color)),
         axis.line.y = element_blank(),
         panel.spacing.y = unit(0.3, "lines"),
+        panel.grid.major.y = element_line(alpha = 0.5),
         panel.grid.major.x = element_line(alpha = 0.5)) +
   scale_fill_manual(values = c("Mouse" = "#4DBBD5FF",
                                "Human" = "#90A4AEFF")) +
@@ -1211,7 +1204,7 @@ dge_btm_nes_group_correlation_plot %>%
          height = 3)
 ```
 
-## Samples' means
+## Sample-wise analysis
 Annotate genes log2fc table with BTMs
 ```{r}
 #Import BTMs annotation table
@@ -1458,6 +1451,10 @@ example_samples_btm_correlation_all_timepoints_summary %>%
 ##### Plot scatterplot
 
 ```{r fig.height=3, fig.width=3}
+#Import
+example_samples_btm_correlation_all_timepoints_summary = 
+  readRDS(file = here("tables", "example_samples_btm_correlation_all_timepoints_summary.rds"))
+
 #Scatterplot
 example_samples_btm_correlation_all_timepoints_summary_plot = example_samples_btm_correlation_all_timepoints_summary %>% 
   mutate(comparison = str_replace_all(comparison, "Mus musculus", "Mouse")) %>% 
@@ -1522,6 +1519,170 @@ example_samples_btm_correlation_all_timepoints_summary_plot %>%
 correlation_long_all_btm_mouse_human_timepoints_summary_plot
   
 ```
+
+
+
+### ssGSEA
+Import data
+```{r}
+#Import data ---------
+#Raw data
+ssgsea_pre_data = 
+  readRDS(file = here("tables", "human_mouse_fluad_raw_qn_log2fc.rds")) %>% 
+  filter(measure == "value_raw") %>% 
+  distinct() %>% 
+  mutate(condition = paste0(participant_id, "_Day", timepoint))
+
+#Get metadata
+ssgsea_metadata = ssgsea_pre_data %>% 
+  select(condition, participant_id, organism, timepoint) %>% distinct()
+
+#BTMs
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+```
+
+
+Run ssGSEA 
+```{r}
+#ssGSEA-----
+#Clean table for GSEA standard
+term2gene = btm_annotation_genes %>% 
+  filter(immune_set == "BTM by Modules") %>% 
+  select(process, genes = symbol)
+
+#Run GSEA for samples
+df_genes2ssGSEA_human_mice = ssgsea_pre_data %>%
+  select(condition, genes = symbol, log2fold_change = log2fc) %>%
+  autoGSEA(df = .,
+         TERM2GENE = term2gene,
+         geneset_name = "Human_ImmuneGO")
+
+df_genes2ssGSEA_human_mice %>% 
+  saveRDS(file = here("GSEA_ORA", "Example_df_genes_2_ssGSEA_human_mice.rds"))
+
+beep()
+```
+
+
+Import and annotate results
+```{r}
+#Import results
+df_genes2ssGSEA_human_mice = readRDS(file = here("GSEA_ORA", "df_genes2ssGSEA_human_mice.rds"))
+df_genes2ssGSEA_human_mice = df_genes2ssGSEA_human_mice$gsea %>% 
+  clean_names() %>% 
+  rownames_to_column("del") %>% 
+  select(-del) %>% 
+  rename(process = id)
+
+#Annotate results
+ssgsea_results_BTM_annotated = df_genes2ssGSEA_human_mice %>% 
+  inner_join(btm_annotation %>% rename(process = id), by = "process") %>% 
+  select(process, nes, p_adjust, group, condition) %>% 
+  inner_join(ssgsea_metadata, by = "condition") %>% 
+  distinct() %>% 
+  arrange(process)
+```
+
+#### Plot ssGSEA correlations for mice
+```{r fig.height=8, fig.width=8, message=FALSE, warning=FALSE}
+#Plot inputs ----------
+#Plot correlations for mice
+ssgsea_results_BTM_annotated_wide = ssgsea_results_BTM_annotated %>% 
+  filter(organism == "Mouse") %>% 
+  pivot_wider(names_from = "participant_id",
+              values_from = "nes") %>%
+  group_by(process, timepoint) %>% 
+  fill(`TriFLU-MF59_BL_1`:`TriFLU-MF59_BL_5`, .direction = "updown") %>% 
+  filter(process %in% c(labels_process %>% 
+                          filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25) %>% 
+                          pull(process)))
+
+#Change params in geoms
+#Density
+my_dens <- function(data, mapping, ...) {
+  ggplot(data = data, mapping=mapping) +
+    geom_density(alpha = 0.2, color = "black")
+}
+#Points
+my_point <- function(data, mapping, ...) {
+  ggplot(data = data, mapping = mapping) +
+    geom_point(alpha = 0.5)  
+}
+
+#Plot ------------
+#All days
+mouse_correlation_ggpairs_btms_gsea_alldays = ggpairs(ssgsea_results_BTM_annotated_wide ,
+                                    columns = 7:11,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("All days"), 
+                                    upper = list(continuous = wrap(ggally_cor, method = "spearman")),
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point)
+                                    ) +
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2)+
+  theme_vaxgo() +
+  scale_color_manual(values = c("0" = "black",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0" = "black",
+                               "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc"))
+
+mouse_correlation_ggpairs_btms_gsea_alldays
+
+mouse_correlation_ggpairs_btms_gsea_alldays %>%
+  ggsave(filename = here("Figures", "Example_mouse_correlation_ggpairs_btms_gsea_alldays.png"),
+         height = 10,
+         width = 10)
+
+
+
+
+#Day 1
+timepoint_selected = 1
+
+mouse_correlation_ggpairs_btms_gsea_day1 = ggpairs(ssgsea_results_BTM_annotated_wide %>% 
+                                              filter(timepoint == timepoint_selected),
+                                    columns = 7:11,
+                                    mapping = ggplot2::aes(color = group,
+                                                           fill = group),
+                                    title = paste("Day", timepoint_selected), 
+                                    upper = list(continuous = wrap(ggally_cor, method = "spearman", size = 2)),
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point)
+                                    ) +
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2)+
+  theme_vaxgo() +
+  scale_color_manual(values = immune_colors) +
+  scale_fill_manual(values = immune_colors)
+
+mouse_correlation_ggpairs_btms_gsea_day1
+
+mouse_correlation_ggpairs_btms_gsea_day1 %>%
+  ggsave(filename = here("Figures", "Example_mouse_correlation_ggpairs_btms_gsea_day1.png"),
+         height = 10,
+         width = 10)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # Performance tests 
 
