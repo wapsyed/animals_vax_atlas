@@ -527,6 +527,127 @@ example_log2fc_avg_paired_ttest_summary_plot_gg
 ```
 
 
+## Get overlap
+
+```{r}
+# --- Configuration ---
+cutoff_value <- 0.05
+pval_col <- "pval_adj" 
+
+# 1. Pivotar para Matriz de Comparação (Human vs. Mouse)
+overlap_wide <- results_log2fc_avg %>%
+  
+  # 1.1. Classifica a significância
+  mutate(
+    significant = !!sym(pval_col) < cutoff_value
+  ) %>%
+  
+  # 1.2. Pivotar: Organism vira coluna, 'significant' vira valor (TRUE/FALSE)
+  pivot_wider(
+    id_cols = c(symbol, timepoint), # Chaves: Gene e Timepoint
+    names_from = organism,
+    values_from = significant
+  ) %>%
+  # 1.3. Remove genes que não têm dados completos de significância para ambos
+  # (Se um gene não está nos resultados, ele não pode ser contado no overlap)
+  drop_na(Human, Mouse)
+
+
+# 2. Função para calcular Overlap e Teste de Fisher (por Timepoint)
+# O input 'df' (.x) agora contém as colunas Human (T/F) e Mouse (T/F).
+# Função corrigida (Sem o argumento timepoint_val e sem retornar timepoint)
+calculate_overlap_stats_simple_corrected <- function(df) {
+  
+  if (nrow(df) == 0) {
+    # Garante que a estrutura da saída é a mesma, mesmo que vazia
+    return(data.frame(
+      fisher_p = NA_real_,
+      percent_overlap = 0,
+      n_human_sig = 0,
+      n_overlap = 0,
+      n_total_genes = 0
+    ))
+  }
+  
+  # Cria a tabela de contingência 2x2
+  contingency_table <- with(df, table(Human, Mouse))
+  
+  # ... (resto do cálculo)
+  fisher_p <- tryCatch(
+    fisher.test(contingency_table)$p.value,
+    error = function(e) NA_real_
+  )
+  
+  D <- contingency_table["TRUE", "TRUE"]
+  C <- contingency_table["TRUE", "FALSE"]
+  
+  D <- if (is.na(D)) 0 else D
+  C <- if (is.na(C)) 0 else C
+  
+  percent_overlap <- ifelse(
+    (C + D) > 0, 
+    (D / (C + D)) * 100, 
+    0
+  )
+  
+  # ⭐️ RETORNA APENAS AS ESTATÍSTICAS ⭐️
+  return(data.frame(
+    fisher_p = fisher_p,
+    percent_overlap = percent_overlap,
+    n_human_sig = C + D,
+    n_overlap = D,
+    n_total_genes = nrow(df)
+  ))
+}
+
+
+# 3. Aplicar a função a todos os Timepoints (USANDO A NOVA FUNÇÃO CORRIGIDA)
+overlap_heatmap_data <- overlap_wide %>%
+  group_by(timepoint) %>%
+  # group_modify recebe .x e a função sem argumentos extras
+  group_modify(~ calculate_overlap_stats_simple_corrected(.x)) %>%
+  ungroup()
+
+
+# 4. Visualização (Heatmap)
+overlap_heatmap_plot <- overlap_heatmap_data %>%
+  # Converte timepoint para fator e ordena para garantir a ordem correta no eixo X
+  mutate(
+    timepoint = factor(timepoint, levels = sort(unique(as.integer(timepoint)))),
+    # Prepara labels de p-value
+    p_label = case_when(
+      fisher_p < 0.001 ~ "***",
+      fisher_p < 0.01 ~ "**",
+      fisher_p < 0.05 ~ "*",
+      TRUE ~ ""
+    ),
+    # Mostra % Overlap e P-value
+    text_label = paste0(round(percent_overlap, 1), "%\n", p_label)
+  ) %>%
+  
+  ggplot(aes(x = timepoint, y = "Overlap")) + 
+  geom_tile(aes(fill = percent_overlap), color = "gray50", linewidth = 0.5) +
+  geom_text(aes(label = text_label), color = "black", size = 4) + 
+  
+  scale_fill_gradient2(
+    low = "blue", high = "red", mid = "lightgray",
+    midpoint = 50, limit = c(0, 100), space = "Lab",
+    name = "% Overlap (Human $\\rightarrow$ Mouse)"
+  ) +
+  labs(
+    title = "Concordância de Genes Significativos (FDR < 0.05)",
+    subtitle = "Overlap: Genes Human Sig que são Mouse Sig",
+    x = "Timepoint (Day)",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_blank(), 
+    panel.grid.major.y = element_blank()
+  )
+  
+print(overlap_heatmap_plot)
+```
 
 
 #Genes correlation, intra- and inter-species
@@ -645,7 +766,7 @@ human_and_mouse_degs_summary_plot = combined_degs_summary %>%
 human_and_mouse_degs_summary_plot
 human_and_mouse_degs_summary_plot %>% 
   ggsave(filename = here("Figures", "human_and_mouse_degs_summary_plot_ttest_VS_Limma.png"),
-         width = 5,
+         width = 7,
          height = 5)
 ```
 
@@ -1194,14 +1315,92 @@ dge_btm_process_distribution %>%
   ggsave(filename = here("Figures", "Example_dge_btm_process_distribution.png"),
          height = 12, 
          width = 10)
-  
+
 ```
 
 
+#### Correlation plot (Gene-level, BTMs, immune)
+
+##### Plot genes by btm group
+```{r fig.height=16, fig.width=8}
+#Convert to wide
+dge_btm_process_genes_wide = dge_btm_process %>% 
+    ungroup() %>%
+  select(symbol, log2fc, adj_p_val, organism, timepoint, process, group) %>% 
+  distinct() %>% 
+  group_by(timepoint, process) %>% 
+  pivot_wider(names_from = organism,
+              values_from = c(log2fc, adj_p_val)) %>% 
+  ungroup() %>% 
+  mutate(group = fct_relevel(group, c(immune_order)))  %>% 
+  #Remove duplicates
+  select(-process) %>% 
+  distinct()
+
+#Plot
+dge_btm_process_genes_correlation_plot = dge_btm_process_genes_wide %>% 
+  ggplot() +
+  aes(x = log2fc_Mouse,
+      y = log2fc_Human,
+      labels = symbol) +
+    #Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+  facet_grid(~group~paste("Day", timepoint), scales = "free") +
+  #Plot all points
+  geom_point(aes(fill = group,
+                 color = group),
+             size = 2,
+             alpha = 0.2,
+             pch = 21) +
+  #Plot only significant in both
+  geom_point(aes(fill = group),
+             data = . %>% filter(adj_p_val_Human <= 0.05 & adj_p_val_Mouse <= 0.05), 
+             color = "black",
+             size = 2,
+             alpha = 1,
+             pch = 21) +
+
+  scale_fill_manual(values = immune_colors) +
+  scale_color_manual(values = immune_colors) +
+  guides(color = F) +
+  labs(fill = "Immune group",
+       y = "Human (Mean Log2FC)",
+       x = "Model (Mean Log2FC)") +
+  ylim(-2, 2) +
+  xlim(-2, 2) +
+  
+  geom_text_repel(aes(label = symbol), 
+                  min.segment.length = 0,
+                  data = . %>% filter(adj_p_val_Human <= 0.05 & adj_p_val_Mouse <=0.05) %>% 
+                    distinct(), 
+                  size = 2, 
+                  segment.size = 0.2,  
+                  lineheight = 0.8, 
+                  max.overlaps = 200000) +
+  #Theme
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.text = element_text(size = 8, hjust = 0)
+          )
+
+#Save results
+dge_btm_process_genes_correlation_plot %>%
+  ggsave(filename = here("Figures", "Example_dge_btm_process_genes_correlation_plot_facetted.png"),
+         width = 8,
+         height = 16)
+
+#Print
+dge_btm_process_genes_correlation_plot
+```
 
 
-
-#### Correlation plot (BTM, immune)
+### Correlation plot (Module-level, BTMs, immune)
 Import
 ```{r}
 #Import results -------
@@ -1422,6 +1621,139 @@ dge_btm_nes_group_correlation_plot %>%
          width = 9,
          height = 3)
 ```
+
+
+##### Facet by group
+
+Mean log2fc
+```{r fig.height=10, fig.width=8}
+dge_btm_mean_group_correlation_plot_facetted = dge_btm_gsea_mean_wide %>% 
+  mutate(timepoint = as.character(timepoint)) %>% 
+    mutate(group = fct_relevel(group, c(immune_order)),
+         process = str_wrap(process, width = 15)) %>% 
+  ggplot() +
+  aes(x = mean_log2fc_Mouse,
+      y = mean_log2fc_Human,
+      color = group) +
+  facet_grid(~group~timepoint, scales = "free") +
+  #Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+    geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
+    geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+    geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+  
+    #Plot all
+    geom_point(aes(fill = group),
+               color = "black",
+               size = 2,
+               alpha = 0.2,
+               pch = 21) +
+    #Plot only significant in both
+    geom_point(aes(fill = group),
+               data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25), 
+               color = "black",
+               size = 2,
+               alpha = 1,
+               pch = 21) +
+    geom_text_repel(aes(label = process),
+                    color = "black",
+                  min.segment.length = 0,
+                  data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <=0.25), 
+                  size = 2, 
+                  segment.size = 0.2,  
+                  lineheight = 0.8, 
+                  max.overlaps = 200000) +
+    scale_fill_manual(values = immune_colors) +
+    scale_color_manual(values = immune_colors) +
+    guides(color = F) +
+    labs(fill = "Immune group",
+         y = "Human (Log2FC)",
+         x = "Model (Log2FC)") +
+    #Theme
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.text = element_text(size = 8, hjust = 0))
+
+dge_btm_mean_group_correlation_plot_facetted
+
+#Save results
+dge_btm_mean_group_correlation_plot_facetted %>%
+  ggsave(filename = here("Figures", "Example_dge_btm_mean_group_correlation_plot_facetted.png"),
+         width = 8,
+         height = 11)
+  
+```
+
+
+NES
+```{r fig.height=10, fig.width=8}
+dge_btm_nes_group_correlation_plot_facetted = dge_btm_gsea_mean_wide %>% 
+  mutate(timepoint = as.character(timepoint)) %>% 
+    mutate(group = fct_relevel(group, c(immune_order)),
+         process = str_wrap(process, width = 15)) %>% 
+  ggplot() +
+  aes(x = nes_Mouse,
+      y = nes_Human,
+      color = group) +
+  facet_grid(~group~timepoint, scales = "free") +
+  #Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+    geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
+    geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+    geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+  
+    #Plot all
+    geom_point(aes(fill = group),
+               color = "black",
+               size = 2,
+               alpha = 0.2,
+               pch = 21) +
+    #Plot only significant in both
+    geom_point(aes(fill = group),
+               data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25), 
+               color = "black",
+               size = 2,
+               alpha = 1,
+               pch = 21) +
+    geom_text_repel(aes(label = process),
+                    color = "black",
+                  min.segment.length = 0,
+                  data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <=0.25), 
+                  size = 2, 
+                  segment.size = 0.2,  
+                  lineheight = 0.8, 
+                  max.overlaps = 200000) +
+    scale_fill_manual(values = immune_colors) +
+    scale_color_manual(values = immune_colors) +
+    guides(color = F) +
+    labs(fill = "Immune group",
+         y = "Human (NES)",
+         x = "Model (NES)") +
+    #Theme
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.text = element_text(size = 8, hjust = 0))
+
+dge_btm_mean_group_correlation_plot_facetted
+
+#Save results
+dge_btm_nes_group_correlation_plot_facetted %>%
+  ggsave(filename = here("Figures", "Example_dge_btm_nes_group_correlation_plot_facetted.png"),
+         width = 8,
+         height = 11)
+  
+```
+
+
+
+
+
 
 ## Sample-wise analysis
 Annotate genes log2fc table with BTMs
@@ -1921,23 +2253,22 @@ ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped
 
 #All genes
 genes_roc_allgenes = dge_long_genes
-#Filter immune genees
+#Filter immune genes
 genes_roc_allgenes_immunegenes = dge_long_genes %>% 
   filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
 
-  
 #Only DEGs
 degs_genes_human = dge_long_genes %>% 
   filter(adj_p_val <= 0.05, 
          organism == "Human") %>% 
   select(symbol, timepoint)
-#All DEGs
-genes_roc_DEGs_immune = dge_long_genes %>% 
+
+#Only immune DEGs
+genes_roc_DEGs_all = dge_long_genes %>% 
   inner_join(degs_genes_human,
-             by = join_by("symbol", "timepoint")) %>% 
-  #Filter immune genes only
-  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
-#Immune DEGs
+             by = join_by("symbol", "timepoint")) 
+
+#Only immune DEGs
 genes_roc_DEGs_immune = dge_long_genes %>% 
   inner_join(degs_genes_human,
              by = join_by("symbol", "timepoint")) %>% 
@@ -1952,9 +2283,17 @@ Calculate ROC curve
 ```{r fig.height=4, fig.width=10}
 set.seed(123)
 ######### Input -----
-genes_df_input = genes_roc_allgenes
-filename = "Fluad_All"
-# filename = "Fluad_All_Immune"
+# genes_roc_allgenes
+# genes_roc_allgenes_immunegenes
+# genes_roc_DEGs
+# genes_roc_DEGs_immune
+
+genes_df_input = genes_roc_allgenes_immunegenes
+
+
+
+# filename = "Fluad_All"
+filename = "Fluad_All_Immune"
 # filename = "Fluad_AllDEGs_HumanDEGs"
 # filename = "Fluad_AllDEGs_HumanDEGs_Immune"
 ```
@@ -2147,7 +2486,278 @@ roc_curve_plot %>%
 ```
 
 
+###Using pvalues from Limma
+
+```{r fig.height=4, fig.width=10}
+set.seed(123)
+######### Input -----
+# genes_roc_allgenes
+# genes_roc_allgenes_immunegenes
+# genes_roc_DEGs
+# genes_roc_DEGs_immune
+
+genes_df_input = genes_roc_DEGs_all
 
 
 
+# filename = "Fluad_All"
+# filename = "Fluad_All_Immune"
+filename = "Fluad_AllDEGs_HumanDEGs"
+# filename = "Fluad_AllDEGs_HumanDEGs_Immune"
+```
+
+
+```{r fig.height=5, fig.width=8}
+######### UP (Regulação Positiva) -----------
+
+# 1. Definir Genes UP e o Score de Confiança
+dge_long_genes_up = genes_df_input %>% 
+  # Apenas genes com Log2FC positivo (Direção UP)
+  filter(log2fc > 0) %>% 
+  mutate(
+    # ⭐️ ADAPTAÇÃO LIMMA: Estimação do p-value unilateral para UP ⭐️
+    # Se o p-value do Limma é bilateral e log2fc > 0, o p-value unilateral é p/2.
+    pval_one_sided = adj_p_val / 2, 
+    
+    # Re-ajuste do p-value unilateral (BH)
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    
+    # Classificação (Label de Predição)
+    direction = if_else(pval_one_sided_adj < 0.05, "up", "not_up"),
+    
+    # ⭐️ SCORE ROC: 1 - pval_one_sided_adj ⭐️
+    prob = 1 - pval_one_sided_adj
+  ) %>%
+  select(-adj_p_val) %>% 
+  rename(adj_p_val = pval_one_sided_adj)
+
+
+# 2. Definir a Verdade (TRUTH) a partir dos dados Human
+truth_human = dge_long_genes_up %>% 
+  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
+  filter(organism == "Human") %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "organism",
+              values_from = "direction") %>% 
+  rename(truth = Human) %>% 
+  mutate(organism = "Human")
+
+
+# 3. Gerar Controles (Perfect e Uniform)
+perfect_prediction = truth_human %>%
+  mutate(prob = if_else(truth == "up", 1.0, 0.0)) %>% 
+  rename(pred = truth) %>%
+  mutate(organism = "Perfect")
+
+
+uniform_prediction = perfect_prediction %>%
+  group_by(timepoint) %>% 
+  mutate(prob = runif(n()),
+         organism = "Uniform")
+
+
+# 4. Preparar Dados de Modelos (Mouse)
+models_up = dge_long_genes_up %>% 
+  filter(organism != "Human") %>% 
+  mutate(pred = direction) %>% # 'prob' já está na coluna 'prob'
+  bind_rows(
+    perfect_prediction,
+    uniform_prediction
+  )
+
+
+# 5. Combinar Verdade (Human) e Predições
+classified_df_probs_up = truth_human %>% 
+  select(symbol, timepoint, truth) %>%
+  inner_join(models_up %>% 
+               select(symbol, timepoint, pred, prob, model = organism),
+             by = join_by("symbol", "timepoint")) %>% 
+  mutate(truth = as.factor(truth)) %>% 
+  distinct()
+
+
+# 6. Calcular ROC
+roc_curve_up_notup = classified_df_probs_up %>% 
+  mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Uniform", "Perfect")) %>%
+  group_by(model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Up vs Non-Up")
+
+
+######### DOWN (Regulação Negativa) -----------
+
+# 1. Definir Genes DOWN e o Score de Confiança
+dge_long_genes_down = genes_df_input %>% 
+  # Apenas genes com Log2FC negativo (Direção DOWN)
+  filter(log2fc < 0) %>% 
+  mutate(
+    # ⭐️ ADAPTAÇÃO LIMMA: Estimação do p-value unilateral para DOWN ⭐️
+    # Se o p-value do Limma é bilateral e log2fc < 0, o p-value unilateral é p/2.
+    pval_one_sided = adj_p_val / 2, 
+    
+    # Re-ajuste do p-value unilateral (BH)
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    
+    # Classificação (Label de Predição)
+    direction = if_else(pval_one_sided_adj < 0.05, "down", "not_down"),
+    
+    # ⭐️ SCORE ROC: 1 - pval_one_sided_adj ⭐️
+    prob = 1 - pval_one_sided_adj
+  ) %>%
+  select(-adj_p_val) %>% 
+  rename(adj_p_val = pval_one_sided_adj)
+
+
+# 2. Definir a Verdade (TRUTH) a partir dos dados Human
+truth_human_down = dge_long_genes_down %>% 
+  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
+  filter(organism == "Human") %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "organism",
+              values_from = "direction") %>% 
+  rename(truth = Human) %>% 
+  mutate(organism = "Human")
+
+
+# 3. Gerar Controles (Perfect e Uniform)
+perfect_prediction_down = truth_human_down %>%
+  mutate(prob = if_else(truth == "down", 1.0, 0.0)) %>% 
+  rename(pred = truth) %>%
+  mutate(organism = "Perfect")
+
+
+uniform_prediction_down = perfect_prediction_down %>%
+  group_by(timepoint) %>% 
+  mutate(prob = runif(n()),
+         organism = "Uniform")
+
+
+# 4. Preparar Dados de Modelos (Mouse)
+models_down = dge_long_genes_down %>% 
+  filter(organism != "Human") %>% 
+  mutate(pred = direction) %>% 
+  bind_rows(
+    perfect_prediction_down,
+    uniform_prediction_down
+  )
+
+
+# 5. Combinar Verdade (Human) e Predições
+classified_df_probs_down = truth_human_down %>% 
+  select(symbol, timepoint, truth) %>%
+  inner_join(models_down %>% 
+               select(symbol, timepoint, pred, prob, model = organism),
+             by = join_by("symbol", "timepoint")) %>% 
+  mutate(truth = as.factor(truth)) %>% 
+  distinct()
+
+
+# 6. Calcular ROC
+roc_curve_down_notdown = classified_df_probs_down %>% 
+  mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Uniform", "Perfect")) %>%
+  group_by(model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Down vs Non-Down")
+
+#Plot curves ------------------
+#PLOT ROC Curve
+roc_curve_plot = roc_curve_up_notup %>% 
+  bind_rows(roc_curve_down_notdown) %>% 
+  ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
+  geom_path(size = 1, alpha = 1) +
+  geom_abline(lty = 3) +
+  theme_vaxgo() +
+  facet_grid(~fct_rev(comparison)~paste("Day", timepoint)) + 
+  scale_color_manual(values = c(
+    "Mouse" = "#4DBBD5FF",
+    "FIT"   = "#4361ee",
+    "Human" = "#90A4AEFF",
+    "Uniform" = "gray80"
+    )) +
+  labs(
+    title = filename,
+  x = "FPR",
+  y = "TPR",
+  color = "Model") + 
+  theme(
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    # strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
+    axis.text.x = element_text(size = 10, angle = 0, hjust = 0.5, vjust = 0.5),
+    axis.text.y = element_text(size = 10),
+    panel.spacing.x = unit(0.5, "lines"),
+    legend.key = element_blank()
+  ) +
+  scale_x_continuous(n.breaks = 3) +
+  scale_y_continuous(n.break = 3)
+
+roc_curve_plot
+```
+
+
+####AUC
+
+```{r}
+# --- 1. Calcular AUC para Regulação Positiva (UP) ---
+# Usamos a função 'roc_auc' do pacote 'yardstick' (parte do tidymodels)
+auc_results_up = classified_df_probs_up %>% 
+  # Garante que os fatores estejam na ordem correta: 'up' como evento positivo
+  mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Uniform", "Perfect")) %>%
+  
+  group_by(model, timepoint) %>%
+  
+  # Calcula a AUC
+  roc_auc(truth, prob) %>%
+  rename(auc = .estimate) %>%
+  mutate(comparison = "Up") %>% 
+  ungroup() %>% 
+  select(model, timepoint, auc, comparison)
+
+# --- 2. Calcular AUC para Regulação Negativa (DOWN) ---
+auc_results_down = classified_df_probs_down %>% 
+  # Garante que os fatores estejam na ordem correta: 'down' como evento positivo
+  mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Uniform", "Perfect")) %>%
+  
+  group_by(model, timepoint) %>%
+  
+  # Calcula a AUC
+  roc_auc(truth, prob) %>%
+  rename(auc = .estimate) %>%
+  mutate(comparison = "Down") %>% 
+  ungroup() %>% 
+  select(model, timepoint, auc, comparison)
+
+
+# --- 3. Combinar e Visualizar Resultados ---
+auc_combined_plot_data = bind_rows(auc_results_up, auc_results_down)
+
+# Visualiza a performance (AUC) do Mouse em comparação com os controles
+auc_plot <- auc_combined_plot_data %>% 
+  mutate(model = factor(model, levels = c("Perfect", "Mouse", "Uniform")),
+         comparison = factor(comparison, levels = c("Up", "Down"))) %>%
+  
+  ggplot(aes(x = factor(timepoint), y = auc, fill = model)) +
+  geom_col(position = position_dodge(width = 0.8), color = "black") +
+  # Adiciona a linha de referência do palpite aleatório (AUC = 0.5)
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red", linewidth = 1) +
+  
+  facet_wrap(~ comparison, scales = "free_x") +
+  
+  labs(title = "Performance Preditiva do Mouse (AUC) em Relação ao Human",
+       subtitle = "Comparação da Regulação UP vs. DOWN ao longo do tempo",
+       x = "Timepoint (Day)",
+       y = "Área sob a Curva (AUC)",
+       fill = "Modelo") +
+  scale_fill_manual(values = c("Perfect" = "darkgreen", "Mouse" = "darkblue", "Uniform" = "gray")) +
+  ylim(0, 1) + # Define o limite Y de 0 a 1 (padrão do AUC)
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(auc_plot)
+```
 
