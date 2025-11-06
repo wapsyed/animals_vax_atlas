@@ -9,7 +9,6 @@ editor_options:
 # Download datasets
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
-
 #Download datasets
 GSEXXXX <- getGEO("GSEXXXX", GSEMatrix = TRUE) 
 
@@ -39,6 +38,7 @@ eset %>%
 
 ```
 
+### Import and check distribution
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
 #Import
 GSE120661_eset = readRDS(here("tables", "GSE120661_exprs.rds"))
@@ -59,7 +59,7 @@ GSE120661_exprs_distribution %>%
   geom_histogram()
 ```
 
-#### Get metadata
+## Get metadata
 
 ```{r}
 #Import
@@ -78,7 +78,7 @@ GSE120661_metadata = GSE120661_metadata %>%
 GSE120661_metadata %>% saveRDS(here("tables", "GSE120661_metadata.rds"))
 ```
 
-Import
+### Import
 
 ```{r}
 #Import
@@ -105,7 +105,7 @@ GSE120661_counts_not_normalized_log2 = GSE120661_counts_not_normalized_log2 %>%
   as.matrix()
 ```
 
-### Annotate genes
+## Annotate genes
 
 ```{r}
 ## Set up biomart
@@ -148,17 +148,27 @@ GSE120661_counts_not_normalized_log2_summary = GSE120661_counts_not_normalized_l
 GSE120661_counts_not_normalized_log2_summary
 ```
 
-Stats - 39,430 probes in the microarray, - 39,392 that were annotated in
-BiomaRt (\~99.90%) - 37,983 probes had a correspondent mgi symbol
-(96.33% of probes in microarray) - 31,140 probes had a correspondent
-entrez id (78.97% of probes in microarray) - 30,787 probes with entrez
+### Get stats
+Stats 
+- XXXXX probes in the microarray, 
+- XXXXX that were annotated in
+BiomaRt (\~99.90%) 
+- XXXXX probes had a correspondent mgi symbol
+(96.33% of probes in microarray) 
+- XXXXX probes had a correspondent
+entrez id (78.97% of probes in microarray) 
+- XXXXX probes with entrez
 id also had a correspondent mgi_symbol (78.08% of probes in
-microarray) - 22,435 probes have an entrez gene id. As this is the input
+microarray) 
+- XXXXX probes have an entrez gene id. As this is the input
 in FIT, we used this to filter, not mgi_symbol (56.89% of probes in
-microarray) - 21,744 genes were filtered by the highest median (55.14%
-were kept from the microarray) - 86 Dupes. The duplication is due to
+microarray) 
+- XXXXX genes were filtered by the highest median (55.14%
+were kept from the microarray) 
+- XXXXX Dupes. The duplication is due to
 different mgi_symbols. Same Entrez IDs can correspond to different
-mgi_symbol - 20849 probes were used (52.87%)
+mgi_symbol 
+- XXXXX probes were used (52.87%)
 
 ```{r}
 # Stats
@@ -236,7 +246,6 @@ GSE120661_samples_pbmc %>%
 
 # Differential gene expression
 ## Pre-processing
-
 ### Calculate Log2FC manually
 ```{r}
 #Import table
@@ -258,7 +267,6 @@ human_mouse_example_raw_log2fc <- human_mouse_example_raw %>%
   mutate(log2fc = value - day0) %>%
   filter(timepoint != "0")
 ```
-
 
 ### Create expression set
 ```{r}
@@ -284,7 +292,7 @@ eset_mouse <- ExpressionSet(
 eset_mouse %>% saveRDS(file = here("tables", "Example_eset_mouse.rds"))
 ```
 
-Import
+## Import datasets
 ```{r}
 #Import
 eset_mouse = readRDS(file = here("tables", "Example_eset_mouse.rds"))
@@ -292,7 +300,8 @@ human_mouse_fluad_matrix = eset_mouse %>%
   exprs()
 ```
 
-##Limma
+## Limma
+Paired samples design
 ```{r}
 #Create model matrix
 design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
@@ -362,7 +371,6 @@ all_degs_mouse %>% saveRDS(file = here("tables", "Example_GSE120661_degs_mouse.r
 
 
 ## T test and wilcoxon
-
 ```{r}
 #Tests
 example_log2fc_avg_paired_ttest_wilcoxon <- human_mouse_example_raw_log2fc %>% 
@@ -529,124 +537,455 @@ example_log2fc_avg_paired_ttest_summary_plot_gg
 
 ## Get overlap
 
+Input
+
 ```{r}
-# --- Configuration ---
-cutoff_value <- 0.05
-pval_col <- "pval_adj" 
+# Import datasets
+dge_long_genes = read_rds(file = here("tables", "dge_fit_mouse_human_long.rds"))
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
 
-# 1. Pivotar para Matriz de Comparação (Human vs. Mouse)
-overlap_wide <- results_log2fc_avg %>%
-  
-  # 1.1. Classifica a significância
-  mutate(
-    significant = !!sym(pval_col) < cutoff_value
-  ) %>%
-  
-  # 1.2. Pivotar: Organism vira coluna, 'significant' vira valor (TRUE/FALSE)
-  pivot_wider(
-    id_cols = c(symbol, timepoint), # Chaves: Gene e Timepoint
-    names_from = organism,
-    values_from = significant
-  ) %>%
-  # 1.3. Remove genes que não têm dados completos de significância para ambos
-  # (Se um gene não está nos resultados, ele não pode ser contado no overlap)
-  drop_na(Human, Mouse)
+# DEGs table
+degs_all_updown = dge_long_genes %>% 
+  dplyr::filter(organism %in% c("Human", "Mouse")) %>% 
+  dplyr::filter(adj_p_val <= 0.05) %>% 
+  dplyr::select(process = condition, genes = symbol)
+
+# Metadata
+annotation_metadata = dge_long_genes %>% 
+  #Arrange columns in the desired order to be displayed on the heatmap
+  dplyr::select(condition, 
+                organism, 
+                # type, 
+                # vaccine, 
+                timepoint)
 
 
-# 2. Função para calcular Overlap e Teste de Fisher (por Timepoint)
-# O input 'df' (.x) agora contém as colunas Human (T/F) e Mouse (T/F).
-# Função corrigida (Sem o argumento timepoint_val e sem retornar timepoint)
-calculate_overlap_stats_simple_corrected <- function(df) {
+#Inputs
+filename = "Example"
+```
+
+Function
+
+```{r}
+# Function for overlapping -------
+overlap_genes <- function(cond1, cond2, data) {
+  genes_cond1 <- data$genes[data$process == cond1]
+  genes_cond2 <- data$genes[data$process == cond2]
   
-  if (nrow(df) == 0) {
-    # Garante que a estrutura da saída é a mesma, mesmo que vazia
-    return(data.frame(
-      fisher_p = NA_real_,
-      percent_overlap = 0,
-      n_human_sig = 0,
-      n_overlap = 0,
-      n_total_genes = 0
-    ))
+  genes_shared <- intersect(genes_cond1, genes_cond2)
+  
+  genes_notshared_cond1 <- setdiff(genes_cond1, genes_cond2)
+  genes_notshared_cond2 <- setdiff(genes_cond2, genes_cond1)
+  
+  total_genes_cond1 <- length(genes_cond1)
+  total_genes_cond2 <- length(genes_cond2)
+  
+  percentage_shared_cond1 <- length(genes_shared) / total_genes_cond1 * 100
+  percentage_shared_cond2 <- length(genes_shared) / total_genes_cond2 * 100
+  
+  shared_genes <- data.frame(
+    Cond1 = cond1,
+    Cond2 = cond2,
+    Shared = length(genes_shared),
+    NotShared_cond1 = length(genes_notshared_cond1),
+    NotShared_cond2 = length(genes_notshared_cond2),
+    Total_Genes_Cond1 = total_genes_cond1,
+    Total_Genes_Cond2 = total_genes_cond2,
+    Genes_Names = paste(genes_shared, collapse = ", "),
+    Percentage_Shared_Cond1 = percentage_shared_cond1,
+    Percentage_Shared_Cond2 = percentage_shared_cond2
+  )
+  
+  return(shared_genes)
+}
+```
+
+Perform calculations
+
+```{r}
+conflicted::conflicts_prefer(base::intersect)
+conflicted::conflicts_prefer(base::setdiff)
+conflicted::conflicts_prefer(stats::fisher.test)
+
+# Perform calculations
+unique_cond <- unique(degs_all_updown$process) # List sets
+shared_genes_df <- data.frame() # Store data
+
+for (i in 1:(length(unique_cond) - 1)) {
+  for (j in (i + 1):length(unique_cond)) {
+    results_temp <- overlap_genes(unique_cond[i], unique_cond[j], degs_all_updown)
+    shared_genes_df <- bind_rows(shared_genes_df, results_temp)
   }
-  
-  # Cria a tabela de contingência 2x2
-  contingency_table <- with(df, table(Human, Mouse))
-  
-  # ... (resto do cálculo)
-  fisher_p <- tryCatch(
-    fisher.test(contingency_table)$p.value,
-    error = function(e) NA_real_
-  )
-  
-  D <- contingency_table["TRUE", "TRUE"]
-  C <- contingency_table["TRUE", "FALSE"]
-  
-  D <- if (is.na(D)) 0 else D
-  C <- if (is.na(C)) 0 else C
-  
-  percent_overlap <- ifelse(
-    (C + D) > 0, 
-    (D / (C + D)) * 100, 
-    0
-  )
-  
-  # ⭐️ RETORNA APENAS AS ESTATÍSTICAS ⭐️
-  return(data.frame(
-    fisher_p = fisher_p,
-    percent_overlap = percent_overlap,
-    n_human_sig = C + D,
-    n_overlap = D,
-    n_total_genes = nrow(df)
-  ))
 }
 
+# Fisher's exact test
+fisher_exact_test <- function(shared, notshared1, notshared2) {
+  cont_table <- matrix(c(shared, notshared1, notshared2, 0), nrow = 2)
+  results_fisher <- fisher.test(cont_table)
+  return(results_fisher$p.value)
+}
+shared_genes_df = shared_genes_df %>%
+  mutate(pvalue = pmap_dbl(list(Shared, NotShared_cond1, NotShared_cond2), fisher_exact_test),
+         p_adj = p.adjust(pvalue))
 
-# 3. Aplicar a função a todos os Timepoints (USANDO A NOVA FUNÇÃO CORRIGIDA)
-overlap_heatmap_data <- overlap_wide %>%
-  group_by(timepoint) %>%
-  # group_modify recebe .x e a função sem argumentos extras
-  group_modify(~ calculate_overlap_stats_simple_corrected(.x)) %>%
-  ungroup()
+
+#Mirror table
+shared_genes_df2 = shared_genes_df %>% 
+  dplyr::rename(Cond1_temp = Cond1, Cond2_temp = Cond2) %>%
+  dplyr::rename(Cond1 = Cond2_temp, Cond2 = Cond1_temp)
+
+shared_genes_df_mirror = shared_genes_df %>% 
+  dplyr::bind_rows(shared_genes_df2) %>% 
+  dplyr::mutate(Percentage_Shared_Cond1 = round(Percentage_Shared_Cond1, 2),
+         Percentage_Shared_Cond2 = round(Percentage_Shared_Cond2, 2))
+  
+#Jaccard distance
+jaccard.matrix <- degs_all_updown %>%
+  dplyr::mutate(present = 1) %>% 
+  dplyr::distinct() %>% 
+  pivot_wider(names_from = genes, values_from = present, values_fill = 0) %>%
+  column_to_rownames(var = "process") %>%
+  vegan::vegdist(binary = TRUE, method = "jaccard", diag = TRUE, upper = TRUE) %>%
+  as.matrix() %>%
+  {1 - .}
+shared_genes_df_mirror = jaccard.matrix %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Cond1") %>% 
+  pivot_longer(cols = -"Cond1",
+               names_to = "Cond2",
+               values_to = "jaccard_distance") %>% 
+  inner_join(shared_genes_df_mirror, by = join_by(Cond1, Cond2)) %>% 
+  mutate(jaccard_distance = round(jaccard_distance, 3))
+
+#Save
+write_csv(shared_genes_df_mirror, 
+          file = here("Tables", paste0(filename, "_sharedgenes_Fisher_Jaccard.csv")))
+
+```
+
+### Heatmap
+
+#### Shared genes
+
+```{r}
+filename = "Example"
+
+shared_genes_df_mirror = read_csv(file = here("Tables", paste0(filename, "_sharedgenes_Fisher_Jaccard.csv")))
+
+matrix_data = shared_genes_df_mirror %>% 
+  dcast(Cond1 ~ Cond2, 
+        value.var = "Shared", 
+        fun.aggregate = mean) %>% 
+  column_to_rownames("Cond1") %>%
+  mutate_if(is.character, as.numeric) %>% 
+  as.matrix() 
+
+# Create a matrix of p-values
+pvalue_matrix <- shared_genes_df_mirror %>%
+  dcast(Cond1 ~ Cond2,
+        value.var = "p_adj",
+        fun.aggregate = mean) %>%
+  column_to_rownames("Cond1") %>%
+  as.matrix()
+
+dim(matrix_data)
+
+annotation_metadata_complex = matrix_data %>% 
+  as.data.frame() %>%
+  rownames_to_column("condition") %>% 
+  dplyr::select(condition) %>% 
+  inner_join(annotation_metadata, by = "condition") %>%
+  distinct() 
+
+# merge
+annotation_metadata_heatmap = matrix_data %>% 
+  colnames() %>% 
+  data.frame() %>% 
+  dplyr::filter(. != "process") %>% 
+  dplyr::rename(condition = '.') %>% 
+  dplyr::inner_join(annotation_metadata_complex, by = "condition") %>% 
+  dplyr::arrange(condition) %>% 
+  column_to_rownames(var= "condition")
 
 
-# 4. Visualização (Heatmap)
-overlap_heatmap_plot <- overlap_heatmap_data %>%
-  # Converte timepoint para fator e ordena para garantir a ordem correta no eixo X
-  mutate(
-    timepoint = factor(timepoint, levels = sort(unique(as.integer(timepoint)))),
-    # Prepara labels de p-value
-    p_label = case_when(
-      fisher_p < 0.001 ~ "***",
-      fisher_p < 0.01 ~ "**",
-      fisher_p < 0.05 ~ "*",
-      TRUE ~ ""
-    ),
-    # Mostra % Overlap e P-value
-    text_label = paste0(round(percent_overlap, 1), "%\n", p_label)
-  ) %>%
-  
-  ggplot(aes(x = timepoint, y = "Overlap")) + 
-  geom_tile(aes(fill = percent_overlap), color = "gray50", linewidth = 0.5) +
-  geom_text(aes(label = text_label), color = "black", size = 4) + 
-  
-  scale_fill_gradient2(
-    low = "blue", high = "red", mid = "lightgray",
-    midpoint = 50, limit = c(0, 100), space = "Lab",
-    name = "% Overlap (Human $\\rightarrow$ Mouse)"
-  ) +
-  labs(
-    title = "Concordância de Genes Significativos (FDR < 0.05)",
-    subtitle = "Overlap: Genes Human Sig que são Mouse Sig",
-    x = "Timepoint (Day)",
-    y = ""
-  ) +
-  theme_minimal() +
-  theme(
-    axis.text.y = element_blank(), 
-    panel.grid.major.y = element_blank()
-  )
-  
-print(overlap_heatmap_plot)
+# Reorder
+matrix_data_ordered = matrix_data %>% 
+  as.data.frame() %>% 
+  dplyr::select(c(annotation_metadata_complex %>% pull(condition))) %>% 
+  rownames_to_column("rownames") %>% 
+  dplyr::filter(rownames %in% c(annotation_metadata_complex %>% pull(condition))) %>% 
+  column_to_rownames(var= "rownames") %>% 
+  as.matrix()
+
+#Check
+dim(matrix_data_ordered) 
+dim(annotation_metadata_complex)
+
+col_fun <- colorRamp2(c(0, max(matrix_data_ordered, na.rm = T)), c("white", "#d90429"))
+
+
+######## HEATMAP ANNOTATION
+annotation_metadata_heatmap = annotation_metadata_heatmap %>% 
+  mutate(timepoint = as_factor(timepoint),
+         timepoint = fct_reorder(timepoint, as.numeric(timepoint)))
+
+ha = HeatmapAnnotation(df = annotation_metadata_heatmap, 
+                       col = colors_immune, 
+                       annotation_name_side = "left",
+                       show_legend = F)
+
+row_ha = rowAnnotation(df = annotation_metadata_heatmap, 
+                       col = colors_immune, 
+                       show_annotation_name = F)
+
+
+
+mat = matrix_data_ordered
+width_image = 15
+height_image = 15
+width = unit(5, "cm")
+height = unit(5, "cm")
+column_names_gp = gpar(fontsize = 0)
+row_names_gp = gpar(fontsize = 0)
+gp = gpar(fontsize = 10)
+rect_gp = gpar(col = "gray1", lwd = 0)
+
+
+
+fileimageheatmap_grouped = paste0(filename, sep ="_", "Shared_Heatmap.png")
+
+png(
+  file = here("Figures", fileimageheatmap_grouped),
+  width = width_image,
+  height = height_image,
+  units = "cm",
+  res = 900
+)
+
+heatmap_plot_all = Heatmap(mat,
+                        top_annotation = ha,
+                        left_annotation = row_ha,
+                        show_row_names = TRUE,
+                        show_heatmap_legend = TRUE,
+                        heatmap_legend_param = list(direction = "vertical"),
+                        name = "Shared", #Legend
+                        col = col_fun, #color
+                         cell_fun = function(j, i, x, y, width, height, fill) {
+  if (!is.na(mat[i, j]) && mat[i, j] > 0) {
+    grid.text(sprintf("%.f", mat[i, j]), x, y, gp = gpar(fontsize = 8))
+  }
+                           i# Add significance stars based on p-value thresholds
+  if (!is.na(pvalue_matrix[i, j])) {
+    pval <- pvalue_matrix[i, j]
+    sig <- ""
+    if (pval < 0.01) {
+      sig <- "***"
+    } else if (pval < 0.05) {
+      sig <- "**"
+    } else if (pval < 0.10) {
+      sig <- "*"
+    }
+    
+    # Draw the symbol slightly above the cell center
+    if (sig != "") {
+      grid.text(sig, x, y + unit(2, "mm"), gp = gpar(fontsize = 6, fontface = "plain"))
+    }
+  }
+},
+                        column_title = fileimageheatmap_grouped,
+                        column_title_gp = gpar(fontsize = 15, fontface = "bold"),
+                        column_names_rot = 90,
+row_names_rot = 45,
+                        column_names_gp = column_names_gp,
+                        cluster_rows = TRUE,
+                        rect_gp = rect_gp,
+                        row_names_gp = row_names_gp,
+                        # row_split = 2, #Split row clusters
+                        row_gap = unit(2, "mm"),
+                        cluster_columns = TRUE,
+                        na_col = "black",
+                        column_split = NULL, #Split group clusters
+                        #column_km = 3,
+                        column_gap = unit(8, "mm"),
+                        show_column_dend = F,
+                        show_row_dend = F,
+                        row_dend_side = "left",
+                        column_dend_side = "top",
+                        clustering_distance_rows = "euclidean",
+                        border = TRUE,
+                        column_dend_reorder = TRUE,
+                        width = width, 
+                        height = height
+)
+
+draw(heatmap_plot_all,  heatmap_legend_side = "left", annotation_legend_side = "left")
+
+dev.off()
+```
+
+#### Jaccard distance
+
+```{r}
+filename = "Example"
+
+shared_genes_df_mirror = read_csv(file = here("Tables", paste0(filename, "_sharedgenes_Fisher_Jaccard.csv")))
+
+# Create a matrix of p-values
+pvalue_matrix <- shared_genes_df_mirror %>%
+  dcast(Cond1 ~ Cond2,
+        value.var = "pvalue",
+        fun.aggregate = mean) %>%
+  column_to_rownames("Cond1") %>%
+  as.matrix()
+
+#Create matrix of jaccard distances
+matrix_data = shared_genes_df_mirror %>% 
+  dcast(Cond1 ~ Cond2, 
+        value.var = "jaccard_distance", 
+        fun.aggregate = mean) %>% 
+  column_to_rownames("Cond1") %>%
+  mutate_if(is.character, as.numeric) %>% 
+  as.matrix() 
+
+
+annotation_metadata_complex = matrix_data %>% 
+  as.data.frame() %>%
+  rownames_to_column("condition") %>% 
+  dplyr::select(condition) %>% 
+  inner_join(annotation_metadata, by = "condition") %>%
+  distinct() 
+
+# merge
+annotation_metadata_heatmap = matrix_data %>% 
+  colnames() %>% 
+  data.frame() %>% 
+  dplyr::filter(. != "process") %>% 
+  dplyr::rename(condition = '.') %>% 
+  dplyr::inner_join(annotation_metadata_complex, by = "condition") %>% 
+  dplyr::arrange(condition) %>% 
+  column_to_rownames(var= "condition")
+
+
+# Reorder
+matrix_data_ordered = matrix_data %>% 
+  as.data.frame() %>% 
+  dplyr::select(c(annotation_metadata_complex %>% pull(condition))) %>% 
+  rownames_to_column("rownames") %>% 
+  dplyr::filter(rownames %in% c(annotation_metadata_complex %>% pull(condition))) %>% 
+  column_to_rownames(var= "rownames") %>% 
+  as.matrix()
+
+#Check
+dim(matrix_data_ordered) 
+dim(annotation_metadata_complex)
+
+# Quantile interpolation
+quartiles <- quantile(matrix_data_ordered, probs = c(0, 0.25, 0.5, 0.75, 1), na.rm = TRUE)
+col_fun <- colorRamp2(quartiles, c("white", "#a8dadc", "#457b9d", "#EFC000FF", "#d90429"))
+
+
+
+######## HEATMAP ANNOTATION
+annotation_metadata_heatmap = annotation_metadata_heatmap %>% 
+  mutate(timepoint = as_factor(timepoint),
+         timepoint = fct_reorder(timepoint, as.numeric(timepoint)))
+
+ha = HeatmapAnnotation(df = annotation_metadata_heatmap, 
+                       col = colors_immune, 
+                       annotation_name_side = "left",
+                       show_legend = F)
+
+row_ha = rowAnnotation(df = annotation_metadata_heatmap, 
+                       col = colors_immune,
+                       show_annotation_name = F)
+
+
+
+mat = matrix_data_ordered
+width_image = 15
+height_image = 15
+width = unit(5, "cm")
+height = unit(5, "cm")
+column_names_gp = gpar(fontsize = 0)
+row_names_gp = gpar(fontsize = 0)
+gp = gpar(fontsize = 10)
+rect_gp = gpar(col = "gray1", lwd = 0)
+
+
+
+fileimageheatmap_grouped = paste0(filename, sep ="_", "Jaccard_Heatmap.png")
+
+png(
+  file = here("Figures", fileimageheatmap_grouped),
+  width = width_image,
+  height = height_image,
+  units = "cm",
+  res = 900
+)
+
+heatmap_plot_all = Heatmap(mat,
+                        top_annotation = ha,
+                        left_annotation = row_ha,
+                        show_row_names = TRUE,
+                        show_heatmap_legend = TRUE,
+                        heatmap_legend_param = list(direction = "vertical"),
+                        name = "Jaccard \ndistance", #Legend
+                        col = col_fun, #color
+                        cell_fun = function(j, i, x, y, width, height, fill) {
+    if (!is.na(mat[i, j]) && mat[i, j] > 0.01) {
+      grid.text(sprintf("%.2f", mat[i, j]), x, y, gp = gpar(fontsize = 8))
+    }
+                           i# Add significance stars based on p-value thresholds
+  if (!is.na(pvalue_matrix[i, j])) {
+    pval <- pvalue_matrix[i, j]
+    sig <- ""
+    if (pval < 0.01) {
+      sig <- "***"
+    } else if (pval < 0.05) {
+      sig <- "**"
+    } else if (pval < 0.10) {
+      sig <- "*"
+    }
+    
+    # Draw the symbol slightly above the cell center
+    if (sig != "") {
+      grid.text(sig, x, y + unit(2, "mm"), gp = gpar(fontsize = 6, fontface = "plain"))
+    }
+  }
+},
+                        column_title = fileimageheatmap_grouped,
+                        column_title_gp = gpar(fontsize = 15, fontface = "bold"),
+                        column_names_rot = 90,
+row_names_rot = 45,
+                        column_names_gp = column_names_gp,
+                        cluster_rows = TRUE, 
+                        rect_gp = rect_gp,
+                        row_names_gp = row_names_gp,
+                        # row_split = 2, #Split row clusters
+                        row_gap = unit(2, "mm"),
+                        cluster_columns = TRUE,
+                        na_col = "black",
+                        column_split = NULL, #Split group clusters
+                        #column_km = 3,
+                        column_gap = unit(8, "mm"),
+                        show_column_dend = F,
+                        show_row_dend = F,
+                        row_dend_side = "left",
+                        column_dend_side = "top",
+                        clustering_distance_rows = "euclidean",
+                        border = TRUE,
+                        column_dend_reorder = TRUE,
+                        width = width, 
+                        height = height
+)
+
+draw(heatmap_plot_all,  heatmap_legend_side = "left", 
+     annotation_legend_side = "left")
+
+dev.off()
+
+heatmap_plot_all
+
 ```
 
 

@@ -304,17 +304,36 @@ colors_immune = list(organism = c("FIT" = "#4361ee",
                                   "Mouse" = "#4DBBD5FF",
                                   "Human" = "#90A4AEFF"),
                      timepoint = c("1" = "#caf0f8",
-                                   "2" = "#caf0f8",
-                                   "4" = "#219ebc",
-                                   "6" = "#669bbc",
-                                   "12" = "purple"),
+                                   "2" = "#ade8f4",
+                                   "3" = "#90e0ef",
+                                   "4" = "#6CD5EA",
+                                   "6" = "#00b4d8",
+                                   "7" = "#0096c7",
+                                   "12" = "#03045e"),
                      race = c("White" = "gray80",
                               "Other" = "#4DBBD5FF",
-                              "CB6F1" = "#90A4AEFF"))
+                              "CB6F1" = "#90A4AEFF"),
+                     colors_vaccines = c("Agrippal" = "#669bbc",
+                                         "Fluad" = "#219ebc",
+                                         "Quadri 2019-2020" = "#4DBBD5FF",
+                                         "Quadri 19-20" = "#4DBBD5FF",
+                                         "Engerix" = "#4361ee"),
+                     type = c("VLP" = "#7E6148FF",
+                              "LA" =  "#EFC000FF",
+                              "CONJ" = "#F39B7FFF", 
+                              'IN'= "#00A087FF", 
+                              'Inactivated'= "#00A087FF", 
+                              'VV' = "#3C5488FF", #3rd Gen vaccines
+                              'RNA' = "#4DBBD5FF",
+                              'SU' = "#8491B4FF",
+                              "IN/SU" = "#8491B4FF",
+                              "PS" = "#F39B7FFF",
+                              'I'= "#DC0000FF",
+                              "H" = "grey95",
+                              "V-I" = "#ffadc7"))
 
 
 #Define colors
-# btm_annotation %>% pull(group) %>% unique()
 
 btm_immune_groups = list(group = c("SIGNAL TRANSDUCTION" = "#708d81",
                                    "CELL CYCLE" = "#06d6a0",
