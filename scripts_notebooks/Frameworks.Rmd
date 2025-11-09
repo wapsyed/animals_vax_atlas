@@ -270,23 +270,10 @@ human_mouse_example_raw_log2fc <- human_mouse_example_raw %>%
 
 ### Create expression set
 ```{r}
-#Differential gene expression ----
-#Matrix
-matrix_genes = human_mouse_fluad_matrix
-#Filter samples
-human_mouse_matrix = matrix_genes %>% 
-  as.data.frame() %>% 
-  select(c(human_mouse_metadata %>% 
-           filter(organism == "Mouse") %>% 
-             pull(sample_id))) %>% 
-  as.matrix()
-
 #Create Expression Set
 eset_mouse <- ExpressionSet(
-  assayData = human_mouse_matrix,
-  phenoData = AnnotatedDataFrame(human_mouse_metadata %>% 
-                                   column_to_rownames("sample_id") %>% 
-                                   filter(organism == "Mouse")))
+  assayData = mouse_fluad_matrix,
+  phenoData = AnnotatedDataFrame(mouse_fluad_metadata))
 
 #Save
 eset_mouse %>% saveRDS(file = here("tables", "Example_eset_mouse.rds"))
@@ -296,11 +283,56 @@ eset_mouse %>% saveRDS(file = here("tables", "Example_eset_mouse.rds"))
 ```{r}
 #Import
 eset_mouse = readRDS(file = here("tables", "Example_eset_mouse.rds"))
-human_mouse_fluad_matrix = eset_mouse %>% 
+mouse_fluad_matrix = eset_mouse %>% 
   exprs()
+
+mouse_fluad_metadata = eset_mouse %>%
+  pData() 
+
+mouse_fluad_matrix %>% 
+  saveRDS(here("tables", "mouse_fluad_matrix.rds"))
+mouse_fluad_metadata %>% 
+  saveRDS(here("tables", "mouse_fluad_metadata.rds"))
+
 ```
 
-## Limma
+## Mixed models (Limma)
+### VariancePartition
+
+```{r}
+library("variancePartition")
+#Design matrix
+formula_dream <- ~ (1|timepoint) + (1 | participant_id)
+
+#Fit
+varPart <- fitExtractVarPartModel(mouse_fluad_matrix, formula_dream, mouse_fluad_metadata)
+
+# sort variables by median fraction of variance explained
+vp <- sortCols(varPart)
+
+# Figure 1a
+# Bar plot of variance fractions for the first 10 genes
+plotPercentBars(vp[1:10, ])
+
+# violin plot of contribution of each variable to total variance
+plotVarPart(vp)
+
+
+# get gene with the highest variation across Tissues
+i <- which.max(varPart$timepoint)
+# create data.frame with expression of gene i and timepoint type for each sample
+GE <- data.frame(Expression = mouse_fluad_matrix[i, ], 
+                 Timepoint = mouse_fluad_metadata$timepoint)
+
+# Figure 2a
+# plot expression stratified by Tissue
+plotStratify(Expression ~ Timepoint, GE, 
+             main = rownames(mouse_fluad_matrix)[i])
+```
+
+
+
+### Limma
 Paired samples design
 ```{r}
 #Create model matrix
@@ -562,42 +594,6 @@ annotation_metadata = dge_long_genes %>%
 
 #Inputs
 filename = "Example"
-```
-
-Function
-
-```{r}
-# Function for overlapping -------
-overlap_genes <- function(cond1, cond2, data) {
-  genes_cond1 <- data$genes[data$process == cond1]
-  genes_cond2 <- data$genes[data$process == cond2]
-  
-  genes_shared <- intersect(genes_cond1, genes_cond2)
-  
-  genes_notshared_cond1 <- setdiff(genes_cond1, genes_cond2)
-  genes_notshared_cond2 <- setdiff(genes_cond2, genes_cond1)
-  
-  total_genes_cond1 <- length(genes_cond1)
-  total_genes_cond2 <- length(genes_cond2)
-  
-  percentage_shared_cond1 <- length(genes_shared) / total_genes_cond1 * 100
-  percentage_shared_cond2 <- length(genes_shared) / total_genes_cond2 * 100
-  
-  shared_genes <- data.frame(
-    Cond1 = cond1,
-    Cond2 = cond2,
-    Shared = length(genes_shared),
-    NotShared_cond1 = length(genes_notshared_cond1),
-    NotShared_cond2 = length(genes_notshared_cond2),
-    Total_Genes_Cond1 = total_genes_cond1,
-    Total_Genes_Cond2 = total_genes_cond2,
-    Genes_Names = paste(genes_shared, collapse = ", "),
-    Percentage_Shared_Cond1 = percentage_shared_cond1,
-    Percentage_Shared_Cond2 = percentage_shared_cond2
-  )
-  
-  return(shared_genes)
-}
 ```
 
 Perform calculations
@@ -928,8 +924,8 @@ heatmap_plot_all = Heatmap(mat,
                         left_annotation = row_ha,
                         show_row_names = TRUE,
                         show_heatmap_legend = TRUE,
-                        heatmap_legend_param = list(direction = "vertical"),
-                        name = "Jaccard \ndistance", #Legend
+                        heatmap_legend_param = list(direction = "horizontal"),
+                        name = "Jaccard\ndistance", #Legend
                         col = col_fun, #color
                         cell_fun = function(j, i, x, y, width, height, fill) {
     if (!is.na(mat[i, j]) && mat[i, j] > 0.01) {
@@ -979,7 +975,8 @@ row_names_rot = 45,
                         height = height
 )
 
-draw(heatmap_plot_all,  heatmap_legend_side = "left", 
+draw(heatmap_plot_all,  
+     heatmap_legend_side = "bottom", 
      annotation_legend_side = "left")
 
 dev.off()

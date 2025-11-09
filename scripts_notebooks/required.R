@@ -6,7 +6,7 @@ required_packages <- c(
   "janitor", "readr", "paletteer", "beepr", "preprocessCore", "maditr", 
   "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
-  "pracma", "ggnewscale", "ggprism", "ggtext",
+  "pracma", "ggnewscale", "ggprism", "ggtext", 
   "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath"
 )
 
@@ -14,36 +14,39 @@ required_packages <- c(
 bioc_pkgs <- c(
   "biomaRt", "GEOquery", "circlize", "celldex", 
   "org.Hs.eg.db", "DESeq2", "msigdbr", 
-  "ape",
+  "ape", "variancePartition",
   "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
   "mogene10sttranscriptcluster.db", "fgsea", "arrayQualityMetrics"
-  # "EDASeq"
 )
-# 
+
+
+lapply(required_packages, library, character.only = TRUE)
+lapply(bioc_pkgs, library, character.only = TRUE)
+
 # renv::remove("ape")
 # renv::install("ape")
-
-# Install packages from CRAN
-cran_missing <- setdiff(required_packages, rownames(installed.packages()))
-if (length(cran_missing) > 0) {
-  install.packages(cran_missing)
-}
-
-# # Install packages from Bioconductor
-# # Install BiocManager if necessary
-# if (!requireNamespace("BiocManager", quietly = TRUE)) {
-#   install.packages("BiocManager")
+# 
+# # Install packages from CRAN
+# cran_missing <- setdiff(required_packages, rownames(installed.packages()))
+# if (length(cran_missing) > 0) {
+#   install.packages(cran_missing)
 # }
 # 
-# bioc_missing <- setdiff(bioc_pkgs, rownames(installed.packages()))
-# if (length(bioc_missing) > 0) {
-#   BiocManager::install(bioc_missing)
-# }
-
-# Load packages (CRAN + Bioconductor)
-invisible(lapply(c(required_packages, bioc_pkgs), function(pkg) {
-  suppressPackageStartupMessages(library(pkg, character.only = TRUE))
-}))
+# # # Install packages from Bioconductor
+# # # Install BiocManager if necessary
+# # if (!requireNamespace("BiocManager", quietly = TRUE)) {
+# #   install.packages("BiocManager")
+# # }
+# # 
+# # bioc_missing <- setdiff(bioc_pkgs, rownames(installed.packages()))
+# # if (length(bioc_missing) > 0) {
+# #   BiocManager::install(bioc_missing)
+# # }
+# 
+# # Load packages (CRAN + Bioconductor)
+# invisible(lapply(c(required_packages, bioc_pkgs), function(pkg) {
+#   suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+# }))
 
 ##Aesthetics -----
 #Custom theme
@@ -84,6 +87,37 @@ theme_vaxgo = function(){
 
 
 #Functions ------
+# Function for overlapping -------
+overlap_genes <- function(cond1, cond2, data) {
+  genes_cond1 <- data$genes[data$process == cond1]
+  genes_cond2 <- data$genes[data$process == cond2]
+  
+  genes_shared <- intersect(genes_cond1, genes_cond2)
+  
+  genes_notshared_cond1 <- setdiff(genes_cond1, genes_cond2)
+  genes_notshared_cond2 <- setdiff(genes_cond2, genes_cond1)
+  
+  total_genes_cond1 <- length(genes_cond1)
+  total_genes_cond2 <- length(genes_cond2)
+  
+  percentage_shared_cond1 <- length(genes_shared) / total_genes_cond1 * 100
+  percentage_shared_cond2 <- length(genes_shared) / total_genes_cond2 * 100
+  
+  shared_genes <- data.frame(
+    Cond1 = cond1,
+    Cond2 = cond2,
+    Shared = length(genes_shared),
+    NotShared_cond1 = length(genes_notshared_cond1),
+    NotShared_cond2 = length(genes_notshared_cond2),
+    Total_Genes_Cond1 = total_genes_cond1,
+    Total_Genes_Cond2 = total_genes_cond2,
+    Genes_Names = paste(genes_shared, collapse = ", "),
+    Percentage_Shared_Cond1 = percentage_shared_cond1,
+    Percentage_Shared_Cond2 = percentage_shared_cond2
+  )
+  
+  return(shared_genes)
+}
 
 #Run GSEA for a given contrast
 autoGSEA <- function(df, TERM2GENE, geneset_name) {
