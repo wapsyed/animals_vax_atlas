@@ -624,6 +624,173 @@ flu_metadata_clean = flu_metadata %>%
 saveRDS(flu_metadata_clean, file = here("tables", "GSE124689_metadata_fluad_clean.rds"))
 ```
 
+#### Unite and normalize
+```{r}
+# Unite tables by "humanized" symbols ---------
+#Filter out duplicated symbols
+filter_out_mgi = GSE120661_counts_not_normalized_log2_annotations %>% 
+  select(mgi_symbol) %>% 
+  get_dupes()
+
+GSE120661_counts_not_normalized_log2_symbol = GSE120661_counts_not_normalized_log2_annotations %>% 
+  select(-probe, -entrezgene_id) %>% #21,856 rows
+  distinct() %>%  #21,666 rows
+  filter(mgi_symbol != c(filter_out_mgi$mgi_symbol)) %>% #21,557 rows
+  mutate(mgi_symbol = str_to_upper(mgi_symbol)) %>% 
+  rename(symbol = mgi_symbol)
+
+#Unite and normalize
+human_mouse_fluad_matrix = GSE124689_expression_not_normalized_log2_raw_symbol %>% 
+  rownames_to_column("symbol") %>% 
+  inner_join(GSE120661_counts_not_normalized_log2_symbol, 
+             by = "symbol")  %>% 
+  column_to_rownames("symbol") %>% 
+  select(human_mouse_fluad_metadata %>% 
+           # filter(timepoint %in% c("0", "1", "3", "7")) %>% 
+           pull(sample_id)) %>% 
+  as.matrix() %>% 
+  normalizeBetweenArrays(method = "quantile")
+
+human_mouse_fluad_df = human_mouse_fluad_matrix %>% 
+  as.data.frame()
+
+
+#Create ExpressionSet
+eset_human_mouse <- ExpressionSet(
+  assayData = human_mouse_fluad_matrix,
+  phenoData = AnnotatedDataFrame(human_mouse_fluad_metadata %>% 
+                                   filter(sample_id %in% c(human_mouse_fluad_matrix %>% colnames())) %>% 
+                                   column_to_rownames("sample_id"))
+)
+
+eset_human_mouse %>% saveRDS(file = here("tables", "eset_human_mouse.rds"))
+
+```
+
+
+### Differential gene expression
+```{r}
+#Import
+eset_human_mouse = readRDS(file = here("tables", "eset_human_mouse.rds"))
+human_mouse_fluad_matrix = eset_human_mouse %>% exprs()
+human_mouse_fluad_metadata = readRDS(file = here("tables", "human_mouse_fluad_metadata.rds"))
+
+
+# DGE (Human normalized with mouse) -------
+human_mouse_fluad_matrix_human = human_mouse_fluad_matrix %>% 
+  as.data.frame() %>% 
+  select(c(human_mouse_fluad_metadata %>% 
+           filter(organism == "Human") %>% 
+             filter(!participant_id %in% c("CRC305DGENT1483036",
+                                             "CRC305DGENT0351013",
+                                             "CRC305DGENT1471032")) %>% 
+             pull(sample_id))) %>% 
+  as.matrix()
+
+human_mouse_fluad_metadata_pData = human_mouse_fluad_metadata %>% 
+                                   column_to_rownames("sample_id") %>% 
+                                   filter(organism == "Human") %>% 
+                                   filter(!participant_id %in% c("CRC305DGENT1483036",
+                                             "CRC305DGENT0351013",
+                                             "CRC305DGENT1471032")) %>% 
+  mutate(timepoint = as.factor(timepoint),
+         sex = as.factor(sex),
+         age = scale(as.numeric(age)),
+         race = as.factor(race))
+
+
+#Create ExpressionSet
+eset_human <- ExpressionSet(
+  assayData = human_mouse_fluad_matrix_human,
+  phenoData = AnnotatedDataFrame(human_mouse_fluad_metadata_pData))
+
+#Save
+eset_human %>% saveRDS(file = here("tables", "fluad_eset_human.rds"))
+```
+
+
+```{r}
+##### Run analysis in the cluster -------
+eset_human = readRDS(file = here("tables", "fluad_eset_human.rds"))
+#Create design matrix
+design <- model.matrix(~ condition + sex + age + race + 0, eset_human) 
+#Avoid blank spaces
+colnames(design) <- make.names(colnames(design))
+
+#Get intra-individual correlation
+corfit <- duplicateCorrelation(eset_human, 
+                               design = design, 
+                               block = eset_human$participant_id)
+corfit$consensus #0.11
+
+# Fit Limma model
+fluad_human_limma_fit <- lmFit(eset_human, 
+                             design, 
+                             block = eset_human$participant_id, 
+                             correlation = corfit$consensus)
+
+fluad_human_limma_fit = fluad_human_limma_fit %>% 
+  eBayes()
+
+fluad_human_limma_fit %>% saveRDS(here("tables","fluad_human_limma_fit.rds"))
+
+
+# Import results from cluster -------
+fluad_human_limma_fit = readRDS(here("tables","fluad_human_limma_fit.rds"))
+
+
+#Contrasts
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+cont.matrix <- makeContrasts(conditionFLUADD.Day.1 - conditionFLUADD.Day.0,
+                             conditionFLUADD.Day.3 - conditionFLUADD.Day.0,
+                             conditionFLUADD.Day.7 - conditionFLUADD.Day.0,
+                             levels=design)
+
+fit2 <- contrasts.fit(fluad_human_limma_fit, cont.matrix)
+fit2 <- treat(fit2, lfc = 0.0)
+
+#Get DEGs ------
+## For every contrast
+results_list <- lapply(1:ncol(fit2), function(i) {
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+  })
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs
+fluad_human_degs = all_contrasts_degs %>% 
+  select(comparison, everything()) %>% 
+  mutate(comparison = str_replace_all(comparison, "\\.", " "),
+        comparison = str_replace_all(comparison, "condition", "")) %>% 
+  separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef")) %>% 
+  select(condition = comparisonA, everything()) %>% 
+  select(-comparisonRef) %>% 
+  clean_names() %>% 
+  select(condition, symbol, mean = log_fc, lower = ci_l, upper = ci_r, ave_expr,
+         everything()) %>% 
+  inner_join(human_mouse_fluad_metadata_pData %>% 
+               select(condition, timepoint, vaccine, sample_type) %>% 
+               distinct(), by = "condition") %>% 
+  mutate(organism = "Human") 
+
+#Save
+fluad_human_degs %>% saveRDS(file = here("tables", "fluad_human_limma_fit_degs.rds"))
+
+#Print results
+fluad_human_degs
+
+fluad_human_degs %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarize(n_degs = n())
+```
+
 
 ## Mouse and Human
 
@@ -831,50 +998,7 @@ demography_samples_age %>%
 
 
 
-### Differential expression for human AND mouse
 
-####Unite and normalize
-```{r}
-# Unite tables by "humanized" symbols ---------
-#Filter out duplicated symbols
-filter_out_mgi = GSE120661_counts_not_normalized_log2_annotations %>% 
-  select(mgi_symbol) %>% 
-  get_dupes()
-
-GSE120661_counts_not_normalized_log2_symbol = GSE120661_counts_not_normalized_log2_annotations %>% 
-  select(-probe, -entrezgene_id) %>% #21,856 rows
-  distinct() %>%  #21,666 rows
-  filter(mgi_symbol != c(filter_out_mgi$mgi_symbol)) %>% #21,557 rows
-  mutate(mgi_symbol = str_to_upper(mgi_symbol)) %>% 
-  rename(symbol = mgi_symbol)
-
-#Unite and normalize
-human_mouse_fluad_matrix = GSE124689_expression_not_normalized_log2_raw_symbol %>% 
-  rownames_to_column("symbol") %>% 
-  inner_join(GSE120661_counts_not_normalized_log2_symbol, 
-             by = "symbol")  %>% 
-  column_to_rownames("symbol") %>% 
-  select(human_mouse_fluad_metadata %>% 
-           # filter(timepoint %in% c("0", "1", "3", "7")) %>% 
-           pull(sample_id)) %>% 
-  as.matrix() %>% 
-  normalizeBetweenArrays(method = "quantile")
-
-human_mouse_fluad_df = human_mouse_fluad_matrix %>% 
-  as.data.frame()
-
-
-#Create ExpressionSet
-eset_human_mouse <- ExpressionSet(
-  assayData = human_mouse_fluad_matrix,
-  phenoData = AnnotatedDataFrame(human_mouse_fluad_metadata %>% 
-                                   filter(sample_id %in% c(human_mouse_fluad_matrix %>% colnames())) %>% 
-                                   column_to_rownames("sample_id"))
-)
-
-eset_human_mouse %>% saveRDS(file = here("tables", "eset_human_mouse.rds"))
-
-```
 
 
 #### Quality control
@@ -3510,125 +3634,7 @@ patch_human_mouse_separated
 
 
 
-#### DGE (Human normalized with mouse)
-```{r}
-#Import
-eset_human_mouse = readRDS(file = here("tables", "eset_human_mouse.rds"))
-human_mouse_fluad_matrix = eset_human_mouse %>% exprs()
-human_mouse_fluad_metadata = readRDS(file = here("tables", "human_mouse_fluad_metadata.rds"))
 
-
-# DGE (Human normalized with mouse) -------
-human_mouse_fluad_matrix_human = human_mouse_fluad_matrix %>% 
-  as.data.frame() %>% 
-  select(c(human_mouse_fluad_metadata %>% 
-           filter(organism == "Human") %>% 
-             filter(!participant_id %in% c("CRC305DGENT1483036",
-                                             "CRC305DGENT0351013",
-                                             "CRC305DGENT1471032")) %>% 
-             pull(sample_id))) %>% 
-  as.matrix()
-
-human_mouse_fluad_metadata_pData = human_mouse_fluad_metadata %>% 
-                                   column_to_rownames("sample_id") %>% 
-                                   filter(organism == "Human") %>% 
-                                   filter(!participant_id %in% c("CRC305DGENT1483036",
-                                             "CRC305DGENT0351013",
-                                             "CRC305DGENT1471032")) %>% 
-  mutate(timepoint = as.factor(timepoint),
-         sex = as.factor(sex),
-         age = scale(as.numeric(age)),
-         race = as.factor(race))
-
-
-#Create ExpressionSet
-eset_human <- ExpressionSet(
-  assayData = human_mouse_fluad_matrix_human,
-  phenoData = AnnotatedDataFrame(human_mouse_fluad_metadata_pData))
-
-#Save
-eset_human %>% saveRDS(file = here("tables", "fluad_eset_human.rds"))
-```
-
-
-```{r}
-##### Run analysis in the cluster -------
-eset_human = readRDS(file = here("tables", "fluad_eset_human.rds"))
-
-#Create design matrix
-design <- model.matrix(~ condition + sex + age + race + 0, eset_human) 
-#Avoid blank spaces
-colnames(design) <- make.names(colnames(design))
-
-#Get intra-individual correlation
-corfit <- duplicateCorrelation(eset_human, 
-                               design = design, 
-                               block = eset_human$participant_id)
-corfit$consensus #0.10
-
-# Input into the linear model:
-# Fit Limma model
-GSE124689_limma_fit <- lmFit(eset_human, 
-             design, 
-             block = eset_human$participant_id, 
-             correlation = corfit$consensus)
-
-GSE124689_limma_fit = GSE124689_limma_fit %>% 
-  eBayes()
-
-GSE124689_limma_fit %>% saveRDS(here("tables","GSE124689_limma_fit.rds"))
-
-# Import results from cluster -------
-GSE124689_limma_fit <- readRDS(here("tables","GSE124689_limma_fit.rds"))
-
-
-#Contrasts
-colnames(design) %>% 
-  as.data.frame() %>% 
-  arrange(.)
-
-cont.matrix <- makeContrasts(conditionFLUADD.Day.1 - conditionFLUADD.Day.0,
-                             conditionFLUADD.Day.3 - conditionFLUADD.Day.0,
-                             conditionFLUADD.Day.7 - conditionFLUADD.Day.0,
-                             levels=design)
-
-fit2 <- contrasts.fit(GSE124689_limma_fit, cont.matrix)
-fit2 <- treat(fit2, lfc = 0.0)
-
-#Get DEGs ------
-## For every contrast
-results_list <- lapply(1:ncol(fit2), function(i) {
-  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
-    mutate(comparison = colnames(fit2)[i]) %>% 
-    rownames_to_column("symbol")
-  })
-
-# Combine all results
-all_contrasts_degs <- bind_rows(results_list)
-
-# Get all DEGs
-GSE124689_degs = all_contrasts_degs %>% 
-  select(comparison, everything()) %>% 
-  mutate(comparison = str_replace_all(comparison, "\\.", " "),
-        comparison = str_replace_all(comparison, "condition", "")) %>% 
-  separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef")) %>% 
-  select(condition = comparisonA, everything()) %>% 
-  select(-comparisonRef) %>% 
-  clean_names() %>% 
-  select(condition, symbol, mean = log_fc, lower = ci_l, upper = ci_r, ave_expr,
-         everything()) %>% 
-  inner_join(flu_metadata_clean %>% 
-               select(condition, timepoint, vaccine, sample_type) %>% 
-               distinct(), by = "condition") %>% 
-  mutate(organism = "Human") %>% 
-  inner_join(human_fluadd_symbol_entrez, 
-               by = "symbol")
-#Save
-GSE124689_degs %>% saveRDS(file = here("tables", "GSE124689_degs.rds"))
-
-#Print results
-GSE124689_degs
-```
 
 
 
@@ -3748,7 +3754,7 @@ fit_example_results_ready %>%
 ```{r}
 #Import datasets
 fit_example_results_ready = readRDS(file = here("tables", "fit_example_results_ready.rds"))
-fluad_human_degs = read_rds(here("tables", "GSE124689_degs.rds"))
+fluad_human_degs = read_rds(file = here("tables", "fluad_human_limma_fit_degs.rds"))
 all_degs_mouse = read_rds(file = here("tables", "Fluad_GSE120661_degs_mouse.rds"))
 GSE120661_metadata = read_csv(here("tables", "GSE120661_metadata.csv")) 
 human_mouse_fluad_metadata = readRDS(file = here("tables", "human_mouse_fluad_metadata.rds"))
@@ -3770,19 +3776,19 @@ genes_ann = fit_example_results_ready %>%
 #Human
 fluad_human = fluad_human_degs %>% 
   select(condition,
-         symbol, 
+         human_symbol = symbol, 
          log2fc = mean,
          ci_low = lower,
          ci_high = upper,
          p_value,
          adj_p_val,
          organism,
-         human_entrez = entrez_id
+         t
          ) %>% 
   mutate(ci_size = ci_high - ci_low,
          organism = "Human") %>% 
-  inner_join(genes_ann, by = "human_entrez") %>% 
-  select(-human_symbol)
+  inner_join(genes_ann, by = join_by("human_symbol")) %>% 
+  rename(symbol = human_symbol)
 
 #Mouse
 fluad_mouse = all_degs_mouse %>%
@@ -3817,12 +3823,11 @@ fluad_fit = fit_example_results_ready %>%
   select(!c(mouse_entrez, human_entrez, mouse_symbol)) %>% 
   #Calculate pvalues
    mutate(
-    # Estimate SE from CIs
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    p_value = 2 * pnorm(-abs(z)),
-    adj_p_val = p.adjust(p_value, method = "BH")) %>% 
-  select(!c(se, z))
+  se = (ci_high - ci_low) / (2 * 1.96),
+  z = log2fc / se,
+  p_value = 2 * pnorm(-abs(z)),
+  adj_p_val = p.adjust(p_value, method = "BH")) %>% 
+  select(-se)
 
 #Combine tables
 fit_fluad_mouse_human = fluad_human %>% 
@@ -3838,6 +3843,11 @@ fit_fluad_mouse_human = fluad_human %>%
 #Save
 fit_fluad_mouse_human %>% 
   saveRDS(here("FIT_Mouse2man", "fit_fluad_mouse_human.rds"))
+
+#Save long dataset
+fit_fluad_mouse_human %>% 
+  mutate(condition =  paste(organism, "Day", timepoint)) %>% 
+  saveRDS(file = here("tables", "dge_fit_mouse_human_long.rds"))
 
 #Print
 fit_fluad_mouse_human
@@ -3860,6 +3870,7 @@ meta_fit = fit_fluad_mouse_human %>%
   filter(organism == "FIT") %>% 
   select(symbol, 
          timepoint, 
+         z_fit = z,
          mean_fit = log2fc, 
          ci_low_fit = ci_low,
          ci_high_fit = ci_high,
@@ -3873,6 +3884,7 @@ meta_mouse = fit_fluad_mouse_human %>%
   filter(organism == "Mouse") %>% 
   select(symbol, 
          timepoint, 
+         t_mouse = t,
          mean_mouse = log2fc, 
          ci_low_mouse = ci_low,
          ci_high_mouse = ci_high,
@@ -3894,6 +3906,7 @@ meta_human = fit_fluad_mouse_human %>%
   filter(organism == "Human") %>% 
   select(symbol, 
          timepoint, 
+         t_human = t,
          mean_human = log2fc, 
          ci_low_human = ci_low,
          ci_high_human = ci_high,
@@ -3941,15 +3954,15 @@ pairwise_human_fit_measures = meta_human %>%
   select(
     timepoint, symbol,
     #Human
-    mean_human,
+    mean_human, t_human,
     ci_low_human, ci_high_human, ci_width_human,
     se_human, pval_human, pval_adj_human,
     #FIT
-    mean_fit,
+    mean_fit, z_fit,
     ci_low_fit, ci_high_fit, ci_width_fit,
     se_fit, pval_fit, pval_adj_fit,
     #Mouse
-    mean_mouse,
+    mean_mouse, t_mouse,
     ci_low_mouse, ci_high_mouse, ci_width_mouse,
     se_mouse, pval_mouse, pval_adj_mouse,
     #Comparison
@@ -3965,11 +3978,6 @@ pairwise_human_fit_measures = meta_human %>%
 #Save wide dataset
 pairwise_human_fit_measures %>% 
   saveRDS(here("FIT_Mouse2man", "pairwise_human_fit_measures.rds"))
-
-#Save long dataset
-fit_fluad_mouse_human %>% 
-  mutate(condition =  paste(organism, "Day", timepoint)) %>% 
-  saveRDS(file = here("tables", "dge_fit_mouse_human_long.rds"))
 
 #Print
 pairwise_human_fit_measures
