@@ -403,7 +403,7 @@ all_degs_mouse %>% saveRDS(file = here("tables", "Example_GSE120661_degs_mouse.r
 ```
 
 
-## T test and wilcoxon
+## T test and wilcoxon (REFAZER)
 ```{r}
 #Tests
 example_log2fc_avg_paired_ttest_wilcoxon <- human_mouse_example_raw_log2fc %>% 
@@ -1480,6 +1480,94 @@ correlation_long_all_mouse_human_timepoints_summary_plot %>%
                          height = 3)
   
 ```
+
+
+
+# Found in translation
+Ref: Normand, R., Du, W., Briller, M. et al. Found In Translation: a machine learning model for mouse-to-human inference. Nat Methods 15, 1067–1073 (2018). https://doi.org/10.1038/s41592-018-0214-9
+Github: https://github.com/shenorrLabTRDF/FIT.mouse2man 
+```{r}
+#Install model package
+# library(devtools)
+# devtools::install_github('shenorrLabTRDF/FIT.mouse2man')
+library(FIT.mouse2man)
+#Import files
+pca_rotations = FIT.mouse2man::pca_rotations
+best_models = FIT.mouse2man::best_models
+HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez
+MM_Entrez_symbol_desc = FIT.mouse2man::MM_Entrez_symbol_desc
+Psoriasis_classifier_neg = FIT.mouse2man::Psoriasis_classifier_neg
+slopes_per_gene_V2.0 = FIT.mouse2man::slopes_per_gene_V2.0
+StaphInfection_classifier_pos = FIT.mouse2man::StaphInfection_classifier_pos
+AllData_V2.0 = FIT.mouse2man::AllData_V2.0 #Training data
+```
+
+
+### Loop for every time point
+Obs.: Make sure that datasets from FIT package were retrieved
+Initial number of genes: 15503
+Number of genes for which FIT predictions will be calculated: 14401
+```{r}
+all_degs_mouse = readRDS(file = here("tables", "Fluad_GSE120661_degs_mouse.rds"))
+mouse_fluad_log2_hgnc_symbol = readRDS(here("tables", "mouse_fluad_log2_hgnc_symbol.rds"))
+### Loop for every time point -----
+all_degs_fit2 = all_degs_mouse %>% 
+  select(symbol, EffectSize = logFC, condition) %>%
+  inner_join(mouse_fluad_log2_hgnc_symbol %>% 
+               select(symbol = human_symbol, MM.Entrez = mouse_entrez),
+             by = "symbol") %>% 
+  mutate(row = MM.Entrez)
+
+# Generate csv for every condition
+all_conditions <- unique(all_degs_fit2$condition)
+purrr::walk(all_conditions, function(cond) {
+  
+  delete_dupes <- all_degs_fit2 %>%
+    filter(condition == cond) %>%
+    get_dupes(row) %>%
+    pull(row)
+  
+  filtered_df <- all_degs_fit2 %>%
+    filter(condition == cond, !row %in% delete_dupes) %>%
+    select(-condition) %>% 
+    column_to_rownames("row") %>% 
+    select(MM.Entrez, EffectSize)
+  
+  file_name <- paste0(cond, "_FIT_mouse.csv")
+  file_path <- here("tables", file_name)
+  
+  write_csv(filtered_df, file_path)
+})
+
+# FIT loop
+fit_results_combined <- map2_dfr(all_conditions, all_conditions, function(cond, cond_name) {
+  
+  file_path <- here("tables", paste0(cond, "_FIT_mouse.csv"))
+  
+  fit_output <- FIT.mouse2man::FIT(MouseFile = file_path, DataType = "rnaseq")
+
+  fit_output_tbl <- as_tibble(fit_output) %>%
+    mutate(condition = cond_name)
+  
+  return(fit_output_tbl)
+})
+beep()
+#Print
+fit_results_combined
+
+#Save
+fit_results_combined %>% saveRDS(here("FIT_Mouse2man", "FIT_FLUAD_alltimes.rds"))
+
+fit_results_combined %>% 
+  ggplot() +
+  aes(x = log2fc,
+      fill = condition,
+      color = condition) +
+  geom_histogram()
+```
+
+
+
 
 #Immune functional analysis
 
@@ -2625,12 +2713,10 @@ set.seed(123)
 # genes_roc_DEGs
 # genes_roc_DEGs_immune
 
-genes_df_input = genes_roc_allgenes_immunegenes
+genes_df_input = genes_roc_allgenes
 
-
-
-# filename = "Fluad_All"
-filename = "Fluad_All_Immune"
+filename = "Fluad_All"
+# filename = "Fluad_All_Immune"
 # filename = "Fluad_AllDEGs_HumanDEGs"
 # filename = "Fluad_AllDEGs_HumanDEGs_Immune"
 ```
@@ -2641,12 +2727,12 @@ filename = "Fluad_All_Immune"
 #Do one sided t-test for each model
 dge_long_genes_up = genes_df_input %>% 
   mutate(
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    pval_one_sided = pnorm(z, lower.tail = F), #onesided, p(gene) > 0 (right tail)
+    se = (ci_high - ci_low) / (2 * qt(0.975, df)),
+    pval_one_sided = pt(t, df, lower.tail = FALSE),
     pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    direction = if_else(pval_one_sided_adj < 0.05, "up", "not_up")) %>%
-  select(-adj_p_val) %>% 
+    direction = if_else(pval_one_sided_adj < 0.05 & t > 0, "up", "not_up")
+  ) %>%
+  select(-adj_p_val) %>%
   rename(adj_p_val = pval_one_sided_adj)
 
 #Assign human log2fc direction as truth
@@ -2833,13 +2919,13 @@ set.seed(123)
 # genes_roc_DEGs
 # genes_roc_DEGs_immune
 
-genes_df_input = genes_roc_DEGs_all
+genes_df_input = genes_roc_allgenes
 
 
 
-# filename = "Fluad_All"
+filename = "Fluad_All"
 # filename = "Fluad_All_Immune"
-filename = "Fluad_AllDEGs_HumanDEGs"
+# filename = "Fluad_AllDEGs_HumanDEGs"
 # filename = "Fluad_AllDEGs_HumanDEGs_Immune"
 ```
 
@@ -2847,25 +2933,30 @@ filename = "Fluad_AllDEGs_HumanDEGs"
 ```{r fig.height=5, fig.width=8}
 ######### UP (Regulação Positiva) -----------
 
-# 1. Definir Genes UP e o Score de Confiança
-dge_long_genes_up = genes_df_input %>% 
-  # Apenas genes com Log2FC positivo (Direção UP)
-  filter(log2fc > 0) %>% 
+# 1. Define UP genes and confidence score
+dge_long_genes_up <- genes_df_input %>%
+  # Filter only genes with positive Log2FC (UP direction)
+  filter(log2fc > 0) %>%
   mutate(
-    # ⭐️ ADAPTAÇÃO LIMMA: Estimação do p-value unilateral para UP ⭐️
-    # Se o p-value do Limma é bilateral e log2fc > 0, o p-value unilateral é p/2.
-    pval_one_sided = adj_p_val / 2, 
+    # ---- Degrees of freedom ----
+    # df = n - 1 (for mouse samples)
+    df = 5 - 1,
     
-    # Re-ajuste do p-value unilateral (BH)
+    # ---- One-sided p-value (UP direction) ----
+    # Right-tailed t-test: H1 = gene is upregulated (t > 0)
+    pval_one_sided = pt(t, df = df, lower.tail = FALSE),
+    
+    # ---- Multiple testing correction ----
     pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
     
-    # Classificação (Label de Predição)
-    direction = if_else(pval_one_sided_adj < 0.05, "up", "not_up"),
+    # ---- Classification (significance label) ----
+    direction = if_else(pval_one_sided_adj < 0.05 & t > 0, "up", "not_up"),
     
-    # ⭐️ SCORE ROC: 1 - pval_one_sided_adj ⭐️
+    # ---- ROC-style confidence score ----
     prob = 1 - pval_one_sided_adj
   ) %>%
-  select(-adj_p_val) %>% 
+  # Clean up and rename adjusted p-value column
+  select(-adj_p_val) %>%
   rename(adj_p_val = pval_one_sided_adj)
 
 
@@ -2920,8 +3011,10 @@ roc_curve_up_notup = classified_df_probs_up %>%
   group_by(model, timepoint) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Up vs Non-Up")
+```
 
 
+```{r fig.height=5, fig.width=8}
 ######### DOWN (Regulação Negativa) -----------
 
 # 1. Definir Genes DOWN e o Score de Confiança
