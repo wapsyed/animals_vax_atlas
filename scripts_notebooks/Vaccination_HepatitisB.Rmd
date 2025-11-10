@@ -92,7 +92,13 @@ annot <- getBM(
   values = gene_id,
   mart = ensembl_mart)
 
+beep()
+
 #Get lookup table from FIT
+#Install model package
+# library(devtools)
+# devtools::install_github('shenorrLabTRDF/FIT.mouse2man')
+library(FIT.mouse2man)
 HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez %>% 
   clean_names() %>% 
   rename(mouse_entrez = mouse_ortholog)
@@ -111,25 +117,52 @@ mouse_engerixb_log2summary = mouse_engerixb_log2 %>% #20,845 probes
   inner_join(annot %>% 
               rename(probe = agilent_sureprint_g3_ge_8x60k), 
             by = "probe") %>%  #24.009 rows
+  #Filter ensembl id
+  group_by(ensembl_gene_id) %>% 
+  slice_max(median, n = 1) %>%
+  ungroup() %>% 
+  select(-ensembl_gene_id) %>% 
+  distinct() %>% 
+  
+  #Filter entrez id
   group_by(entrezgene_id) %>% 
   slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
   ungroup() %>% 
   rename(mouse_entrez = entrezgene_id) %>% 
+  
+  #Filter hgnc symbol
   inner_join(HS_MM_Symbol_Entrez, by = c("mouse_entrez", "mgi_symbol")) %>% 
   group_by(hgnc_symbol) %>% 
-  slice_max(median, n = 1) #14.396
+  slice_max(median, n = 1)  %>% #14.396
+  ungroup()
 
+#Filter out genes with multiple mgi_symbols
+hgnc_symbol_dupes = mouse_engerixb_log2summary %>% 
+  #filter ensembl id with multiple mgi_symbols
+  get_dupes(hgnc_symbol)
+
+mouse_engerixb_log2summary = mouse_engerixb_log2summary %>% 
+  filter(!hgnc_symbol %in% c(hgnc_symbol_dupes$hgnc_symbol %>% unique())) 
 
 #Modify expression matrix
-mouse_engerixb_log2_filtered = mouse_engerixb_log2 %>% 
+
+#Filtered probes
+mouse_engerixb_log2_filtered_probes = mouse_engerixb_log2 %>% 
   rownames_to_column("probe") %>% 
   inner_join(mouse_engerixb_log2summary, by = "probe") %>%   #214,396
   select(probe, mouse_entrez, human_symbol = hgnc_symbol, c(mouse_engerixb_metadata %>% pull(geo_sample)))
 #14395
 mouse_engerixb_log2_filtered %>% dim()
 
+
+
+mouse_engerixb_log2_hgnc_symbol = mouse_engerixb_log2_filtered_probes %>% 
+  select(human_symbol, c(mouse_engerixb_metadata$geo_sample)) %>% 
+  column_to_rownames("human_symbol")
+
+
 #Save 
-mouse_engerixb_log2_filtered %>% 
+mouse_engerixb_log2_hgnc_symbol %>% 
   saveRDS(here("tables", "GSE120661_mouse_engerixb_log2.rds"))
 ```
 
@@ -137,12 +170,23 @@ mouse_engerixb_log2_filtered %>%
 
 ```{r}
 #Import
-mouse_engerixb_log2_filtered = readRDS(here("tables", "GSE120661_mouse_engerixb_log2.rds"))
+mouse_engerixb_log2_hgnc_symbol = readRDS(here("tables", "GSE120661_mouse_engerixb_log2.rds"))
 mouse_engerixb_metadata = readRDS(file = here("tables", "mouse_engerixb_metadata.rds"))
 
+#Create Expression Set
+eset_mouse_engerixb <- ExpressionSet(
+  assayData = mouse_engerixb_log2_hgnc_symbol %>% 
+    as.matrix(),
+  phenoData = AnnotatedDataFrame(mouse_engerixb_metadata %>% 
+                                   column_to_rownames("geo_sample")))
+
+#Save
+eset_mouse_engerixb %>% saveRDS(file = here("tables", "eset_mouse_engerixb.rds"))
+
 #Annotate
-mouse_engerixb_log2fc_filtered_sample_long = mouse_engerixb_log2_filtered %>%
-  pivot_longer(cols = -(probe:human_symbol),
+mouse_engerixb_log2fc_filtered_sample_long = mouse_engerixb_log2_hgnc_symbol %>%
+  rownames_to_column("human_symbol") %>% 
+  pivot_longer(cols = -human_symbol,
                names_to = "geo_sample",
                values_to = "log2") %>% 
   inner_join(mouse_engerixb_metadata %>% 
@@ -175,6 +219,78 @@ mouse_engerixb_log2fc_filtered_sample_wide = mouse_engerixb_log2fc_filtered_samp
 
 beep()
 ```
+
+
+#### Differential expression (Limma)
+Paired samples design
+```{r}
+
+#Import
+mouse_engerixb_log2_hgnc_symbol = readRDS(here("tables", "GSE120661_mouse_engerixb_log2.rds"))
+mouse_engerixb_metadata = readRDS(file = here("tables", "mouse_engerixb_metadata.rds"))
+eset_mouse_engerixb = readRDS(file = here("tables", "eset_mouse_engerixb.rds"))
+
+#Create model matrix
+design <- model.matrix(~ timepoint + 0, # 0 defines the way we compare the samples
+                       eset_mouse) 
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+# Estimate the correlation between measurements made on the same subject (paired-samples)
+corfit <- duplicateCorrelation(eset_mouse, 
+                               design = design, 
+                               block = eset_mouse$participant_id)
+corfit$consensus #-0.02688727
+
+#Fit Limma model
+fit <- lmFit(eset_mouse, 
+             design, 
+             block = eset_mouse$participant_id, 
+             correlation = corfit$consensus) #Use inter-subject correlation as input into the linear model fit
+fit <- eBayes(fit)
+#Get conditions
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+#Get contrasts 
+cont.matrix <- makeContrasts(conditionEngerix.B_24_PBMC	 - conditionEngerix.B_0_PBMC,
+                             conditionEngerix.B_72_PBMC	 - conditionEngerix.B_0_PBMC,
+                             conditionEngerix.B_168_PBMC	 - conditionEngerix.B_0_PBMC,
+                             levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- treat(fit2, lfc = 0.0)
+
+#Get DEGs
+
+## For every contrast
+results_list <- lapply(1:ncol(fit2), function(i) {
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+  })
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs and clean dataset
+all_degs_mouse_engerixb = all_contrasts_degs %>% 
+  select(comparison, everything()) %>% 
+  mutate(comparison = str_replace(comparison, "\\.\\.\\.", "_") %>% 
+           str_replace(., "timepoint", "Time") %>% 
+           str_replace(., "treatment", "")) %>% 
+  separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef")) %>% 
+  mutate(comparisonRef = str_replace(comparisonRef, "treatment", "Time0")) %>% 
+  mutate(condition = case_when(comparisonA == "conditionEngerix.B_24_PBMC"	~ "Engerix_24_PBMC",
+                               comparisonA == "conditionEngerix.B_72_PBMC"	~ "Engerix_72_PBMC",
+                               comparisonA == "conditionEngerix.B_168_PBMC"	~ "Engerix_168_PBMC",
+                               T~comparisonA)) %>% 
+  select(condition, everything())
+	
+# #Save
+all_degs_mouse_engerixb %>% saveRDS(file = here("tables", "EngerixB_GSE120661_degs_mouse.rds"))
+```
+
+
 
 #### Correlation plots, pairwise
 
@@ -329,6 +445,12 @@ pca_raw
 beep()
 
 ```
+
+
+
+
+
+
 
 #### BTMs
 
