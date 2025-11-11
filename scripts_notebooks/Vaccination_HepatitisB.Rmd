@@ -54,7 +54,7 @@ mouse_engerixb_log2 = GSE120661_counts_not_normalized_log2 %>%
 
 ```
 
-### Annotate genes
+#### Annotate genes
 
 Connect to the Ensembl BioMart database to annotate mouse microarray
 probes. To do this, extract the probe identifiers from the expression
@@ -228,10 +228,10 @@ Paired samples design
 #Import
 mouse_engerixb_log2_hgnc_symbol = readRDS(here("tables", "GSE120661_mouse_engerixb_log2.rds"))
 mouse_engerixb_metadata = readRDS(file = here("tables", "mouse_engerixb_metadata.rds"))
-eset_mouse_engerixb = readRDS(file = here("tables", "eset_mouse_engerixb.rds"))
+eset_mouse = readRDS(file = here("tables", "eset_mouse_engerixb.rds"))
 
 #Create model matrix
-design <- model.matrix(~ timepoint + 0, # 0 defines the way we compare the samples
+design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
                        eset_mouse) 
 colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
 
@@ -283,11 +283,23 @@ all_degs_mouse_engerixb = all_contrasts_degs %>%
   mutate(condition = case_when(comparisonA == "conditionEngerix.B_24_PBMC"	~ "Engerix_24_PBMC",
                                comparisonA == "conditionEngerix.B_72_PBMC"	~ "Engerix_72_PBMC",
                                comparisonA == "conditionEngerix.B_168_PBMC"	~ "Engerix_168_PBMC",
-                               T~comparisonA)) %>% 
-  select(condition, everything())
+                               T~comparisonA),
+         organism = "Mouse") %>% 
+  select(condition, everything()) %>% 
+  clean_names() %>% 
+  rename(human_symbol = symbol,
+         mean_l2fc = log_fc,
+         ci_upper = ci_r,
+         ci_lower = ci_l)
 	
 # #Save
 all_degs_mouse_engerixb %>% saveRDS(file = here("tables", "EngerixB_GSE120661_degs_mouse.rds"))
+
+all_degs_mouse_engerixb %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarize(n_degs = n())
+
 ```
 
 
@@ -733,78 +745,109 @@ GSE124533_exprs_engerixb %>% saveRDS(file = here("tables", "GSE124533_exprs_enge
 
 
 
-
+Import
 ```{r}
 #Import
-GSE124533_exprs_engerixb = readRDS(file = here("tables", "GSE124533_exprs_engerixb.rds"))
+human_exprs_engerixb = readRDS(file = here("tables", "GSE124533_exprs_engerixb.rds"))
+human_metadata_filtered = readRDS(file = here("tables", "GSE124533_metadata_filtered.rds"))
 
 ########### Filter and annotate probes -----
 probes_annotation <- read.delim(here("tables", "GPL21272-58809.txt"), skip = 19, header = TRUE, sep = "\t", quote = "") %>% 
   select(gene_id = ID, entrez_id = ENTREZ_GENE_ID, ensembl_id = ENSEMBL_ID, gene_symbol = GENE_SYMBOL) %>% 
   mutate(gene_id = as.character(gene_id))
 
-#Filter genes with highest median expression
-GSE124533_counts_log2_summary_annotated_probes = GSE124533_exprs_engerixb %>% 
-  rownames_to_column("probe_id") %>% 
-  pivot_longer(cols = -probe_id,
-               names_to = "sample_id",
-               values_to = "value_raw") %>% 
-  group_by(probe_id) %>% 
-  summarize(mean = mean(value_raw, na.rm = TRUE),
-            median = median(value_raw, na.rm = T)) %>%  
+
+#Get annotations for each probe 
+### Filter probes with highest median expression
+human_engerix_log2summary = human_exprs_engerixb %>% 
+  as.data.frame() %>% 
+  rownames_to_column("probe") %>% 
+  pivot_longer(cols = -probe,
+               names_to = "sample",
+               values_to = "expression") %>% 
+  group_by(probe) %>% 
+  summarize(mean = mean(expression,na.rm = TRUE),
+            median = median(expression, na.rm = T)) %>%  
   inner_join(probes_annotation %>% 
-              rename(probe_id = gene_id,
+              rename(probe = gene_id,
                      entrezgene_id = entrez_id,
                      human_symbol = gene_symbol), 
-            by = "probe_id") %>% 
+            by = "probe") %>% 
+  #Filter ensembl id
+  group_by(ensembl_id) %>% 
+  slice_max(median, n = 1) %>%
+  ungroup() %>% 
+  select(-ensembl_id) %>% 
+  distinct() %>% 
+  
+  #Filter entrez id
   group_by(entrezgene_id) %>% 
-  slice_max(median, n = 1) %>% 
-  select(probe_id, entrezgene_id, human_symbol) %>% 
-  distinct() %>%  ##41.398 -> 19.394 probes left
-  inner_join(GSE124533_exprs_engerixb %>% 
-               rownames_to_column("probe_id"),
-             by = "probe_id")
-#Save
-GSE124533_counts_log2_summary_annotated_probes %>% 
-  saveRDS(file = here("tables", "GSE124533_counts_log2_summary_annotated_probes.rds"))
+  slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
+  ungroup() 
 
-beep()
+#Filter out genes with multiple hgnc_symbols
+hgnc_symbol_dupes = human_engerix_log2summary %>% 
+  #filter ensembl id with multiple hgnc_symbols
+  get_dupes(human_symbol)
+
+human_engerix_log2summary = human_engerix_log2summary %>% 
+  filter(!human_symbol %in% c(hgnc_symbol_dupes$human_symbol %>% unique())) 
+
+#Modify expression matrix
+
+#Filtered probes
+human_engerix_log2_filtered_probes = human_exprs_engerixb %>% 
+  as.data.frame() %>% 
+  rownames_to_column("probe") %>% 
+  inner_join(human_engerix_log2summary, by = "probe") %>%   #214,396
+  select(human_symbol,
+         c(human_metadata_filtered$geo_sample))
+#14395
+human_engerix_log2_filtered_probes %>% dim()
+
+human_engerix_log2_hgnc_symbol = human_engerix_log2_filtered_probes 
+
+human_engerix_log2_hgnc_symbol %>% 
+  get_dupes(human_symbol)
+
+#Save 
+human_engerix_log2_hgnc_symbol %>% 
+  saveRDS(here("tables", "human_engerix_log2_hgnc_symbol.rds"))
 ```
 
 ```{r}
 
 #Import
-GSE124533_counts_log2_summary_annotated_probes =
-  readRDS(file = here("tables", "GSE124533_counts_log2_summary_annotated_probes.rds"))
-GSE124533_metadata_filtered =
-  readRDS(file = here("tables", "GSE124533_metadata_filtered.rds"))
+human_engerix_log2_hgnc_symbol = 
+  readRDS(here("tables", "human_engerix_log2_hgnc_symbol.rds"))
+human_metadata_filtered = readRDS(file = here("tables", "GSE124533_metadata_filtered.rds"))
 
 #Get value from time 0 and calculate Log2FC
-human_engerixb_log2fc_filtered_sample_long = GSE124533_counts_log2_summary_annotated_probes %>%
+human_engerixb_log2fc_filtered_sample_long = human_engerix_log2_hgnc_symbol %>%
   ungroup() %>% 
-  pivot_longer(cols = -(probe_id:human_symbol),
+  pivot_longer(cols = -(human_symbol),
                names_to = "geo_sample",
                values_to = "log2") %>% 
-  inner_join(GSE124533_metadata_filtered %>% 
+  inner_join(human_metadata_filtered %>% 
                select(geo_sample, participant_id, timepoint),
              by = "geo_sample") %>% 
   select(human_symbol, participant_id, timepoint, log2) %>% 
   distinct() %>% 
   select(participant_id, human_symbol, timepoint, value = log2) 
 
-#Get over duplicated symbols
-overduplicated = human_engerixb_log2fc_filtered_sample_long %>% 
-  select(human_symbol) %>% 
-  group_by(human_symbol) %>% 
-  dplyr::count() %>% 
-  arrange(-n) 
+# #Get over duplicated symbols
+# overduplicated = human_engerixb_log2fc_filtered_sample_long %>% 
+#   select(human_symbol) %>% 
+#   group_by(human_symbol) %>% 
+#   dplyr::count() %>% 
+#   arrange(-n) 
 
 #Calculate log2fc
 human_engerixb_log2fc_filtered_sample_long = human_engerixb_log2fc_filtered_sample_long %>%
-  filter(!human_symbol %in% c(overduplicated %>% 
-                                ungroup() %>% 
-                                filter(n > median(n)) %>% 
-                                pull(human_symbol))) %>% 
+  # filter(!human_symbol %in% c(overduplicated %>% 
+  #                               ungroup() %>% 
+  #                               filter(n > median(n)) %>% 
+  #                               pull(human_symbol))) %>% 
   pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_") %>% 
   pivot_longer(cols = starts_with("day_"),
                names_to = "timepoint",
@@ -838,13 +881,142 @@ human_engerixb_log2fc_filtered_sample_wide = human_engerixb_log2fc_filtered_samp
   
 ```
 
-#### Import
 
+#### Differential expression (Limma)
+
+
+##### Create expression set
 ```{r}
 #Import
-human_engerixb_log2fc_filtered_sample_long = 
-  readRDS(file = here("tables", "GSE124533_counts_log2_summary_annotated_probes.rds"))
+human_engerix_log2_hgnc_symbol = 
+  readRDS(here("tables", "human_engerix_log2_hgnc_symbol.rds"))
+human_metadata_filtered = readRDS(file = here("tables", "GSE124533_metadata_filtered.rds"))
+
+human_metadata_filtered = human_metadata_filtered %>% 
+  mutate(age = str_remove(age, "y") %>% as.numeric() %>% scale(),
+         timepoint = as.factor(timepoint),
+         sex = as.factor(sex),
+         race = as.factor(race))
+
+#Create Expression Set
+eset_human <- ExpressionSet(
+  assayData = human_engerix_log2_hgnc_symbol %>% 
+    column_to_rownames("human_symbol") %>% 
+    as.matrix(),
+  phenoData = AnnotatedDataFrame(human_metadata_filtered))
+
+#Save
+eset_human %>% saveRDS(file = here("tables", "EngerixB_GSE124533_degs_human.rds"))
 ```
+
+
+
+#####Limma
+```{r}
+
+#Import
+human_engerix_log2_hgnc_symbol = readRDS(here("tables", "human_engerix_log2_hgnc_symbol.rds"))
+human_metadata_filtered = readRDS(file = here("tables", "GSE124533_metadata_filtered.rds"))
+eset_human = readRDS(file = here("tables", "EngerixB_GSE124533_degs_human.rds"))
+
+#Create design matrix
+design <- model.matrix(~ timepoint + sex + age + race + 0, eset_human) 
+
+#Avoid blank spaces
+colnames(design) <- make.names(colnames(design))
+
+#Get intra-individual correlation
+corfit <- duplicateCorrelation(eset_human, 
+                               design = design, 
+                               block = eset_human$participant_id)
+corfit$consensus #0.22
+
+# Fit Limma model
+engerix_human_limma_fit <- lmFit(eset_human, 
+                             design, 
+                             block = eset_human$participant_id, 
+                             correlation = corfit$consensus)
+
+engerix_human_limma_fit = engerix_human_limma_fit %>% 
+  eBayes()
+
+#Contrasts
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+cont.matrix <- makeContrasts(timepoint1 - timepoint0,
+                             timepoint3 - timepoint0,
+                             timepoint7 - timepoint0,
+                             levels=design)
+
+fit2 <- contrasts.fit(engerix_human_limma_fit, cont.matrix)
+fit2 <- treat(fit2, lfc = 0.0)
+
+#Get DEGs ------
+## For every contrast
+results_list <- lapply(1:ncol(fit2), function(i) {
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+    
+})
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs
+all_degs_human = all_contrasts_degs %>% 
+  #Clean table
+  select(comparison, everything()) %>% 
+  mutate(comparison = str_replace(comparison, "\\.\\.\\.", "_") %>% 
+           str_replace(., "timepoint", "Time") %>% 
+           str_replace(., "treatment", "")) %>% 
+  separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef")) %>% 
+  mutate(comparisonRef = str_replace(comparisonRef, "treatment", "Time0")) %>% 
+  mutate(condition = case_when(comparisonA == "Time1"	~ "EngerixB_Day1",
+                               comparisonA == "Time3"	~ "EngerixB_Day3",
+                               comparisonA == "Time7"	~ "EngerixB_Day7",
+                               T~comparisonA),
+         organism = "Human") %>% 
+  select(condition, everything()) %>% 
+  clean_names() %>% 
+  rename(human_symbol = symbol,
+         mean_l2fc = log_fc,
+         ci_upper = ci_r,
+         ci_lower = ci_l)
+
+all_degs_human %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarize(n_degs = n())
+	
+#Save
+all_degs_human %>% saveRDS(file = here("tables", "Engerix_GSE124533_degs_human.rds"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #### Correlation plots, pairwise
 
@@ -1220,38 +1392,11 @@ human_mouse_log2fc_samples =
 human_mouse_engerix_metadata =
   readRDS(file = here("tables", "engerixb_human_mouse_engerix_metadata.rds"))
 
-#Summarize
-#Calculate the mean log2fc
-human_mouse_engerixb_log2fc_avg = human_mouse_log2fc_samples %>% 
-  group_by(organism, human_symbol, timepoint) %>% 
-  summarize(
-    mean_log2fc = mean(log2fc, na.rm = TRUE),
-    sd_log2fc   = sd(log2fc, na.rm = TRUE),
-    se_log2fc   = sd(log2fc, na.rm = TRUE) / sqrt(n()),   # erro padrão
-    
-    # Test t paired
-    ttest = list(tryCatch(
-      t.test(value, day0, paired = TRUE),
-      error = function(e) NULL
-    )),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    p_value = map_dbl(ttest, ~ if (!is.null(.x)) .x$p.value else NA_real_),
-    ci_low  = map_dbl(ttest, ~ if (!is.null(.x)) .x$conf.int[1] else NA_real_),
-    ci_high = map_dbl(ttest, ~ if (!is.null(.x)) .x$conf.int[2] else NA_real_),
-    t_stat  = map_dbl(ttest, ~ if (!is.null(.x)) .x$statistic else NA_real_),
-    df      = map_dbl(ttest, ~ if (!is.null(.x)) .x$parameter else NA_real_),
-    p_adj   = p.adjust(p_value, method = "BH")
-  ) %>%
-  select(-ttest) %>% 
-  filter(human_symbol != "") %>%
-  ungroup()
+all_degs_human = readRDS(file = here("tables", "Engerix_GSE124533_degs_human.rds")) %>% 
+  clean_names()
+all_degs_mouse = readRDS(file = here("tables", "EngerixB_GSE120661_degs_mouse.rds")) %>% 
+  clean_names()
 
-
-#Save
-human_mouse_engerixb_log2fc_avg %>% 
-  saveRDS(here("tables", "human_mouse_engerixb_log2fc_avg.rds"))
 
 #Pivot wider
 human_mouse_engerixb_log2fc_avg_wide = human_mouse_engerixb_log2fc_avg %>% 
@@ -2454,23 +2599,6 @@ example_samples_btm_correlation_all_timepoints_summary_plot
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #Performance tests
 ## ROC Curve
 Do for one direction (up and then down)
@@ -2482,248 +2610,247 @@ Neg control: Random permutation
 Import data
 ```{r}
 #ImmuneGO ontologies
-ImmuneGO_Mouse_Manual_genes <- read_excel(here("VaxGO", "ImmuneGO_Mouse.xlsx")) %>% 
- separate_rows(genes)
-immunego_btm_manual_grouped = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genesets.csv"))
 ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
 
 #Import DEGs table
-human_mouse_engerixb_log2fc_avg =
-  readRDS(file = here("tables", "human_mouse_engerixb_log2fc_avg.rds"))
+all_degs_mouse_engerixb = readRDS(file = here("tables", "EngerixB_GSE120661_degs_mouse.rds"))
+
+human_mouse_engerix_metadata =
+  readRDS(file = here("tables", "engerixb_human_mouse_engerix_metadata.rds")) %>% 
+  mutate(timepoint = as.character(timepoint))
 
 dge_long_genes = human_mouse_engerixb_log2fc_avg  %>% 
   rename(log2fc = mean_log2fc, se = se_log2fc, sd = sd_log2fc, adj_p_val = p_adj, symbol = human_symbol) 
 
-#Use only same genes
+
 dge_long_genes = dge_long_genes %>% 
-  filter(organism == "Mouse") %>% 
-  select(symbol) %>% 
-  distinct() %>% 
-  inner_join(dge_long_genes %>%
-               filter(organism == "Human") %>%
-               select(symbol) %>%
-               distinct(), 
-             by = "symbol") %>% 
-  inner_join(dge_long_genes,
-             by = "symbol")
+  inner_join(human_mouse_engerix_metadata %>%
+               group_by(organism, timepoint) %>%
+               summarize(n = n()),
+               by = join_by("organism", "timepoint"))
+#All genes
+genes_roc_allgenes = dge_long_genes
+#Filter immune genes
+genes_roc_allgenes_immunegenes = dge_long_genes %>% 
+  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
+
+#Only DEGs
+degs_genes_human = dge_long_genes %>%
+  filter(adj_p_val <= 0.05,
+         organism == "Human") %>%
+  select(symbol, timepoint)
+
+#Only immune DEGs
+genes_roc_DEGs_all = dge_long_genes %>%
+  inner_join(degs_genes_human,
+             by = join_by("symbol", "timepoint"))
+
+#Only immune DEGs
+genes_roc_DEGs_immune = dge_long_genes %>%
+  inner_join(degs_genes_human,
+             by = join_by("symbol", "timepoint")) %>%
+  #Filter immune genes only
+  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
 
 ```
 
 Calculate ROC curve
-```{r fig.height=4, fig.width=6}
+
+Inputs
+```{r fig.height=4, fig.width=10}
 set.seed(123)
-
 ######### Input -----
-
-filename = "EngerixB_AllGenes"
-filename_title ="EngerixB,\nAll genes"
-
-genes_df_input = dge_long_genes 
-  # Filter immune genes only
-  # filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
+filename = "EngerixB_All_OnlyImmune"
+genes_df_input = bind_rows(
+  genes_roc_allgenes %>% mutate(model_type = "Mouse"),
+  genes_roc_allgenes_immunegenes %>% mutate(model_type = "Immune")
+)
 
 
-######### UP -----------
-#Do one sided t-test for each model
-dge_long_genes_up = genes_df_input %>% 
-  mutate(
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    pval_one_sided = pnorm(z, lower.tail = F), #onesided, p(gene) > 0 (right tail)
-    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    direction = if_else(pval_one_sided_adj < 0.05, "up", "not_up")) %>%
-  select(-adj_p_val) %>% 
-  rename(adj_p_val = pval_one_sided_adj)
-
-#Assign human log2fc direction as truth
-truth_human = dge_long_genes_up %>% 
-  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
-  filter(organism == "Human") %>% 
-  distinct() %>% 
-  pivot_wider(names_from = "organism",
-              values_from = "direction") %>% 
-  rename(truth = Human) %>% 
-  mutate(organism = "Human")
-
-#Generate comparable distributions
-perfect_prediction = truth_human %>%
-  mutate(prob = adj_p_val) %>%
-  rename(pred = truth)
-
-uniform_prediction = perfect_prediction %>%
-  group_by(timepoint) %>% 
-  mutate(prob = runif(n()),
-         organism = "Uniform")
-
-#Get only up and not up genes from models
-models_up = genes_df_input %>% 
-  mutate(
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    pval_one_sided = pnorm(z, lower.tail = F), #one sided, higher
-    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    direction = if_else(pval_one_sided_adj < 0.05, "up", "not_up")) %>%
-  select(-adj_p_val) %>% 
-  rename(adj_p_val = pval_one_sided_adj) %>% 
-  filter(organism != "Human") %>% 
-  mutate(pred = direction,
-         prob = adj_p_val) %>% 
-  #Add controls
-  bind_rows(
-    perfect_prediction,
-    permutation_prediction,
-    uniform_prediction
-    )
-
-#Get probabilities (UP)
-classified_df_probs_up = truth_human %>% 
-  select(symbol, timepoint, truth) %>%
-  inner_join(models_up %>% 
-               select(symbol, timepoint, pred, prob, model = organism),
-             by = join_by("symbol", "timepoint")) %>% 
-  mutate(not_prob = 1 - prob,
-         sum = prob + not_prob,
-         truth = as.factor(truth)) %>% 
-  distinct()
-
-
-#Get ROC
-roc_curve_up_notup = classified_df_probs_up %>% 
-  filter(model %in% c("Human", "Mouse", "Uniform", "FIT")) %>%
-  select(symbol, timepoint, truth, pred, model, prob, not_prob, sum) %>%
-  group_by(model, timepoint) %>%
-  roc_curve(truth, prob) %>%
-  mutate(comparison = "Up vs Non-Up")
-
-######### DOWN -----------
-#Do one sided t-test for each model
-dge_long_genes_down = genes_df_input %>% 
-  mutate(
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    pval_one_sided = pnorm(z, lower.tail = T), #onesided, p(gene) < 0 (left tail)
-    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    direction = if_else(pval_one_sided_adj < 0.05, "down", "not_down")) %>%
-  select(-adj_p_val) %>% 
-  rename(adj_p_val = pval_one_sided_adj)
-
-#Assign human log2fc direction as truth
-truth_human = dge_long_genes_down %>% 
-  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
-  filter(organism == "Human") %>% 
-  distinct() %>% 
-  pivot_wider(names_from = "organism",
-              values_from = "direction") %>% 
-  rename(truth = Human) %>% 
-  mutate(organism = "Human")
-
-#Generate comparable distributions
-perfect_prediction = truth_human %>%
-  #Invert probabilities
-  mutate(prob = 1 - adj_p_val) %>%
-  rename(pred = truth)
-
-uniform_prediction = perfect_prediction %>%
-  group_by(timepoint) %>% 
-  mutate(prob = runif(n()),
-         organism = "Uniform")
-
-
-#Get only up and not up genes from models
-models_down = genes_df_input %>% 
-  mutate(
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    pval_one_sided = pnorm(z, lower.tail = T), #one sided, less
-    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    #Invert probabilities
-    pval_one_sided_adj = 1 - pval_one_sided_adj,
-    direction = if_else(pval_one_sided_adj < 0.05, "down", "not_down")) %>%
-  select(-adj_p_val) %>% 
-  rename(adj_p_val = pval_one_sided_adj) %>% 
-  filter(organism != "Human") %>% 
-  mutate(pred = direction,
-         prob = adj_p_val) %>% 
-  #Add controls
-  bind_rows(perfect_prediction, uniform_prediction)
-
-#Get probabilities (DOWN)
-classified_df_probs_down = truth_human %>% 
-  select(symbol, timepoint, truth) %>%
-  inner_join(models_down %>% 
-               select(symbol, timepoint, pred, prob, model = organism),
-             by = join_by("symbol", "timepoint")) %>% 
-  mutate(not_prob = 1 - prob,
-         sum = prob + not_prob,
-         truth = as.factor(truth)) %>% 
-  distinct()
-
-
-
-#Get ROC
-roc_curve_down_notdown = classified_df_probs_down %>% 
-  filter(model %in% c("Human", "Mouse", "Uniform")) %>%
-  select(symbol, timepoint, truth, pred, model, prob, not_prob, sum) %>%
-  group_by(model, timepoint) %>%
-  roc_curve(truth, prob) %>%
-  mutate(comparison = "Down vs Non-Down")
-
-#Calculate AUC --------
-#Get AUC
-auc_results = classified_df_probs_down %>%
-  group_by(model, timepoint) %>%
-  yardstick::roc_auc(truth, prob) %>% 
-  mutate(comparison = "Down vs Non-Down") %>% 
-  bind_rows(
-    classified_df_probs_up %>%
-      group_by(model, timepoint) %>%
-      yardstick::roc_auc(truth, prob) %>%
-      mutate(comparison = "Up vs Non-Up")) %>% 
-  mutate(.estimate = round(.estimate, 2)) %>% 
-  rename(roc_auc = .estimate)
-
-#Merge data -------
-roc_curve_data = roc_curve_up_notup %>% 
-  bind_rows(roc_curve_down_notdown) %>% 
-  left_join(auc_results, 
-            by = c("model", "comparison", "timepoint")) %>% 
-  mutate(condition = "EngerixB_Vaccination",
-         filename = filename)
-
-roc_curve_data %>% 
-  saveRDS(file = here("tables", paste0("roc_curve_data_", filename, ".rds")))
-
-auc_results
-roc_curve_data 
+# filename = "EngerixB_AllDEGs_HumanDEGs_OnlyImmune"
+# genes_df_input = bind_rows(
+#   genes_roc_DEGs_all %>% mutate(model_type = "Mouse"),
+#   genes_roc_DEGs_immune %>% mutate(model_type = "Immune")
+# )
 
 ```
 
 
-```{r fig.height=4, fig.width=6}
-##### PLOT ROC Curve ------
+
+### Using t statistic to compute probabilities
+```{r fig.height=5, fig.width=8}
+
+#=====================================================
+# Compute probabilities
+#=====================================================
+
+dge_long_genes_up = genes_df_input %>% 
+  mutate(
+    df = n - 1,
+    pval_one_sided = pt(t, df, lower.tail = FALSE),
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    direction = if_else(pval_one_sided_adj <= 0.05 & t > 0, "up", "not_up"),
+    prob = 1 - pval_one_sided_adj
+  ) %>%
+  select(-adj_p_val) %>%
+  rename(adj_p_val = pval_one_sided_adj)
+
+dge_long_genes_down = genes_df_input %>% 
+  mutate(
+    df = n - 1,
+    pval_one_sided = pt(t, df, lower.tail = TRUE),
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    direction = if_else(pval_one_sided_adj <= 0.05 & t < 0, "down", "not_down"),
+    prob = 1 - pval_one_sided_adj
+  ) %>%
+  select(-adj_p_val) %>%
+  rename(adj_p_val = pval_one_sided_adj)
+
+#=====================================================
+# Assign human truth
+#=====================================================
+truth_human_up = dge_long_genes_up %>% 
+  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
+  filter(organism == "Human") %>% 
+  distinct() %>% 
+  pivot_wider(names_from = organism, values_from = direction) %>% 
+  rename(truth = Human) %>% 
+  mutate(organism = "Human")
+
+truth_human_down = dge_long_genes_down %>% 
+  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
+  filter(organism == "Human") %>% 
+  distinct() %>% 
+  pivot_wider(names_from = organism, values_from = direction) %>% 
+  rename(truth = Human) %>% 
+  mutate(organism = "Human")
+
+#=====================================================
+#Generate reference distributions
+#=====================================================
+perfect_prediction_up = truth_human_up %>%
+  mutate(prob = if_else(truth == "up", 1, 0),
+         model = "Human") %>%
+  rename(pred = truth)
+
+uniform_prediction_up = perfect_prediction_up %>%
+  group_by(timepoint) %>% 
+  mutate(prob = runif(n()), organism = "Uniform",
+         model = "Uniform")
+
+perfect_prediction_down = truth_human_down %>%
+  mutate(prob = if_else(truth == "down", 1, 0),
+          model = "Human") %>%
+  rename(pred = truth)
+
+uniform_prediction_down = perfect_prediction_down %>%
+  group_by(timepoint) %>% 
+  mutate(prob = runif(n()), organism = "Uniform",
+         model = "Uniform")
+
+#=====================================================
+# Combine models (Mouse + Immune + Uniform + Perfect)
+#=====================================================
+models_up = dge_long_genes_up %>% 
+  filter(organism != "Human") %>% 
+  mutate(pred = direction,
+         model = if_else(model_type == "Immune", "Immune", organism)) %>%
+  bind_rows(perfect_prediction_up, uniform_prediction_up)
+
+models_down = dge_long_genes_down %>% 
+  filter(organism != "Human") %>% 
+  mutate(pred = direction,
+         model = if_else(model_type == "Immune", "Immune", organism)) %>%
+  bind_rows(perfect_prediction_down, uniform_prediction_down)
+
+#=====================================================
+# Classify probabilities 
+#=====================================================
+classified_df_probs_up = truth_human_up %>% 
+  select(symbol, timepoint, truth) %>%
+  inner_join(models_up %>% 
+               select(symbol, timepoint, pred, prob, model),
+             by = join_by(symbol, timepoint)) %>% 
+  mutate(
+    truth = factor(truth, levels = c("up", "not_up"))
+  ) %>% 
+  distinct()
+
+classified_df_probs_down = truth_human_down %>% 
+  select(symbol, timepoint, truth) %>%
+  inner_join(models_down %>% 
+               select(symbol, timepoint, pred, prob, model),
+             by = join_by(symbol, timepoint)) %>% 
+  mutate(
+    truth = factor(truth, levels = c("down", "not_down"))
+  ) %>% 
+  distinct()
+
+
+#=====================================================
+#Compute ROC 
+#=====================================================
+
+roc_curve_up_notup = classified_df_probs_up %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Up")
+
+roc_curve_down_notdown = classified_df_probs_down %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Down")
+
+#=====================================================
+#Compute AUC 
+#=====================================================
+auc_results_up = classified_df_probs_up %>% 
+  mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_auc(truth, prob) %>%
+  rename(auc = .estimate) %>%
+  mutate(comparison = "Up") %>% 
+  ungroup() %>% 
+  select(model, timepoint, auc, comparison)
+
+auc_results_down = classified_df_probs_down %>% 
+  mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_auc(truth, prob) %>%
+  rename(auc = .estimate) %>%
+  mutate(comparison = "Down") %>% 
+  ungroup() %>% 
+  select(model, timepoint, auc, comparison)
+
+#Plot curves ------------------
+#PLOT ROC Curve
 roc_curve_plot = roc_curve_up_notup %>% 
-  bind_rows(roc_curve_down_notdown) %>% 
+  bind_rows(roc_curve_down_notdown) %>%
   ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
   geom_path(size = 1, alpha = 1) +
   geom_abline(lty = 3) +
   theme_vaxgo() +
-  facet_grid(~fct_rev(comparison)~paste0(timepoint, "h")) + 
+  facet_grid(~fct_rev(comparison)~paste("Day", timepoint)) + 
   scale_color_manual(values = c(
     "Mouse" = "#4DBBD5FF",
-    "FIT"   = "#4361ee",
     "Human" = "#90A4AEFF",
+    "Immune" = "#4361ee",
     "Uniform" = "gray80"
     )) +
   labs(
-    title = filename_title, 
   x = "FPR",
   y = "TPR",
   color = "Model") + 
   theme(
+    legend.position = "top",
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 10,),
+    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
     axis.text.x = element_text(size = 10, angle = 0, hjust = 0.5, vjust = 0.5),
     axis.text.y = element_text(size = 10),
     panel.spacing.x = unit(0.5, "lines"),
@@ -2733,14 +2860,62 @@ roc_curve_plot = roc_curve_up_notup %>%
   scale_y_continuous(n.break = 3)
 
 
-roc_curve_plot
+# Visualize AUC
+auc_plot <- bind_rows(auc_results_up, 
+                      auc_results_down) %>% 
+  mutate(model = factor(model, levels = c("Perfect", "Mouse", "Immune", "Uniform")),
+         comparison = factor(comparison, levels = c("Up", "Down"))) %>%
+  
+  ggplot(aes(x = auc, y = factor(timepoint) %>% fct_rev(), fill = model)) +
+  geom_col(width = 0.8,
+           position = position_dodge()) +
+  
+  # Add a reference line for random prediction (AUC = 0.5)
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "black", linewidth = 0.5) +
+  
+  geom_text(aes(label = round(auc, 2)),
+            position = position_dodge2(0.9),
+            hjust = 1.2, size = 2) +
+  
+  facet_grid(comparison ~ ., scales = "free_y") +
+  
+  labs(
+    x = "AUC",
+    y = "Day",
+    fill = "Model"
+  ) +
+    scale_fill_manual(values = c(
+    "Mouse" = "#4DBBD5FF",
+    "Immune" = "#4361ee",
+    "Human" = "#90A4AEFF",
+    "Uniform" = "gray80"
+    )) +
+  theme_vaxgo()  +
+  theme(
+    legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    # strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
+    axis.text.x = element_text(size = 10, angle = 0, hjust = 0.5, vjust = 0.5),
+    axis.text.y = element_text(size = 10),
+    panel.spacing.x = unit(0.5, "lines"),
+    legend.key = element_blank()
+  ) +
+  scale_x_continuous(expand = c(0,0), limits = c(0,1))
 
-roc_curve_plot %>%
+roc_auc_curve_plot = ((roc_curve_plot) |
+  auc_plot) +
+  plot_layout(guides = "collect", widths = c(1, 0.4))+
+  plot_annotation(theme = theme(legend.position = "top", plot.title = element_text(hjust = 0.5)),
+                  title = filename)
+
+roc_auc_curve_plot %>%
   ggsave(filename = here("Figures", paste0("roc_curve_plot_", filename, ".png")),
-         width = 6,
-         height = 4)
+         width = 8,
+         height = 5)
 
+roc_auc_curve_plot
 ```
-
 
 

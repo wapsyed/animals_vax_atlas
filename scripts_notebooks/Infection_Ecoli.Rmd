@@ -319,6 +319,24 @@ GSE33341_log2fc_sample_wide = GSE33341_mouse_counts_log2_summary_annotated_probe
 GSE33341_log2fc_sample_wide
 ```
 
+
+##### Differential expression
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ##### Correlation plots, pairwise
 
 ```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
@@ -856,6 +874,23 @@ GSE33341_human_log2fc_sample_wide = GSE33341_human_counts_log2_summary_annotated
 #Print
 GSE33341_human_log2fc_sample_wide
 ```
+
+
+
+##### Differential expression
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ##### Correlation plots, pairwise
 
@@ -2302,6 +2337,319 @@ roc_curve_plot %>%
 
 
 
+# Performance tests 
+
+## ROC Curve 
+
+Do for one direction (up and then down) Do one sided t test for mouse,
+fit, and human Positive control: Human Neg control: Random permutation
+
+Import data
+
+```{r}
+#Import DEGs table
+dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds")) 
+#Import metadata
+human_mouse_fluad_metadata = readRDS(file = here("tables", "human_mouse_fluad_metadata.rds"))
+#ImmuneGO ontologies
+ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
+
+
+dge_long_genes = dge_long_genes %>% 
+  filter(organism != "FIT") %>% 
+  inner_join(human_mouse_fluad_metadata %>%
+               group_by(organism, timepoint) %>%
+               summarize(n = n()) %>% 
+               mutate(timepoint = as.numeric(timepoint)),
+               by = join_by("organism", "timepoint"))
+#All genes
+genes_roc_allgenes = dge_long_genes
+#Filter immune genes
+genes_roc_allgenes_immunegenes = dge_long_genes %>% 
+  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
+
+#Only DEGs
+degs_genes_human = dge_long_genes %>%
+  filter(adj_p_val <= 0.05,
+         organism == "Human") %>%
+  select(symbol, timepoint)
+
+#Only immune DEGs
+genes_roc_DEGs_all = dge_long_genes %>%
+  inner_join(degs_genes_human,
+             by = join_by("symbol", "timepoint"))
+
+#Only immune DEGs
+genes_roc_DEGs_immune = dge_long_genes %>%
+  inner_join(degs_genes_human,
+             by = join_by("symbol", "timepoint")) %>%
+  #Filter immune genes only
+  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
+```
+
+Calculate ROC curve
+
+Inputs
+```{r fig.height=4, fig.width=10}
+set.seed(123)
+######### Input -----
+# filename = "Fluad_All_OnlyImmune"
+# genes_df_input = bind_rows(
+#   genes_roc_allgenes %>% mutate(model_type = "Mouse"),
+#   genes_roc_allgenes_immunegenes %>% mutate(model_type = "Immune")
+# )
+
+
+filename = "Fluad_AllDEGs_HumanDEGs_OnlyImmune"
+genes_df_input = bind_rows(
+  genes_roc_DEGs_all %>% mutate(model_type = "Mouse"),
+  genes_roc_DEGs_immune %>% mutate(model_type = "Immune")
+)
+
+```
+
+
+
+### Using t statistic to compute probabilities
+```{r fig.height=5, fig.width=8}
+
+#=====================================================
+# Compute probabilities
+#=====================================================
+
+dge_long_genes_up = genes_df_input %>% 
+  mutate(
+    df = n - 1,
+    pval_one_sided = pt(t, df, lower.tail = FALSE),
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    direction = if_else(pval_one_sided_adj <= 0.05 & t > 0, "up", "not_up"),
+    prob = 1 - pval_one_sided_adj
+  ) %>%
+  select(-adj_p_val) %>%
+  rename(adj_p_val = pval_one_sided_adj)
+
+dge_long_genes_down = genes_df_input %>% 
+  mutate(
+    df = n - 1,
+    pval_one_sided = pt(t, df, lower.tail = TRUE),
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    direction = if_else(pval_one_sided_adj <= 0.05 & t < 0, "down", "not_down"),
+    prob = 1 - pval_one_sided_adj
+  ) %>%
+  select(-adj_p_val) %>%
+  rename(adj_p_val = pval_one_sided_adj)
+
+#=====================================================
+# Assign human truth
+#=====================================================
+truth_human_up = dge_long_genes_up %>% 
+  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
+  filter(organism == "Human") %>% 
+  distinct() %>% 
+  pivot_wider(names_from = organism, values_from = direction) %>% 
+  rename(truth = Human) %>% 
+  mutate(organism = "Human")
+
+truth_human_down = dge_long_genes_down %>% 
+  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
+  filter(organism == "Human") %>% 
+  distinct() %>% 
+  pivot_wider(names_from = organism, values_from = direction) %>% 
+  rename(truth = Human) %>% 
+  mutate(organism = "Human")
+
+#=====================================================
+#Generate reference distributions
+#=====================================================
+perfect_prediction_up = truth_human_up %>%
+  mutate(prob = if_else(truth == "up", 1, 0),
+         model = "Human") %>%
+  rename(pred = truth)
+
+uniform_prediction_up = perfect_prediction_up %>%
+  group_by(timepoint) %>% 
+  mutate(prob = runif(n()), organism = "Uniform",
+         model = "Uniform")
+
+perfect_prediction_down = truth_human_down %>%
+  mutate(prob = if_else(truth == "down", 1, 0),
+          model = "Human") %>%
+  rename(pred = truth)
+
+uniform_prediction_down = perfect_prediction_down %>%
+  group_by(timepoint) %>% 
+  mutate(prob = runif(n()), organism = "Uniform",
+         model = "Uniform")
+
+#=====================================================
+# Combine models (Mouse + Immune + Uniform + Perfect)
+#=====================================================
+models_up = dge_long_genes_up %>% 
+  filter(organism != "Human") %>% 
+  mutate(pred = direction,
+         model = if_else(model_type == "Immune", "Immune", organism)) %>%
+  bind_rows(perfect_prediction_up, uniform_prediction_up)
+
+models_down = dge_long_genes_down %>% 
+  filter(organism != "Human") %>% 
+  mutate(pred = direction,
+         model = if_else(model_type == "Immune", "Immune", organism)) %>%
+  bind_rows(perfect_prediction_down, uniform_prediction_down)
+
+#=====================================================
+# Classify probabilities 
+#=====================================================
+classified_df_probs_up = truth_human_up %>% 
+  select(symbol, timepoint, truth) %>%
+  inner_join(models_up %>% 
+               select(symbol, timepoint, pred, prob, model),
+             by = join_by(symbol, timepoint)) %>% 
+  mutate(
+    truth = factor(truth, levels = c("up", "not_up"))
+  ) %>% 
+  distinct()
+
+classified_df_probs_down = truth_human_down %>% 
+  select(symbol, timepoint, truth) %>%
+  inner_join(models_down %>% 
+               select(symbol, timepoint, pred, prob, model),
+             by = join_by(symbol, timepoint)) %>% 
+  mutate(
+    truth = factor(truth, levels = c("down", "not_down"))
+  ) %>% 
+  distinct()
+
+
+#=====================================================
+#Compute ROC 
+#=====================================================
+
+roc_curve_up_notup = classified_df_probs_up %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Up")
+
+roc_curve_down_notdown = classified_df_probs_down %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Down")
+
+#=====================================================
+#Compute AUC 
+#=====================================================
+auc_results_up = classified_df_probs_up %>% 
+  mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_auc(truth, prob) %>%
+  rename(auc = .estimate) %>%
+  mutate(comparison = "Up") %>% 
+  ungroup() %>% 
+  select(model, timepoint, auc, comparison)
+
+auc_results_down = classified_df_probs_down %>% 
+  mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_auc(truth, prob) %>%
+  rename(auc = .estimate) %>%
+  mutate(comparison = "Down") %>% 
+  ungroup() %>% 
+  select(model, timepoint, auc, comparison)
+
+#Plot curves ------------------
+#PLOT ROC Curve
+roc_curve_plot = roc_curve_up_notup %>% 
+  bind_rows(roc_curve_down_notdown) %>%
+  ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
+  geom_path(size = 1, alpha = 1) +
+  geom_abline(lty = 3) +
+  theme_vaxgo() +
+  facet_grid(~fct_rev(comparison)~paste("Day", timepoint)) + 
+  scale_color_manual(values = c(
+    "Mouse" = "#4DBBD5FF",
+    "Human" = "#90A4AEFF",
+    "Immune" = "#4361ee",
+    "Uniform" = "gray80"
+    )) +
+  labs(
+  x = "FPR",
+  y = "TPR",
+  color = "Model") + 
+  theme(
+    legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    # strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
+    axis.text.x = element_text(size = 10, angle = 0, hjust = 0.5, vjust = 0.5),
+    axis.text.y = element_text(size = 10),
+    panel.spacing.x = unit(0.5, "lines"),
+    legend.key = element_blank()
+  ) +
+  scale_x_continuous(n.breaks = 3) +
+  scale_y_continuous(n.break = 3)
+
+
+# Visualize AUC
+auc_plot <- bind_rows(auc_results_up, 
+                      auc_results_down) %>% 
+  mutate(model = factor(model, levels = c("Perfect", "Mouse", "Immune", "Uniform")),
+         comparison = factor(comparison, levels = c("Up", "Down"))) %>%
+  
+  ggplot(aes(x = auc, y = factor(timepoint) %>% fct_rev(), fill = model)) +
+  geom_col(width = 0.8,
+           position = position_dodge()) +
+  
+  # Add a reference line for random prediction (AUC = 0.5)
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "black", linewidth = 0.5) +
+  
+  geom_text(aes(label = round(auc, 2)),
+            position = position_dodge2(0.9),
+            hjust = 1.2, size = 2) +
+  
+  facet_grid(comparison ~ ., scales = "free_y") +
+  
+  labs(
+    x = "AUC",
+    y = "Day",
+    fill = "Model"
+  ) +
+    scale_fill_manual(values = c(
+    "Mouse" = "#4DBBD5FF",
+    "Immune" = "#4361ee",
+    "Human" = "#90A4AEFF",
+    "Uniform" = "gray80"
+    )) +
+  theme_vaxgo()  +
+  theme(
+    legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    # strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
+    axis.text.x = element_text(size = 10, angle = 0, hjust = 0.5, vjust = 0.5),
+    axis.text.y = element_text(size = 10),
+    panel.spacing.x = unit(0.5, "lines"),
+    legend.key = element_blank()
+  ) +
+  scale_x_continuous(expand = c(0,0), limits = c(0,1))
+
+roc_auc_curve_plot = ((roc_curve_plot) |
+  auc_plot) +
+  plot_layout(guides = "collect", widths = c(1, 0.4))+
+  plot_annotation(theme = theme(legend.position = "top", plot.title = element_text(hjust = 0.5)),
+                  title = filename)
+
+roc_auc_curve_plot %>%
+  ggsave(filename = here("Figures", paste0("roc_curve_plot_", filename, ".png")),
+         width = 8,
+         height = 5)
+
+roc_auc_curve_plot
+```
 
 
 
