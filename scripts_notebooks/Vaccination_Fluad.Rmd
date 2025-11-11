@@ -675,8 +675,6 @@ eset_human_mouse = readRDS(file = here("tables", "eset_human_mouse.rds"))
 human_mouse_fluad_matrix = eset_human_mouse %>% exprs()
 human_mouse_fluad_metadata = readRDS(file = here("tables", "human_mouse_fluad_metadata.rds"))
 
-
-# DGE (Human normalized with mouse) -------
 human_mouse_fluad_matrix_human = human_mouse_fluad_matrix %>% 
   as.data.frame() %>% 
   select(c(human_mouse_fluad_metadata %>% 
@@ -697,6 +695,12 @@ human_mouse_fluad_metadata_pData = human_mouse_fluad_metadata %>%
          sex = as.factor(sex),
          age = scale(as.numeric(age)),
          race = as.factor(race))
+```
+
+#### Limma
+```{r}
+# DGE -------
+
 
 
 #Create ExpressionSet
@@ -706,10 +710,7 @@ eset_human <- ExpressionSet(
 
 #Save
 eset_human %>% saveRDS(file = here("tables", "fluad_eset_human.rds"))
-```
 
-
-```{r}
 ##### Run analysis in the cluster -------
 eset_human = readRDS(file = here("tables", "fluad_eset_human.rds"))
 #Create design matrix
@@ -789,6 +790,189 @@ fluad_human_degs %>%
   group_by(condition) %>%
   filter(adj_p_val <= 0.05) %>% 
   summarize(n_degs = n())
+```
+
+
+#### Simple t-Test
+```{r}
+eset_human_mouse = readRDS(file = here("tables", "eset_human_mouse.rds"))
+human_mouse_fluad_matrix = eset_human_mouse %>% exprs()
+human_mouse_fluad_metadata = readRDS(file = here("tables", "human_mouse_fluad_metadata.rds"))
+
+
+human_mouse_fluad_matrix_human = human_mouse_fluad_matrix %>% 
+  as.data.frame() %>% 
+  select(c(human_mouse_fluad_metadata %>% 
+           filter(organism == "Human") %>% 
+             filter(!participant_id %in% c("CRC305DGENT1483036",
+                                             "CRC305DGENT0351013",
+                                             "CRC305DGENT1471032")) %>% 
+             pull(sample_id))) %>% 
+  as.matrix()
+
+human_mouse_fluad_metadata_pData = human_mouse_fluad_metadata %>% 
+                                   column_to_rownames("sample_id") %>% 
+                                   filter(organism == "Human") %>% 
+                                   filter(!participant_id %in% c("CRC305DGENT1483036",
+                                             "CRC305DGENT0351013",
+                                             "CRC305DGENT1471032")) %>% 
+  mutate(timepoint = as.factor(timepoint),
+         sex = as.factor(sex),
+         age = scale(as.numeric(age)),
+         race = as.factor(race))
+
+#Annotate
+human_fluad_log2fc_filtered_sample_long = human_mouse_fluad_matrix_human %>%
+  as.data.frame() %>% 
+  rownames_to_column("human_symbol") %>% 
+  pivot_longer(cols = -human_symbol,
+               names_to = "geo_sample",
+               values_to = "log2") %>% 
+  inner_join(human_mouse_fluad_metadata_pData %>% 
+               rownames_to_column("geo_sample") %>% 
+               select(geo_sample, participant_id, timepoint),
+             by = "geo_sample") %>% 
+  select(human_symbol, participant_id, timepoint, log2) %>% 
+  distinct() %>% 
+  select(participant_id, human_symbol, timepoint, value = log2) %>%
+  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_") %>%
+  pivot_longer(cols = starts_with("day_"),
+               names_to = "timepoint",
+               names_prefix = "day_",
+               values_to = "value") %>%
+  group_by(participant_id, human_symbol) %>% 
+  mutate(day0 = value[timepoint == "0"]) %>%
+  ungroup() %>%
+  mutate(log2fc = value - day0) %>%
+  filter(timepoint != "0")
+
+#Save
+human_fluad_log2fc_filtered_sample_long %>% 
+  saveRDS(here("tables", "human_fluad_log2fc_filtered_sample_long.rds"))
+
+
+#Pivot wider
+human_fluad_log2fc_filtered_sample_wide = human_fluad_log2fc_filtered_sample_long %>% 
+  select(-c(value:day0)) %>% 
+  pivot_wider(names_from = "participant_id",
+              values_from = "log2fc")
+
+beep()
+
+
+#Import
+human_fluad_log2fc_filtered_sample_long = 
+  readRDS(here("tables", "human_fluad_log2fc_filtered_sample_long.rds"))
+
+
+#Compute summary statistics
+human_fluad_log2fc_summary = human_fluad_log2fc_filtered_sample_long %>% 
+  group_by(human_symbol, timepoint) %>%
+  summarize(
+    avg_log2fc = mean(log2fc, na.rm = TRUE),  # mean log2 fold change
+    n_subjects = n(),                         # number of samples
+    sd = sd(value, na.rm = TRUE),             # standard deviation
+    se = sd / sqrt(n_subjects),               # standard error
+    effect_size = avg_log2fc / sd)            # Cohen’s d-like effect size
+
+human_fluad_log2_hgnc_symbol_wide = human_mouse_fluad_matrix_human %>%
+  as.data.frame() %>% 
+  rownames_to_column("human_symbol") %>% 
+  pivot_longer(cols = -human_symbol,
+               names_to = "geo_sample",
+               values_to = "log2") %>% 
+  inner_join(human_mouse_fluad_metadata_pData %>% 
+               rownames_to_column("geo_sample") %>% 
+               select(geo_sample, participant_id, timepoint),
+             by = "geo_sample") %>% 
+  select(human_symbol, participant_id, timepoint, log2) %>% 
+  distinct() %>% 
+  select(participant_id, human_symbol, timepoint, value = log2) %>%
+  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_")
+
+# Paired t-test
+human_fluad_log2fc_paired_ttest <- human_fluad_log2_hgnc_symbol_wide %>%
+  group_by(human_symbol) %>%
+  
+  summarise(
+    pval_day1 = tryCatch(t.test(day_1, day_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day3 = tryCatch(t.test(day_3, day_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day7 = tryCatch(t.test(day_7, day_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    .groups = 'drop'
+  ) %>%
+  
+  mutate(
+    padj_day1 = p.adjust(pval_day1, method = "fdr"),
+    padj_day3 = p.adjust(pval_day3, method = "fdr"),
+    padj_day7 = p.adjust(pval_day7, method = "fdr")
+  ) %>% 
+  pivot_longer(
+    cols = starts_with(c("pval_", "padj_")),
+    names_to = c(".value", "timepoint"),
+    names_pattern = "(pval|padj)_(day\\d+)"
+  ) %>% 
+  mutate(condition = case_when(timepoint == "day1"	~ "Fluad_24_PBMC",
+                               timepoint == "day3"	~ "Fluad_72_PBMC",
+                               timepoint == "day7"	~ "Fluad_168_PBMC",
+                               T~timepoint),
+         timepoint = str_remove(timepoint, "day"))
+# Unpaired t-test ----------
+human_fluad_log2fc_unpaired_ttest <- human_fluad_log2_hgnc_symbol_wide %>%
+  group_by(human_symbol) %>%
+  
+  summarise(
+    pval_day1 = tryCatch(
+      t.test(day_1, day_0, paired = FALSE, var.equal = FALSE, alternative = "two.sided")$p.value,
+      error = function(e) NA_real_
+    ),
+    pval_day3 = tryCatch(
+      t.test(day_3, day_0, paired = FALSE, var.equal = FALSE, alternative = "two.sided")$p.value,
+      error = function(e) NA_real_
+    ),
+    pval_day7 = tryCatch(
+      t.test(day_7, day_0, paired = FALSE, var.equal = FALSE, alternative = "two.sided")$p.value,
+      error = function(e) NA_real_
+    ),
+    .groups = 'drop'
+  ) %>%
+  
+  mutate(
+    padj_day1 = p.adjust(pval_day1, method = "fdr"),
+    padj_day3 = p.adjust(pval_day3, method = "fdr"),
+    padj_day7 = p.adjust(pval_day7, method = "fdr")
+  ) %>% 
+  pivot_longer(
+    cols = starts_with(c("pval_", "padj_")),
+    names_to = c(".value", "timepoint"),
+    names_pattern = "(pval|padj)_(day\\d+)"
+  ) %>% 
+  mutate(
+    condition = case_when(
+      timepoint == "day1" ~ "Fluad_24_PBMC",
+      timepoint == "day3" ~ "Fluad_72_PBMC",
+      timepoint == "day7" ~ "Fluad_168_PBMC",
+      TRUE ~ timepoint
+    ),
+    timepoint = str_remove(timepoint, "day")
+  )
+
+
+
+
+# Summarize significant genes
+
+human_fluad_log2fc_paired_ttest %>% 
+  group_by(condition) %>% 
+  filter(padj <= 0.05) %>% 
+  summarize(n_degs = n())
+human_fluad_log2fc_unpaired_ttest %>% 
+  group_by(condition) %>% 
+  filter(padj <= 0.05) %>% 
+  summarize(n_degs = n())
+
 ```
 
 
