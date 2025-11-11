@@ -2712,31 +2712,37 @@ genes_roc_DEGs_immune = dge_long_genes %>%
 
 Calculate ROC curve
 
+Inputs
 ```{r fig.height=4, fig.width=10}
 set.seed(123)
 ######### Input -----
-genes_df_input = genes_roc_allgenes
-filename = "Fluad_All"
-# 
-# genes_df_input = genes_roc_allgenes_immunegenes
-# filename = "Fluad_All_Immune"
+# filename = "Fluad_All_OnlyImmune"
+# genes_df_input = bind_rows(
+#   genes_roc_allgenes %>% mutate(model_type = "Mouse"),
+#   genes_roc_allgenes_immunegenes %>% mutate(model_type = "Immune")
+# )
 
-# genes_df_input = genes_roc_DEGs_all
-# filename = "Fluad_AllDEGs_HumanDEGs"
 
-# genes_df_input = genes_roc_DEGs_immune
-# filename = "Fluad_AllDEGs_HumanDEGs_Immune"
+filename = "Fluad_AllDEGs_HumanDEGs_OnlyImmune"
+genes_df_input = bind_rows(
+  genes_roc_DEGs_all %>% mutate(model_type = "Mouse"),
+  genes_roc_DEGs_immune %>% mutate(model_type = "Immune")
+)
 
 ```
 
 
+
+### Using t statistic to compute probabilities
 ```{r fig.height=5, fig.width=8}
-######### UP -----------
-#Do one sided t-test for each model
-dge_long_genes_up = genes_df_input %>%
-  filter(log2fc > 0) %>% 
+
+#=====================================================
+# Compute probabilities
+#=====================================================
+
+dge_long_genes_up = genes_df_input %>% 
   mutate(
-    df = n-1, 
+    df = n - 1,
     pval_one_sided = pt(t, df, lower.tail = FALSE),
     pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
     direction = if_else(pval_one_sided_adj <= 0.05 & t > 0, "up", "not_up"),
@@ -2745,116 +2751,136 @@ dge_long_genes_up = genes_df_input %>%
   select(-adj_p_val) %>%
   rename(adj_p_val = pval_one_sided_adj)
 
-#Assign human log2fc direction as truth
-truth_human = dge_long_genes_up %>% 
-  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
-  filter(organism == "Human") %>% 
-  distinct() %>% 
-  pivot_wider(names_from = "organism",
-              values_from = "direction") %>% 
-  rename(truth = Human) %>% 
-  mutate(organism = "Human")
-
-#Generate comparable distributions
-perfect_prediction = truth_human %>%
-  mutate(prob = if_else(truth == "up", 1, 0)) %>%
-  rename(pred = truth)
-
-uniform_prediction = perfect_prediction %>%
-  group_by(timepoint) %>% 
-  mutate(prob = runif(n()),
-         organism = "Uniform")
-
-#Get only up and not up genes from models
-models_up = dge_long_genes_up %>% 
-  filter(organism != "Human") %>% 
-  mutate(pred = direction) %>% 
-  bind_rows(perfect_prediction, uniform_prediction)
-
-
-#Get probabilities (UP)
-classified_df_probs_up = truth_human %>% 
-  select(symbol, timepoint, truth) %>%
-  inner_join(models_up %>% 
-               select(symbol, timepoint, pred, prob, model = organism),
-             by = join_by("symbol", "timepoint")) %>% 
-  mutate(
-    not_prob = 1 - prob,
-    sum = prob + not_prob,
-    truth = as.factor(truth)
-  ) %>% 
-  distinct() %>% 
-  mutate(truth = factor(truth, levels = c("up", "not_up")))
-
-#Get ROC
-roc_curve_up_notup = classified_df_probs_up %>% 
-  filter(model %in% c("Human", "Mouse", "Uniform", "FIT")) %>%
-  group_by(model, timepoint) %>%
-  roc_curve(truth, prob) %>%
-  mutate(comparison = "Up vs Non-Up")
-
-######### DOWN -----------
-#Do one sided t-test for each model
 dge_long_genes_down = genes_df_input %>% 
-  filter(log2fc < 0) %>% 
   mutate(
-    df = n-1, 
-    # One-sided test for DOWN (lower tail)
+    df = n - 1,
     pval_one_sided = pt(t, df, lower.tail = TRUE),
     pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    direction = if_else(pval_one_sided_adj < 0.05 & t < 0, "down", "not_down"),
+    direction = if_else(pval_one_sided_adj <= 0.05 & t < 0, "down", "not_down"),
     prob = 1 - pval_one_sided_adj
   ) %>%
   select(-adj_p_val) %>%
   rename(adj_p_val = pval_one_sided_adj)
 
-#Assign human log2fc direction as truth
+#=====================================================
+# Assign human truth
+#=====================================================
+truth_human_up = dge_long_genes_up %>% 
+  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
+  filter(organism == "Human") %>% 
+  distinct() %>% 
+  pivot_wider(names_from = organism, values_from = direction) %>% 
+  rename(truth = Human) %>% 
+  mutate(organism = "Human")
+
 truth_human_down = dge_long_genes_down %>% 
   select(symbol, organism, timepoint, adj_p_val, direction) %>% 
   filter(organism == "Human") %>% 
   distinct() %>% 
-  pivot_wider(names_from = "organism",
-              values_from = "direction") %>% 
+  pivot_wider(names_from = organism, values_from = direction) %>% 
   rename(truth = Human) %>% 
   mutate(organism = "Human")
 
-#Generate comparable distributions
+#=====================================================
+#Generate reference distributions
+#=====================================================
+perfect_prediction_up = truth_human_up %>%
+  mutate(prob = if_else(truth == "up", 1, 0),
+         model = "Human") %>%
+  rename(pred = truth)
+
+uniform_prediction_up = perfect_prediction_up %>%
+  group_by(timepoint) %>% 
+  mutate(prob = runif(n()), organism = "Uniform",
+         model = "Uniform")
+
 perfect_prediction_down = truth_human_down %>%
-  mutate(prob = if_else(truth == "down", 1, 0)) %>%
+  mutate(prob = if_else(truth == "down", 1, 0),
+          model = "Human") %>%
   rename(pred = truth)
 
 uniform_prediction_down = perfect_prediction_down %>%
   group_by(timepoint) %>% 
-  mutate(prob = runif(n()),
-         organism = "Uniform")
+  mutate(prob = runif(n()), organism = "Uniform",
+         model = "Uniform")
 
-#Get only down and not down genes from models
+#=====================================================
+# Combine models (Mouse + Immune + Uniform + Perfect)
+#=====================================================
+models_up = dge_long_genes_up %>% 
+  filter(organism != "Human") %>% 
+  mutate(pred = direction,
+         model = if_else(model_type == "Immune", "Immune", organism)) %>%
+  bind_rows(perfect_prediction_up, uniform_prediction_up)
+
 models_down = dge_long_genes_down %>% 
   filter(organism != "Human") %>% 
-  mutate(pred = direction) %>% 
+  mutate(pred = direction,
+         model = if_else(model_type == "Immune", "Immune", organism)) %>%
   bind_rows(perfect_prediction_down, uniform_prediction_down)
 
-#Get probabilities (DOWN)
+#=====================================================
+# Classify probabilities 
+#=====================================================
+classified_df_probs_up = truth_human_up %>% 
+  select(symbol, timepoint, truth) %>%
+  inner_join(models_up %>% 
+               select(symbol, timepoint, pred, prob, model),
+             by = join_by(symbol, timepoint)) %>% 
+  mutate(
+    truth = factor(truth, levels = c("up", "not_up"))
+  ) %>% 
+  distinct()
+
 classified_df_probs_down = truth_human_down %>% 
   select(symbol, timepoint, truth) %>%
   inner_join(models_down %>% 
-               select(symbol, timepoint, pred, prob, model = organism),
-             by = join_by("symbol", "timepoint")) %>% 
+               select(symbol, timepoint, pred, prob, model),
+             by = join_by(symbol, timepoint)) %>% 
   mutate(
-    not_prob = 1 - prob,
-    sum = prob + not_prob,
-    truth = as.factor(truth)
+    truth = factor(truth, levels = c("down", "not_down"))
   ) %>% 
-  distinct() %>% 
-  mutate(truth = factor(truth, levels = c("down", "not_down")))
+  distinct()
 
-#Get ROC
-roc_curve_down_notdown = classified_df_probs_down %>% 
-  filter(model %in% c("Human", "Mouse", "Uniform", "FIT")) %>%
+
+#=====================================================
+#Compute ROC 
+#=====================================================
+
+roc_curve_up_notup = classified_df_probs_up %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
   group_by(model, timepoint) %>%
   roc_curve(truth, prob) %>%
-  mutate(comparison = "Down vs Non-Down")
+  mutate(comparison = "Up")
 
+roc_curve_down_notdown = classified_df_probs_down %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Down")
+
+#=====================================================
+#Compute AUC 
+#=====================================================
+auc_results_up = classified_df_probs_up %>% 
+  mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_auc(truth, prob) %>%
+  rename(auc = .estimate) %>%
+  mutate(comparison = "Up") %>% 
+  ungroup() %>% 
+  select(model, timepoint, auc, comparison)
+
+auc_results_down = classified_df_probs_down %>% 
+  mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_auc(truth, prob) %>%
+  rename(auc = .estimate) %>%
+  mutate(comparison = "Down") %>% 
+  ungroup() %>% 
+  select(model, timepoint, auc, comparison)
 
 #Plot curves ------------------
 #PLOT ROC Curve
@@ -2867,16 +2893,16 @@ roc_curve_plot = roc_curve_up_notup %>%
   facet_grid(~fct_rev(comparison)~paste("Day", timepoint)) + 
   scale_color_manual(values = c(
     "Mouse" = "#4DBBD5FF",
-    "FIT"   = "#4361ee",
     "Human" = "#90A4AEFF",
+    "Immune" = "#4361ee",
     "Uniform" = "gray80"
     )) +
   labs(
-    title = filename,
   x = "FPR",
   y = "TPR",
   color = "Model") + 
   theme(
+    legend.position = "top",
     strip.text = element_text(size = 10),
     strip.placement = "outside",
     # strip.background.x = element_rect(fill = "gray95", color = NA), 
@@ -2889,75 +2915,63 @@ roc_curve_plot = roc_curve_up_notup %>%
   scale_x_continuous(n.breaks = 3) +
   scale_y_continuous(n.break = 3)
 
-roc_curve_plot
 
-roc_curve_plot %>%
+# Visualize AUC
+auc_plot <- bind_rows(auc_results_up, 
+                      auc_results_down) %>% 
+  mutate(model = factor(model, levels = c("Perfect", "Mouse", "Immune", "Uniform")),
+         comparison = factor(comparison, levels = c("Up", "Down"))) %>%
+  
+  ggplot(aes(x = auc, y = factor(timepoint) %>% fct_rev(), fill = model)) +
+  geom_col(width = 0.8,
+           position = position_dodge()) +
+  
+  # Add a reference line for random prediction (AUC = 0.5)
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "black", linewidth = 0.5) +
+  
+  geom_text(aes(label = round(auc, 2)),
+            position = position_dodge2(0.9),
+            hjust = 1.2, size = 2) +
+  
+  facet_grid(comparison ~ ., scales = "free_y") +
+  
+  labs(
+    x = "AUC",
+    y = "Day",
+    fill = "Model"
+  ) +
+    scale_fill_manual(values = c(
+    "Mouse" = "#4DBBD5FF",
+    "Immune" = "#4361ee",
+    "Human" = "#90A4AEFF",
+    "Uniform" = "gray80"
+    )) +
+  theme_vaxgo()  +
+  theme(
+    legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    # strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
+    axis.text.x = element_text(size = 10, angle = 0, hjust = 0.5, vjust = 0.5),
+    axis.text.y = element_text(size = 10),
+    panel.spacing.x = unit(0.5, "lines"),
+    legend.key = element_blank()
+  ) +
+  scale_x_continuous(expand = c(0,0), limits = c(0,1))
+
+roc_auc_curve_plot = ((roc_curve_plot) |
+  auc_plot) +
+  plot_layout(guides = "collect", widths = c(1, 0.4))+
+  plot_annotation(theme = theme(legend.position = "top", plot.title = element_text(hjust = 0.5)),
+                  title = filename)
+
+roc_auc_curve_plot %>%
   ggsave(filename = here("Figures", paste0("roc_curve_plot_", filename, ".png")),
          width = 8,
          height = 5)
 
+roc_auc_curve_plot
 ```
 
-####AUC
-
-```{r}
-# --- 1. Calcular AUC para Regulação Positiva (UP) ---
-# Usamos a função 'roc_auc' do pacote 'yardstick' (parte do tidymodels)
-auc_results_up = classified_df_probs_up %>% 
-  # Garante que os fatores estejam na ordem correta: 'up' como evento positivo
-  mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
-  filter(model %in% c("Mouse", "Uniform", "Perfect")) %>%
-  
-  group_by(model, timepoint) %>%
-  
-  # Calcula a AUC
-  roc_auc(truth, prob) %>%
-  rename(auc = .estimate) %>%
-  mutate(comparison = "Up") %>% 
-  ungroup() %>% 
-  select(model, timepoint, auc, comparison)
-
-# --- 2. Calcular AUC para Regulação Negativa (DOWN) ---
-auc_results_down = classified_df_probs_down %>% 
-  # Garante que os fatores estejam na ordem correta: 'down' como evento positivo
-  mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
-  filter(model %in% c("Mouse", "Uniform", "Perfect")) %>%
-  
-  group_by(model, timepoint) %>%
-  
-  # Calcula a AUC
-  roc_auc(truth, prob) %>%
-  rename(auc = .estimate) %>%
-  mutate(comparison = "Down") %>% 
-  ungroup() %>% 
-  select(model, timepoint, auc, comparison)
-
-
-# --- 3. Combinar e Visualizar Resultados ---
-auc_combined_plot_data = bind_rows(auc_results_up, auc_results_down)
-
-# Visualiza a performance (AUC) do Mouse em comparação com os controles
-auc_plot <- auc_combined_plot_data %>% 
-  mutate(model = factor(model, levels = c("Perfect", "Mouse", "Uniform")),
-         comparison = factor(comparison, levels = c("Up", "Down"))) %>%
-  
-  ggplot(aes(x = factor(timepoint), y = auc, fill = model)) +
-  geom_col(position = position_dodge(width = 0.8), color = "black") +
-  # Adiciona a linha de referência do palpite aleatório (AUC = 0.5)
-  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red", linewidth = 1) +
-  
-  facet_wrap(~ comparison, scales = "free_x") +
-  
-  labs(title = "Performance Preditiva do Mouse (AUC) em Relação ao Human",
-       subtitle = "Comparação da Regulação UP vs. DOWN ao longo do tempo",
-       x = "Timepoint (Day)",
-       y = "Área sob a Curva (AUC)",
-       fill = "Modelo") +
-  scale_fill_manual(values = c("Perfect" = "darkgreen", "Mouse" = "darkblue", "Uniform" = "gray")) +
-  ylim(0, 1) + # Define o limite Y de 0 a 1 (padrão do AUC)
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-print(auc_plot)
-```
 
