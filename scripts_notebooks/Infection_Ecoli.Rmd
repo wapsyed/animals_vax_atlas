@@ -972,6 +972,8 @@ GSE33341_human_log2fc_sample_wide
 ```{r}
 #Import
 human_ecoli_log2_filtered_symbol = readRDS(file = here("tables", "human_ecoli_log2_filtered_symbol.rds"))
+
+dim(human_ecoli_log2_filtered_symbol)
   
 ecoli_human_metadata = readRDS(file = here("tables", "ecoli_human_metadata.rds")) %>% 
   mutate(timepoint = as.factor(timepoint),
@@ -979,17 +981,27 @@ ecoli_human_metadata = readRDS(file = here("tables", "ecoli_human_metadata.rds")
          age = scale(as.numeric(age)),
          ethnicity = as.factor(ethnicity),
          status = as.factor(status),
-         site_infection = as.factor(site_infection))
+         status = fct_relevel(status, "Healthy", "infected"),
+         site_infection = as.factor(site_infection)) %>% 
+  dplyr::filter(!is.na(age))
+
+dim(ecoli_human_metadata)
 
 #Create Expression Set
 eset_human_ecoli <- ExpressionSet(
   assayData = human_ecoli_log2_filtered_symbol %>% 
     column_to_rownames("human_symbol") %>% 
+    dplyr::select(ecoli_human_metadata$geo_sample) %>% 
     as.matrix(),
-  phenoData = AnnotatedDataFrame(ecoli_human_metadata))
+  phenoData = AnnotatedDataFrame(ecoli_human_metadata)) 
+
+#metadata = 62 rows
+#exprs data = 62 cols
 
 #Save
 eset_human_ecoli %>% saveRDS(file = here("tables", "eset_human_ecoli.rds"))
+
+
 ```
 
 
@@ -1005,16 +1017,11 @@ eset_human_ecoli = readRDS(file = here("tables", "eset_human_ecoli.rds"))
 
 
 #Create model matrix
-design <- model.matrix(~ site_infection + 
-                         age +
-                         sex +
-                         ethnicity +
-                         batch +
-                         status + 
-                         0,
-                       eset_human_ecoli) 
+design <- model.matrix(~ age + sex + ethnicity + status,
+                       data = pData(eset_human_ecoli))
 
 colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+rownames(design) <- rownames(pData(eset_human_ecoli))
 
 #Fit Limma model
 fit <- lmFit(eset_human_ecoli, 
@@ -1026,13 +1033,10 @@ colnames(design) %>%
   arrange(.)
 
 #Get contrasts 
-cont.matrix <- makeContrasts(conditionMouse_C57BL.6J_2	 - conditionMouse_C57BL.6J_0,
-                             conditionMouse_C57BL.6J_6	 - conditionMouse_C57BL.6J_0,
-                             conditionMouse_C57BL.6J_12	 - conditionMouse_C57BL.6J_0,
-                             conditionMouse_C57BL.6J_24	 - conditionMouse_C57BL.6J_0,
-                             levels=design)
+cont.matrix <- makeContrasts(statusinfected, levels = design)
+
 fit2 <- contrasts.fit(fit, cont.matrix)
-fit2 <- eBayes(fit2)
+fit2 <- limma::eBayes(fit2)
 
 #Get DEGs
 
@@ -1047,33 +1051,30 @@ results_list <- lapply(1:ncol(fit2), function(i) {
 all_contrasts_degs <- bind_rows(results_list)
 
 # Get all DEGs and clean dataset
-all_degs_mouse_ecoli= all_contrasts_degs %>% 
-  select(comparison, everything()) %>% 
-  mutate(comparison = str_replace(comparison, "\\.\\.\\.", "_") %>% 
+all_degs_human_ecoli= all_contrasts_degs %>% 
+  dplyr::select(comparison, everything()) %>% 
+  dplyr::mutate(comparison = str_replace(comparison, "\\.\\.\\.", "_") %>% 
            str_replace(., "timepoint", "Time") %>% 
            str_replace(., "treatment", "")) %>% 
   separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef")) %>% 
-  mutate(comparisonRef = str_replace(comparisonRef, "treatment", "Time0")) %>% 
-  mutate(condition = case_when(comparisonA == "conditionMouse_C57BL.6J_2"	~ "Ecoli_2h",
-                               comparisonA == "conditionMouse_C57BL.6J_6"	~ "Ecoli_6h",
-                               comparisonA == "conditionMouse_C57BL.6J_12"	~ "Ecoli_12h",
-                               comparisonA == "conditionMouse_C57BL.6J_24"	~ "Ecoli_24h",
+  dplyr::mutate(comparisonRef = str_replace(comparisonRef, "treatment", "Time0")) %>% 
+  dplyr::mutate(condition = case_when(comparisonA == "statusinfected"	~ "Ecoli_24h",
                                T~comparisonA),
-         organism = "Mouse") %>% 
-  select(condition, everything()) %>% 
+         organism = "Human") %>% 
+  dplyr::select(condition, everything()) %>% 
   clean_names() %>% 
-  rename(human_symbol = symbol,
+  dplyr::rename(human_symbol = symbol,
          mean_l2fc = log_fc,
          ci_upper = ci_r,
          ci_lower = ci_l)
 	
 # #Save
-all_degs_mouse_ecoli %>% saveRDS(file = here("tables", "Ecoli_GGSE33341_degs_mouse.rds"))
+all_degs_human_ecoli %>% saveRDS(file = here("tables", "Ecoli_GGSE33341_degs_human.rds"))
 
-all_degs_mouse_ecoli %>% 
-  group_by(condition) %>%
-  filter(adj_p_val <= 0.05) %>% 
-  summarize(n_degs = n())
+all_degs_human_ecoli %>% 
+  dplyr::group_by(condition) %>%
+  dplyr::filter(adj_p_val <= 0.05) %>% 
+  dplyr::summarize(n_degs = n())
 
 ```
 
