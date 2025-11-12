@@ -74,10 +74,7 @@ GSE33341_ecoli_mouse_metadata = eset_mouse %>%
          comparison = paste0("Mouse_", host_strain, "_Batch", batch)) %>% 
   select(geo_sample, comparison, condition, subject_id, everything())
 
-GSE33341_ecoli_mouse_metadata
-```
 
-```{r}
 #Human
 GSE33341_ecoli_human_metadata = eset_human %>% 
   pData() %>% 
@@ -131,20 +128,29 @@ GSE33341_ecoli_mouse_human_metadata =
 
 #Get expression data -----
 #Mouse
-GSE33341_mouse_eset <- exprs(eset_mouse) %>% 
+GSE33341_mouse_exprs <- exprs(eset_mouse) %>% 
   as.data.frame() %>% 
   select(GSE33341_ecoli_mouse_human_metadata %>% 
            filter(organism == "Mus musculus") %>% 
            pull(geo_sample)) %>% 
   rownames_to_column("probe_id") 
 
+GSE33341_mouse_exprs %>% 
+  as.data.frame() %>% 
+  saveRDS(here("tables", "Ecoli_GSE33341_mouse_exprs.rds"))
+
 #Human
-GSE33341_human_eset <- exprs(eset_human) %>% 
+GSE33341_human_exprs <- exprs(eset_human) %>% 
   as.data.frame() %>% 
   select(GSE33341_ecoli_mouse_human_metadata %>% 
            filter(organism == "Human") %>% 
            pull(geo_sample)) %>% 
   rownames_to_column("probe_id")
+
+GSE33341_human_exprs %>% 
+  as.data.frame() %>% 
+  saveRDS(here("tables", "Ecoli_GSE33341_human_exprs.rds"))
+
 ```
 
 #### Mouse
@@ -154,15 +160,27 @@ GSE33341_human_eset <- exprs(eset_human) %>%
 This procedure was done using only one batch (8)
 
 ```{r}
+
+ecoli_human_exprs = readRDS(here("tables", "Ecoli_GSE33341_human_exprs.rds"))
+ecoli_mouse_exprs = readRDS(here("tables", "Ecoli_GSE33341_mouse_exprs.rds"))
+ecoli_mouse_human_metadata = readRDS(file = here("tables", "GSE33341_ecoli_mouse_human_metadata.rds"))
+
 #Annotate genes ------
 #Mouse -----
 #Annotate data and calculate log2fc
-GSE33341_mouse_expression_metadata  = GSE33341_mouse_eset %>% 
+GSE33341_mouse_expression_metadata  = ecoli_mouse_exprs %>% 
   pivot_longer(cols = 2:125,
                names_to = "geo_sample",
                values_to = "value_raw") %>% 
   inner_join(GSE33341_ecoli_mouse_human_metadata, 
              by = "geo_sample") 
+
+mouse_metadata =  GSE33341_ecoli_mouse_human_metadata %>% 
+               filter(host_strain == "C57BL/6J",
+                      batch == "8")
+
+mouse_metadata %>% 
+  saveRDS(file = here("tables", "ecoli_mouse_metadata.rds"))
 
 #Get value from day 0 and calculate Log2FC
 GSE33341_log2fc_sample = GSE33341_mouse_expression_metadata %>% 
@@ -171,9 +189,9 @@ GSE33341_log2fc_sample = GSE33341_mouse_expression_metadata %>%
          status == "Healthy",
          host_strain == "C57BL/6J",
          batch == "8") %>% 
-  select(probe_id, comparison, batch, subject_num, day0_value_raw = value_raw) %>% 
+  select(probe_id, batch, subject_num, day0_value_raw = value_raw) %>% 
   #Get the mean expression value for healthy
-  group_by(probe_id, comparison, batch) %>% 
+  group_by(probe_id, batch) %>% 
   summarize(n = n(),
             #Mean of healthy
             day0_value_raw = sum(day0_value_raw)/n,
@@ -184,7 +202,7 @@ GSE33341_log2fc_sample = GSE33341_mouse_expression_metadata %>%
                filter(timepoint != "0",
                       host_strain == "C57BL/6J",
                       batch == "8"),
-             by = join_by("probe_id", "comparison", "batch")) %>% 
+             by = join_by("probe_id", "batch")) %>% 
   mutate(log2fc = value_raw - day0_value_raw) %>% 
   distinct() 
 
@@ -215,87 +233,77 @@ annot <- getBM(
   values = gene_id,
   mart = ensembl_mart)
 
-#Gene lookup table
+#Get lookup table from FIT
+#Install model package
+# library(devtools)
+# devtools::install_github('shenorrLabTRDF/FIT.mouse2man')
+library(FIT.mouse2man)
 HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez %>% 
-  rename(human_symbol = HGNC_symbol,
-         mouse_symbol =MGI.symbol,
-         HS.Entrez = Human.Entrez,
-         MM.Entrez = Mouse.Ortholog) %>% 
-  mutate(HS.Entrez = as.character(HS.Entrez),
-         MM.Entrez = as.character(MM.Entrez))
+  clean_names() %>% 
+  rename(mouse_entrez = mouse_ortholog)
 
-#Filter probe_ids with highest median expression for the same entrezgene_id
-GSE33341_mouse_counts_log2_summary_annotated_probes = GSE33341_log2fc_sample %>% 
-  group_by(probe_id) %>% 
-  summarize(mean = mean(value_raw, na.rm = TRUE),
-            median = median(value_raw, na.rm = T)) %>%  
+#Get annotations for each probe 
+### Filter probes with highest median expression
+mouse_log2summary = ecoli_mouse_exprs %>% #20,845 probes
+  as.data.frame() %>% 
+  rename(probe = probe_id) %>% 
+  pivot_longer(cols = -probe,
+               names_to = "sample",
+               values_to = "expression") %>% 
+  group_by(probe) %>% 
+  summarize(mean = mean(expression,na.rm = TRUE),
+            median = median(expression, na.rm = T)) %>%  
   inner_join(annot %>% 
-              rename(probe_id = affy_mouse430_2), 
-            by = "probe_id") %>% 
-  group_by(entrezgene_id) %>% 
-  slice_max(median, n = 1) %>% 
-  select(probe_id, entrezgene_id, mgi_symbol) %>% 
-  distinct() %>%
-  
-  #Filter probes from the original table
-  inner_join(GSE33341_log2fc_sample, 
-             by = "probe_id") %>% 
-  
-  #Annotate hgnc symbols
-  inner_join(HS_MM_Symbol_Entrez %>% 
-               clean_names() %>% 
-               rename(mgi_symbol = mouse_symbol) %>% 
-               select(mgi_symbol, human_symbol), 
-             by = join_by("mgi_symbol")) 
-
-#Filter entrez ids with the highest median for the same symbol ------
-
-#Get one entrez_id by human symbol
-entrez_ids_highest_median = GSE33341_mouse_counts_log2_summary_annotated_probes %>%
-               select(probe_id, entrezgene_id, human_symbol, mgi_symbol, value_raw) %>%
-               group_by(human_symbol, mgi_symbol, entrezgene_id) %>%
-               #Get entrezids with highest median
-               summarize(median = median(value_raw, na.rm = T)) %>% 
-               slice_max(median, n = 1) %>%
-               ungroup() %>% 
-               select(human_symbol, mgi_symbol, entrezgene_id, median) %>% 
-               distinct() %>% 
-    summarise(n = n(), .by = c(human_symbol), mgi_symbol, entrezgene_id, median)
-
-#Get not duplicated genes
-entrez_ids_highest_median_notduplicated = entrez_ids_highest_median %>% 
-  filter(n == 1L) %>% 
-  distinct()
-
-#Filter randomly entrezids that have the same value for the same gene (human and mouse)
-entrez_ids_highest_median_duplicated = entrez_ids_highest_median %>%
-  filter(n > 1L) %>%
-  distinct() %>%
-  group_by(human_symbol) %>%
-  #Filter irrespective to the mgi_symbol
-  slice_sample(n = 1) %>%
-  select(human_symbol, mgi_symbol, entrezgene_id, median)
-
-#Merge tables
-entrez_ids_selected = entrez_ids_highest_median_notduplicated %>% 
-               bind_rows(entrez_ids_highest_median_duplicated) %>% 
-               select(human_symbol, mgi_symbol, entrezgene_id)
-
-#Annotate expression table
-GSE33341_mouse_counts_log2_summary_annotated_genes = GSE33341_mouse_counts_log2_summary_annotated_probes %>% 
+              rename(probe = affy_mouse430_2), 
+            by = "probe") %>%  #24.009 rows
+  #Filter ensembl id
+  group_by(ensembl_gene_id) %>% 
+  slice_max(median, n = 1) %>%
   ungroup() %>% 
-  inner_join(entrez_ids_selected %>% distinct(),
-             by = join_by("human_symbol", "mgi_symbol", "entrezgene_id"))%>% 
-  distinct()
+  select(-ensembl_gene_id) %>% 
+  distinct() %>% 
+  
+  #Filter entrez id
+  group_by(entrezgene_id) %>% 
+  slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
+  ungroup() %>% 
+  rename(mouse_entrez = entrezgene_id) %>% 
+  
+  #Filter hgnc symbol
+  inner_join(HS_MM_Symbol_Entrez, by = c("mouse_entrez", "mgi_symbol")) %>% 
+  group_by(hgnc_symbol) %>% 
+  slice_max(median, n = 1)  %>% #14.396
+  ungroup()
 
-#Check if the duplicated entrez ids were filtered out
-GSE33341_mouse_counts_log2_summary_annotated_genes %>%          
-        filter(human_symbol == "APOC4-APOC2",
-               timepoint == "2",
-               subject_id == "Mouse_C57BL/6J_Animal1_Batch8")
+#Filter out genes with multiple mgi_symbols
+hgnc_symbol_dupes = mouse_log2summary %>% 
+  #filter ensembl id with multiple mgi_symbols
+  get_dupes(hgnc_symbol)
+
+mouse_log2summary = mouse_log2summary %>% 
+  select(probe, hgnc_symbol) %>% 
+  filter(!hgnc_symbol %in% c(hgnc_symbol_dupes$hgnc_symbol %>% unique())) 
+
+#Modify expression matrix
+
+#Filtered probes
+mouse_log2_filtered_probes = ecoli_mouse_exprs %>% 
+  as.data.frame() %>% 
+  rename(probe = probe_id) %>% 
+  inner_join(mouse_log2summary, by = "probe") %>%   #214,396
+  select(human_symbol = hgnc_symbol, 
+         c(mouse_metadata %>% 
+             pull(geo_sample)))
+#14395
+mouse_log2_filtered_probes %>% dim()
+
+mouse_log2_hgnc_symbol = mouse_log2_filtered_probes 
+
+mouse_log2_hgnc_symbol %>% 
+  get_dupes(human_symbol)
 
 #Save
-GSE33341_mouse_counts_log2_summary_annotated_genes %>% 
+mouse_log2_hgnc_symbol %>% 
   saveRDS(file = here("tables", "GSE33341_mouse_counts_log2_summary_annotated_probes.rds"))
 ```
 
@@ -303,11 +311,13 @@ Import
 
 ```{r}
 #Import
-GSE33341_mouse_counts_log2_summary_annotated_probes =
+GSE33341_mouse_counts_log2_summary_annotated_genes = 
   readRDS(file = here("tables", "GSE33341_mouse_counts_log2_summary_annotated_probes.rds"))
 
 #Pivot wider
 GSE33341_log2fc_sample_wide = GSE33341_mouse_counts_log2_summary_annotated_probes %>% 
+  select(probe = probe_id, entrezgene_id, batch:human_symbol) %>% 
+  distinct() %>% 
   select(human_symbol, subject_id, timepoint, log2fc) %>%
   group_by(human_symbol, timepoint) %>% 
   pivot_wider(names_from = subject_id,
@@ -322,9 +332,109 @@ GSE33341_log2fc_sample_wide
 
 ##### Differential expression
 
+#### Create ExpressionSet
+
+```{r}
+#Import
+ecoli_mouse_log2_hgnc_symbol = readRDS(file = here("tables", "GSE33341_mouse_counts_log2_summary_annotated_probes.rds"))
+ecoli_mouse_metadata = readRDS(file = here("tables", "ecoli_mouse_metadata.rds"))
+
+#Create Expression Set
+eset_mouse_ecoli <- ExpressionSet(
+  assayData = ecoli_mouse_log2_hgnc_symbol %>% 
+    column_to_rownames("human_symbol") %>% 
+    as.matrix(),
+  phenoData = AnnotatedDataFrame(ecoli_mouse_metadata))
+
+#Save
+eset_mouse_ecoli %>% saveRDS(file = here("tables", "eset_mouse_ecoli.rds"))
+```
 
 
 
+#### Differential expression (Limma)
+Paired samples design
+```{r}
+
+#Import
+ecoli_mouse_log2_hgnc_symbol = readRDS(file = here("tables", "GSE33341_mouse_counts_log2_summary_annotated_probes.rds"))
+ecoli_mouse_metadata = readRDS(file = here("tables", "ecoli_mouse_metadata.rds"))
+eset_mouse_ecoli %>% saveRDS(file = here("tables", "eset_mouse_ecoli.rds"))
+
+#Create model matrix
+design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
+                       eset_mouse_ecoli) 
+
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+# Estimate the correlation between measurements made on the same subject (paired-samples)
+corfit <- duplicateCorrelation(eset_mouse_ecoli, 
+                               design = design, 
+                               block = eset_mouse_ecoli$subject_id)
+corfit$consensus #-0.06
+
+#Fit Limma model
+fit <- lmFit(eset_mouse_ecoli, 
+             design, 
+             block = eset_mouse_ecoli$subject_id, 
+             correlation = corfit$consensus) #Use inter-subject correlation as input into the linear model fit
+
+#Get conditions
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+#Get contrasts 
+cont.matrix <- makeContrasts(conditionMouse_C57BL.6J_2	 - conditionMouse_C57BL.6J_0,
+                             conditionMouse_C57BL.6J_6	 - conditionMouse_C57BL.6J_0,
+                             conditionMouse_C57BL.6J_12	 - conditionMouse_C57BL.6J_0,
+                             conditionMouse_C57BL.6J_24	 - conditionMouse_C57BL.6J_0,
+                             levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+
+#Get DEGs
+
+## For every contrast
+results_list <- lapply(1:ncol(fit2), function(i) {
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+  })
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs and clean dataset
+all_degs_mouse_ecoli= all_contrasts_degs %>% 
+  select(comparison, everything()) %>% 
+  mutate(comparison = str_replace(comparison, "\\.\\.\\.", "_") %>% 
+           str_replace(., "timepoint", "Time") %>% 
+           str_replace(., "treatment", "")) %>% 
+  separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef")) %>% 
+  mutate(comparisonRef = str_replace(comparisonRef, "treatment", "Time0")) %>% 
+  mutate(condition = case_when(comparisonA == "conditionMouse_C57BL.6J_2"	~ "Ecoli_2h",
+                               comparisonA == "conditionMouse_C57BL.6J_6"	~ "Ecoli_6h",
+                               comparisonA == "conditionMouse_C57BL.6J_12"	~ "Ecoli_12h",
+                               comparisonA == "conditionMouse_C57BL.6J_24"	~ "Ecoli_24h",
+                               T~comparisonA),
+         organism = "Mouse") %>% 
+  select(condition, everything()) %>% 
+  clean_names() %>% 
+  rename(human_symbol = symbol,
+         mean_l2fc = log_fc,
+         ci_upper = ci_r,
+         ci_lower = ci_l)
+	
+# #Save
+all_degs_mouse_ecoli %>% saveRDS(file = here("tables", "Ecoli_GGSE33341_degs_mouse.rds"))
+
+all_degs_mouse_ecoli %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarize(n_degs = n())
+
+```
 
 
 
@@ -700,12 +810,21 @@ There is a batch effect
 #Annotate genes ------
 #Mouse -----
 #Annotate data and calculate log2fc
-GSE33341_human_expression_metadata  = GSE33341_human_eset %>% 
+GSE33341_human_expression_metadata  = GSE33341_human_exprs %>% 
   pivot_longer(cols = 2:63,
                names_to = "geo_sample",
                values_to = "value_raw") %>% 
   inner_join(GSE33341_ecoli_mouse_human_metadata, 
              by = "geo_sample") 
+
+GSE33341_human_expression_metadata %>% 
+  saveRDS(file = here("tables", "GSE33341_human_expression_metadata.rds"))
+
+human_metadata =  GSE33341_ecoli_mouse_human_metadata %>% 
+  filter(organism == "Human")
+
+human_metadata %>% 
+  saveRDS(file = here("tables", "ecoli_human_metadata.rds"))
 
 #There is a batch effect
 #   batch   status  n
@@ -760,88 +879,79 @@ annot <- getBM(
   values = gene_id,
   mart = ensembl_mart)
 
-#Gene lookup table
-HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez %>% 
-  rename(human_symbol = HGNC_symbol,
-         mouse_symbol =MGI.symbol,
-         HS.Entrez = Human.Entrez,
-         MM.Entrez = Mouse.Ortholog) %>% 
-  mutate(HS.Entrez = as.character(HS.Entrez),
-         MM.Entrez = as.character(MM.Entrez))
+#Get annotations for each probe 
+### Filter probes with highest median expression
+#Get annotations for each probe 
+### Filter probes with highest median expression
+human_ecoli_log2summary = GSE33341_human_exprs %>% 
+  rename(probe = probe_id) %>% 
+  pivot_longer(cols = -probe,
+               names_to = "sample",
+               values_to = "expression") %>% 
+  group_by(probe) %>% 
+  summarize(mean = mean(expression,na.rm = TRUE),
+            median = median(expression, na.rm = T)) %>%  
+  inner_join(annot %>% 
+              rename(probe = affy_hg_u133a_2), 
+            by = "probe") %>% 
+  #Filter ensembl id
+  group_by(ensembl_gene_id) %>% 
+  slice_max(median, n = 1) %>%
+  ungroup() %>% 
+  select(-ensembl_gene_id) %>% 
+  distinct() %>% 
+  
+  #Filter entrez id
+  group_by(entrezgene_id) %>% 
+  slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
+  ungroup() %>% 
+  rename(human_symbol = hgnc_symbol) %>% 
+  filter(human_symbol != "")
+
+#Filter out genes with multiple hgnc_symbols
+hgnc_symbol_dupes = human_ecoli_log2summary %>% 
+  #filter ensembl id with multiple hgnc_symbols
+  get_dupes(human_symbol)
+
+hgnc_symbol_single = hgnc_symbol_dupes %>% 
+  group_by(entrezgene_id) %>% 
+  slice_sample(n = 1)
+
+human_ecoli_log2summary_entrez = human_ecoli_log2summary %>% 
+  filter(!entrezgene_id %in% c(hgnc_symbol_dupes$entrezgene_id)) %>% 
+  bind_rows(hgnc_symbol_single)
+
+human_ecoli_log2summary_entrez %>% 
+  get_dupes(probe)
+
+
 ```
 
+
 ```{r}
-#Filter probe_ids with highest median expression for the same entrezgene_id
-GSE33341_human_counts_log2_summary_annotated_probes = GSE33341_human_log2fc_sample %>% 
-  group_by(probe_id) %>% 
-  summarize(mean = mean(value_raw, na.rm = TRUE),
-            median = median(value_raw, na.rm = T)) %>%  
-  inner_join(annot %>% 
-              rename(probe_id = affy_hg_u133a_2,
-                     human_symbol = hgnc_symbol), 
-            by = "probe_id") %>% 
-  group_by(entrezgene_id) %>% 
-  slice_max(median, n = 1) %>% 
-  select(probe_id, entrezgene_id, human_symbol) %>% 
-  distinct() %>%
-  
-  #Filter probes from the original table
-  inner_join(GSE33341_human_log2fc_sample, 
-             by = "probe_id") %>% 
-  
-  #Annotate hgnc symbols
-  inner_join(HS_MM_Symbol_Entrez %>% 
-               clean_names() %>% 
-               select(human_symbol), 
-             by = join_by("human_symbol")) 
+human_ecoli_log2summary = human_ecoli_log2summary %>% 
+  filter(!human_symbol %in% c(hgnc_symbol_dupes$human_symbol %>% unique())) 
 
-#Filter entrez ids with the highest median for the same symbol ------
+#Modify expression matrix
 
-#Get one entrez_id by human symbol
-entrez_ids_highest_median = GSE33341_human_counts_log2_summary_annotated_probes %>%
-               select(probe_id, entrezgene_id, human_symbol, value_raw) %>%
-               group_by(human_symbol, entrezgene_id) %>%
-               #Get entrezids with highest median
-               summarize(median = median(value_raw, na.rm = T)) %>% 
-               slice_max(median, n = 1) %>%
-               ungroup() %>% 
-               select(human_symbol, entrezgene_id, median) %>% 
-               distinct() %>% 
-    summarise(n = n(), .by = c(human_symbol), entrezgene_id, median)
+#Filtered probes
+human_engerix_log2_filtered_probes = human_exprs_engerixb %>% 
+  as.data.frame() %>% 
+  rownames_to_column("probe") %>% 
+  inner_join(human_engerix_log2summary, by = "probe") %>%   #214,396
+  select(human_symbol,
+         c(human_metadata_filtered$geo_sample))
+#14395
+human_engerix_log2_filtered_probes %>% dim()
 
-#Get not duplicated genes
-entrez_ids_highest_median_notduplicated = entrez_ids_highest_median %>% 
-  filter(n == 1L) %>% 
-  distinct()
+human_engerix_log2_hgnc_symbol = human_engerix_log2_filtered_probes 
 
-#Filter randomly entrezids that have the same value for the same gene (human and mouse)
-entrez_ids_highest_median_duplicated = entrez_ids_highest_median %>%
-  filter(n > 1L) %>%
-  distinct() %>%
-  group_by(human_symbol) %>%
-  #Filter entrez_ids randomly
-  slice_sample(n = 1) %>%
-  select(human_symbol, entrezgene_id, median)
+human_engerix_log2_hgnc_symbol %>% 
+  get_dupes(human_symbol)
 
-#Merge tables
-entrez_ids_selected = entrez_ids_highest_median_notduplicated %>% 
-               bind_rows(entrez_ids_highest_median_duplicated) %>% 
-               select(human_symbol, entrezgene_id)
-
-#Annotate expression table
-GSE33341_human_counts_log2_summary_annotated_genes = GSE33341_human_counts_log2_summary_annotated_probes %>% 
-  ungroup() %>% 
-  inner_join(entrez_ids_selected %>% distinct(),
-             by = join_by("human_symbol","entrezgene_id"))%>% 
-  ungroup() %>% 
-  distinct()
-
-#Check if the duplicated entrez ids were filtered out
-GSE33341_human_counts_log2_summary_annotated_genes %>%          
-        filter(human_symbol == "MAGOH",
-               subject_id == "Ecoli_human_urinary tract_GSM824707") %>% 
-  
-  distinct()
+#Save 
+human_engerix_log2_hgnc_symbol %>% 
+  saveRDS(here("tables", "human_engerix_log2_hgnc_symbol.rds"))
 
 #Save
 GSE33341_human_counts_log2_summary_annotated_genes %>% 
@@ -878,6 +988,111 @@ GSE33341_human_log2fc_sample_wide
 
 
 ##### Differential expression
+
+#### Create ExpressionSet
+
+```{r}
+#Import
+ecoli_human_log2_hgnc_symbol = readRDS(file = here("tables", "GSE33341_human_counts_log2_summary_annotated_probes.rds"))
+  
+ecoli_human_metadata = readRDS(file = here("tables", "GSE33341_human_expression_metadata.rds"))
+
+#Create Expression Set
+eset_human_ecoli <- ExpressionSet(
+  assayData = ecoli_human_log2_hgnc_symbol %>% 
+    column_to_rownames("human_symbol") %>% 
+    as.matrix(),
+  phenoData = AnnotatedDataFrame(ecoli_mouse_metadata))
+
+#Save
+eset_mouse_ecoli %>% saveRDS(file = here("tables", "eset_mouse_ecoli.rds"))
+```
+
+
+
+#### Differential expression (Limma)
+Paired samples design
+```{r}
+
+#Import
+ecoli_mouse_log2_hgnc_symbol = readRDS(file = here("tables", "GSE33341_mouse_counts_log2_summary_annotated_probes.rds"))
+ecoli_mouse_metadata = readRDS(file = here("tables", "ecoli_mouse_metadata.rds"))
+eset_mouse_ecoli %>% saveRDS(file = here("tables", "eset_mouse_ecoli.rds"))
+
+#Create model matrix
+design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
+                       eset_mouse_ecoli) 
+
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+# Estimate the correlation between measurements made on the same subject (paired-samples)
+corfit <- duplicateCorrelation(eset_mouse_ecoli, 
+                               design = design, 
+                               block = eset_mouse_ecoli$subject_id)
+corfit$consensus #-0.06
+
+#Fit Limma model
+fit <- lmFit(eset_mouse_ecoli, 
+             design, 
+             block = eset_mouse_ecoli$subject_id, 
+             correlation = corfit$consensus) #Use inter-subject correlation as input into the linear model fit
+
+#Get conditions
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+#Get contrasts 
+cont.matrix <- makeContrasts(conditionMouse_C57BL.6J_2	 - conditionMouse_C57BL.6J_0,
+                             conditionMouse_C57BL.6J_6	 - conditionMouse_C57BL.6J_0,
+                             conditionMouse_C57BL.6J_12	 - conditionMouse_C57BL.6J_0,
+                             conditionMouse_C57BL.6J_24	 - conditionMouse_C57BL.6J_0,
+                             levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+
+#Get DEGs
+
+## For every contrast
+results_list <- lapply(1:ncol(fit2), function(i) {
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+  })
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs and clean dataset
+all_degs_mouse_ecoli= all_contrasts_degs %>% 
+  select(comparison, everything()) %>% 
+  mutate(comparison = str_replace(comparison, "\\.\\.\\.", "_") %>% 
+           str_replace(., "timepoint", "Time") %>% 
+           str_replace(., "treatment", "")) %>% 
+  separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef")) %>% 
+  mutate(comparisonRef = str_replace(comparisonRef, "treatment", "Time0")) %>% 
+  mutate(condition = case_when(comparisonA == "conditionMouse_C57BL.6J_2"	~ "Ecoli_2h",
+                               comparisonA == "conditionMouse_C57BL.6J_6"	~ "Ecoli_6h",
+                               comparisonA == "conditionMouse_C57BL.6J_12"	~ "Ecoli_12h",
+                               comparisonA == "conditionMouse_C57BL.6J_24"	~ "Ecoli_24h",
+                               T~comparisonA),
+         organism = "Mouse") %>% 
+  select(condition, everything()) %>% 
+  clean_names() %>% 
+  rename(human_symbol = symbol,
+         mean_l2fc = log_fc,
+         ci_upper = ci_r,
+         ci_lower = ci_l)
+	
+# #Save
+all_degs_mouse_ecoli %>% saveRDS(file = here("tables", "Ecoli_GGSE33341_degs_mouse.rds"))
+
+all_degs_mouse_ecoli %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarize(n_degs = n())
+
+```
 
 
 

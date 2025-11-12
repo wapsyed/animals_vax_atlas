@@ -182,7 +182,10 @@ eset_mouse_engerixb <- ExpressionSet(
 
 #Save
 eset_mouse_engerixb %>% saveRDS(file = here("tables", "eset_mouse_engerixb.rds"))
+```
 
+
+```{r}
 #Annotate
 mouse_engerixb_log2fc_filtered_sample_long = mouse_engerixb_log2_hgnc_symbol %>%
   rownames_to_column("human_symbol") %>% 
@@ -246,7 +249,7 @@ fit <- lmFit(eset_mouse,
              design, 
              block = eset_mouse$participant_id, 
              correlation = corfit$consensus) #Use inter-subject correlation as input into the linear model fit
-fit <- eBayes(fit)
+
 #Get conditions
 colnames(design) %>% 
   as.data.frame() %>% 
@@ -258,7 +261,7 @@ cont.matrix <- makeContrasts(conditionEngerix.B_24_PBMC	 - conditionEngerix.B_0_
                              conditionEngerix.B_168_PBMC	 - conditionEngerix.B_0_PBMC,
                              levels=design)
 fit2 <- contrasts.fit(fit, cont.matrix)
-fit2 <- treat(fit2, lfc = 0.0)
+fit2 <- eBayes(fit2)
 
 #Get DEGs
 
@@ -508,36 +511,7 @@ dge_btm_mean_process_mouse %>%
   saveRDS(file = here("tables", "hepatitisb_dge_btm_mean_process_mouse.rds"))
 ```
 
-```{r}
-#Define colors
-btm_annotation %>% pull(group) %>% unique()
 
-immune_colors = c("SIGNAL TRANSDUCTION" = "#708d81",
-                  "CELL CYCLE" = "#06d6a0",
-                  "ECM AND MIGRATION" = "#52b788",
-                  "ENERGY METABOLISM" = "#95d5b2", 
-                  "INNATE RESPONSE" = "#184e77",
-                  "NEUTROPHILS" = "#219ebc",
-                  "NK CELLS" = "#a2d2ff",
-                  "IFN"= "#4361ee",
-                  "MONOCYTES" = "#4cc9f0",
-                  "PLATELETS" = "#7209b7",
-                  "B CELLS" = "#e5383b",
-                  "T CELLS" = "#f72585")
-immune_order = c("SIGNAL TRANSDUCTION",
-                  "CELL CYCLE",
-                  "ECM AND MIGRATION",
-                  "ENERGY METABOLISM", 
-                  "INNATE RESPONSE",
-                  "NEUTROPHILS",
-                  "NK CELLS",
-                  "IFN",
-                  "MONOCYTES",
-                  "PLATELETS",
-                  "B CELLS",
-                  "T CELLS")
-
-```
 
 ##### Using GGPairs
 
@@ -913,7 +887,6 @@ eset_human %>% saveRDS(file = here("tables", "EngerixB_GSE124533_degs_human.rds"
 
 #####Limma
 ```{r}
-
 #Import
 human_engerix_log2_hgnc_symbol = readRDS(here("tables", "human_engerix_log2_hgnc_symbol.rds"))
 human_metadata_filtered = readRDS(file = here("tables", "GSE124533_metadata_filtered.rds"))
@@ -931,36 +904,32 @@ corfit <- duplicateCorrelation(eset_human,
                                block = eset_human$participant_id)
 corfit$consensus #0.22
 
-# Fit Limma model
+# Fit
 engerix_human_limma_fit <- lmFit(eset_human, 
-                             design, 
-                             block = eset_human$participant_id, 
-                             correlation = corfit$consensus)
+                                 design, 
+                                 block = eset_human$participant_id, 
+                                 correlation = corfit$consensus)
 
-engerix_human_limma_fit = engerix_human_limma_fit %>% 
-  eBayes()
-
-#Contrasts
-colnames(design) %>% 
-  as.data.frame() %>% 
-  arrange(.)
-
-cont.matrix <- makeContrasts(timepoint1 - timepoint0,
-                             timepoint3 - timepoint0,
-                             timepoint7 - timepoint0,
-                             levels=design)
+# Contrasts
+cont.matrix <- makeContrasts(
+  timepoint1 - timepoint0,
+  timepoint3 - timepoint0,
+  timepoint7 - timepoint0,
+  levels = design
+)
 
 fit2 <- contrasts.fit(engerix_human_limma_fit, cont.matrix)
-fit2 <- treat(fit2, lfc = 0.0)
 
-#Get DEGs ------
-## For every contrast
+# eBayes
+fit2 <- eBayes(fit2)
+
+# Extract
 results_list <- lapply(1:ncol(fit2), function(i) {
-  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
-    mutate(comparison = colnames(fit2)[i]) %>% 
+  topTable(fit2, coef = i, adjust.method = "fdr", number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>%
     rownames_to_column("symbol")
-    
 })
+
 
 # Combine all results
 all_contrasts_degs <- bind_rows(results_list)
@@ -994,26 +963,6 @@ all_degs_human %>%
 #Save
 all_degs_human %>% saveRDS(file = here("tables", "Engerix_GSE124533_degs_human.rds"))
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1393,14 +1342,18 @@ human_mouse_engerix_metadata =
   readRDS(file = here("tables", "engerixb_human_mouse_engerix_metadata.rds"))
 
 all_degs_human = readRDS(file = here("tables", "Engerix_GSE124533_degs_human.rds")) %>% 
-  clean_names()
+  mutate(timepoint = str_remove(comparison_a, "Time"))
 all_degs_mouse = readRDS(file = here("tables", "EngerixB_GSE120661_degs_mouse.rds")) %>% 
-  clean_names()
+  mutate(timepoint = str_remove(condition, "Engerix_") %>% str_remove("_PBMC") %>% as.numeric(),
+         timepoint = timepoint /24,
+         timepoint = timepoint %>% as.character())
+
 
 
 #Pivot wider
-human_mouse_engerixb_log2fc_avg_wide = human_mouse_engerixb_log2fc_avg %>% 
-  select(organism, human_symbol, timepoint, mean_log2fc) %>% 
+human_mouse_engerixb_log2fc_avg_wide = all_degs_human %>% 
+  bind_rows(all_degs_mouse) %>% 
+  select(organism, human_symbol, timepoint, mean_log2fc = mean_l2fc) %>% 
   pivot_wider(names_from = "organism",
               values_from = "mean_log2fc") %>% 
   #Add padj columns
@@ -1515,7 +1468,7 @@ human_mouse_log2fc_log2fc_avg_wide_scatterplot %>%
 
 Single timepoint
 ```{r fig.height=3, fig.width=3}
-human_mouse_log2fc_degs_scatterplot_singletimepoint = human_mouse_log2fc_log2fc_avg_wide %>% 
+human_mouse_log2fc_degs_scatterplot_singletimepoint = human_mouse_engerixb_log2fc_avg_wide %>% 
   filter(timepoint == 7) %>% 
   
   #Filter DEGs only
@@ -1543,7 +1496,7 @@ human_mouse_log2fc_degs_scatterplot_singletimepoint = human_mouse_log2fc_log2fc_
              alpha = 1.5,
              size = 1,
              pch = 21,
-             data = human_mouse_log2fc_log2fc_avg_wide %>%
+             data = human_mouse_engerixb_log2fc_avg_wide %>%
                filter(timepoint == 7) %>% 
                #Filter DEGs in both organisms, same sign
                filter(padj_human <= 0.05 & padj_mouse <= 0.05 & sign(Human) == sign(Mouse))) +
@@ -1554,7 +1507,7 @@ human_mouse_log2fc_degs_scatterplot_singletimepoint = human_mouse_log2fc_log2fc_
              alpha = 1.5,
              size = 1,
              pch = 21,
-             data = human_mouse_log2fc_log2fc_avg_wide %>%
+             data = human_mouse_engerixb_log2fc_avg_wide %>%
                filter(timepoint == 7) %>% 
                filter(human_symbol %in% c(ImmuneGO_BTM_grouped_genes$genes)) %>% 
                #Filter DEGs in both organisms, same sign
@@ -1563,7 +1516,7 @@ human_mouse_log2fc_degs_scatterplot_singletimepoint = human_mouse_log2fc_log2fc_
   #Add linear models
   stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
   stat_smooth(method = "lm", geom = "line", color = "#4DBBD5FF", alpha = 0.5, se = F, size = 1,
-              data = human_mouse_log2fc_log2fc_avg_wide %>%
+              data = human_mouse_engerixb_log2fc_avg_wide %>%
                 filter(timepoint == 7) %>% 
                filter(human_symbol %in% c(ImmuneGO_BTM_grouped_genes$genes)) %>% 
                #Filter DEGs in both organisms, same sign
@@ -2612,24 +2565,30 @@ Import data
 #ImmuneGO ontologies
 ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
 
+human_mouse_engerix_metadata = 
+  readRDS(file = here("tables", "engerixb_human_mouse_engerix_metadata.rds"))
 #Import DEGs table
-all_degs_mouse_engerixb = readRDS(file = here("tables", "EngerixB_GSE120661_degs_mouse.rds"))
-
-human_mouse_engerix_metadata =
-  readRDS(file = here("tables", "engerixb_human_mouse_engerix_metadata.rds")) %>% 
-  mutate(timepoint = as.character(timepoint))
-
-dge_long_genes = human_mouse_engerixb_log2fc_avg  %>% 
-  rename(log2fc = mean_log2fc, se = se_log2fc, sd = sd_log2fc, adj_p_val = p_adj, symbol = human_symbol) 
+all_degs_human = readRDS(file = here("tables", "Engerix_GSE124533_degs_human.rds")) %>% 
+  mutate(timepoint = str_remove(comparison_a, "Time"))
+all_degs_mouse = readRDS(file = here("tables", "EngerixB_GSE120661_degs_mouse.rds")) %>% 
+  mutate(timepoint = str_remove(condition, "Engerix_") %>% str_remove("_PBMC") %>% as.numeric(),
+         timepoint = timepoint /24,
+         timepoint = timepoint %>% as.character())
 
 
-dge_long_genes = dge_long_genes %>% 
+
+dge_long_genes = all_degs_human  %>% 
+  bind_rows(all_degs_mouse) %>% 
+  rename(symbol = human_symbol, log2fc = mean_l2fc, adj_p_val = adj_p_val)  %>% 
   inner_join(human_mouse_engerix_metadata %>%
                group_by(organism, timepoint) %>%
-               summarize(n = n()),
-               by = join_by("organism", "timepoint"))
+               summarize(n = n()) %>% 
+               mutate(timepoint = as.character(timepoint)),
+               by = join_by("organism", "timepoint")) %>% 
+  filter(timepoint == 7)
+
 #All genes
-genes_roc_allgenes = dge_long_genes
+genes_roc_allgenes = dge_long_genes 
 #Filter immune genes
 genes_roc_allgenes_immunegenes = dge_long_genes %>% 
   filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
@@ -2651,7 +2610,6 @@ genes_roc_DEGs_immune = dge_long_genes %>%
              by = join_by("symbol", "timepoint")) %>%
   #Filter immune genes only
   filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
-
 ```
 
 Calculate ROC curve
@@ -2660,20 +2618,21 @@ Inputs
 ```{r fig.height=4, fig.width=10}
 set.seed(123)
 ######### Input -----
-filename = "EngerixB_All_OnlyImmune"
-genes_df_input = bind_rows(
-  genes_roc_allgenes %>% mutate(model_type = "Mouse"),
-  genes_roc_allgenes_immunegenes %>% mutate(model_type = "Immune")
-)
-
-
-# filename = "EngerixB_AllDEGs_HumanDEGs_OnlyImmune"
+# filename = "EngerixB_All_OnlyImmune"
 # genes_df_input = bind_rows(
-#   genes_roc_DEGs_all %>% mutate(model_type = "Mouse"),
-#   genes_roc_DEGs_immune %>% mutate(model_type = "Immune")
+#   genes_roc_allgenes %>% mutate(model_type = "Mouse"),
+#   genes_roc_allgenes_immunegenes %>% mutate(model_type = "Immune")
 # )
 
+
+filename = "EngerixB_AllDEGs_HumanDEGs_OnlyImmune"
+genes_df_input = bind_rows(
+  genes_roc_DEGs_all %>% mutate(model_type = "Mouse"),
+  genes_roc_DEGs_immune %>% mutate(model_type = "Immune")
+)
+
 ```
+
 
 
 
@@ -2792,13 +2751,13 @@ classified_df_probs_down = truth_human_down %>%
 #=====================================================
 
 roc_curve_up_notup = classified_df_probs_up %>% 
-  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human")) %>%
   group_by(model, timepoint) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Up")
 
 roc_curve_down_notdown = classified_df_probs_down %>% 
-  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human")) %>%
   group_by(model, timepoint) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Down")
