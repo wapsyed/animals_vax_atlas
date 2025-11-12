@@ -906,56 +906,34 @@ human_ecoli_log2summary = GSE33341_human_exprs %>%
   slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
   ungroup() %>% 
   rename(human_symbol = hgnc_symbol) %>% 
-  filter(human_symbol != "")
-
-#Filter out genes with multiple hgnc_symbols
-hgnc_symbol_dupes = human_ecoli_log2summary %>% 
-  #filter ensembl id with multiple hgnc_symbols
-  get_dupes(human_symbol)
-
-hgnc_symbol_single = hgnc_symbol_dupes %>% 
-  group_by(entrezgene_id) %>% 
-  slice_sample(n = 1)
-
-human_ecoli_log2summary_entrez = human_ecoli_log2summary %>% 
-  filter(!entrezgene_id %in% c(hgnc_symbol_dupes$entrezgene_id)) %>% 
-  bind_rows(hgnc_symbol_single)
+  filter(human_symbol != "") %>%
+  group_by(entrezgene_id) %>%
+  slice_sample(n = 1) %>%  # one line per entrezgene_id
+  ungroup() %>%
+  distinct(probe, .keep_all = TRUE)  # remove dup probes
 
 human_ecoli_log2summary_entrez %>% 
   get_dupes(probe)
 
 
-```
-
-
-```{r}
-human_ecoli_log2summary = human_ecoli_log2summary %>% 
-  filter(!human_symbol %in% c(hgnc_symbol_dupes$human_symbol %>% unique())) 
-
-#Modify expression matrix
 
 #Filtered probes
-human_engerix_log2_filtered_probes = human_exprs_engerixb %>% 
-  as.data.frame() %>% 
-  rownames_to_column("probe") %>% 
-  inner_join(human_engerix_log2summary, by = "probe") %>%   #214,396
+human_ecoli_log2_filtered_probes = GSE33341_human_exprs %>%
+  rename(probe = probe_id) %>% 
+  inner_join(human_ecoli_log2summary_entrez, by = "probe") %>%   #214,396
   select(human_symbol,
-         c(human_metadata_filtered$geo_sample))
+         c(human_metadata$geo_sample))
 #14395
-human_engerix_log2_filtered_probes %>% dim()
+human_ecoli_log2_filtered_probes %>% dim()
 
-human_engerix_log2_hgnc_symbol = human_engerix_log2_filtered_probes 
+human_ecoli_log2_filtered_symbol = human_ecoli_log2_filtered_probes 
 
-human_engerix_log2_hgnc_symbol %>% 
+human_ecoli_log2_filtered_symbol %>% 
   get_dupes(human_symbol)
 
 #Save 
-human_engerix_log2_hgnc_symbol %>% 
-  saveRDS(here("tables", "human_engerix_log2_hgnc_symbol.rds"))
-
-#Save
-GSE33341_human_counts_log2_summary_annotated_genes %>% 
-  saveRDS(file = here("tables", "GSE33341_human_counts_log2_summary_annotated_probes.rds"))
+human_ecoli_log2_filtered_symbol %>% 
+  saveRDS(here("tables", "human_ecoli_log2_filtered_symbol.rds"))
 ```
 
 ##### Import
@@ -963,7 +941,7 @@ GSE33341_human_counts_log2_summary_annotated_genes %>%
 ```{r}
 #Import
 GSE33341_human_counts_log2_summary_annotated_probes =
-  readRDS(file = here("tables", "GSE33341_human_counts_log2_summary_annotated_probes.rds"))
+  readRDS(file = here("tables", "human_ecoli_log2_filtered_symbol.rds"))
 
 #Check duplicates
 GSE33341_human_counts_log2_summary_annotated_probes %>% 
@@ -993,19 +971,25 @@ GSE33341_human_log2fc_sample_wide
 
 ```{r}
 #Import
-ecoli_human_log2_hgnc_symbol = readRDS(file = here("tables", "GSE33341_human_counts_log2_summary_annotated_probes.rds"))
+human_ecoli_log2_filtered_symbol = readRDS(file = here("tables", "human_ecoli_log2_filtered_symbol.rds"))
   
-ecoli_human_metadata = readRDS(file = here("tables", "GSE33341_human_expression_metadata.rds"))
+ecoli_human_metadata = readRDS(file = here("tables", "ecoli_human_metadata.rds")) %>% 
+  mutate(timepoint = as.factor(timepoint),
+         sex = as.factor(sex),
+         age = scale(as.numeric(age)),
+         ethnicity = as.factor(ethnicity),
+         status = as.factor(status),
+         site_infection = as.factor(site_infection))
 
 #Create Expression Set
 eset_human_ecoli <- ExpressionSet(
-  assayData = ecoli_human_log2_hgnc_symbol %>% 
+  assayData = human_ecoli_log2_filtered_symbol %>% 
     column_to_rownames("human_symbol") %>% 
     as.matrix(),
-  phenoData = AnnotatedDataFrame(ecoli_mouse_metadata))
+  phenoData = AnnotatedDataFrame(ecoli_human_metadata))
 
 #Save
-eset_mouse_ecoli %>% saveRDS(file = here("tables", "eset_mouse_ecoli.rds"))
+eset_human_ecoli %>% saveRDS(file = here("tables", "eset_human_ecoli.rds"))
 ```
 
 
@@ -1015,27 +999,26 @@ Paired samples design
 ```{r}
 
 #Import
-ecoli_mouse_log2_hgnc_symbol = readRDS(file = here("tables", "GSE33341_mouse_counts_log2_summary_annotated_probes.rds"))
-ecoli_mouse_metadata = readRDS(file = here("tables", "ecoli_mouse_metadata.rds"))
-eset_mouse_ecoli %>% saveRDS(file = here("tables", "eset_mouse_ecoli.rds"))
+human_ecoli_log2_filtered_symbol = readRDS(file = here("tables", "human_ecoli_log2_filtered_symbol.rds"))
+ecoli_human_metadata = readRDS(file = here("tables", "ecoli_human_metadata.rds"))
+eset_human_ecoli = readRDS(file = here("tables", "eset_human_ecoli.rds"))
+
 
 #Create model matrix
-design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
-                       eset_mouse_ecoli) 
+design <- model.matrix(~ site_infection + 
+                         age +
+                         sex +
+                         ethnicity +
+                         batch +
+                         status + 
+                         0,
+                       eset_human_ecoli) 
 
 colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
 
-# Estimate the correlation between measurements made on the same subject (paired-samples)
-corfit <- duplicateCorrelation(eset_mouse_ecoli, 
-                               design = design, 
-                               block = eset_mouse_ecoli$subject_id)
-corfit$consensus #-0.06
-
 #Fit Limma model
-fit <- lmFit(eset_mouse_ecoli, 
-             design, 
-             block = eset_mouse_ecoli$subject_id, 
-             correlation = corfit$consensus) #Use inter-subject correlation as input into the linear model fit
+fit <- lmFit(eset_human_ecoli, 
+             design) 
 
 #Get conditions
 colnames(design) %>% 
