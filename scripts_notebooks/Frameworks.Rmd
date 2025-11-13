@@ -6,7 +6,7 @@ editor_options:
     wrap: 72
 ---
 
-# Download datasets
+# 1. Download datasets
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
 #Download datasets
@@ -244,7 +244,7 @@ GSE120661_samples_pbmc %>%
 ```
 
 
-# Differential gene expression
+# 2. Differential gene expression
 ## Pre-processing
 ### Calculate Log2FC manually
 ```{r}
@@ -595,7 +595,7 @@ annotation_metadata = dge_long_genes %>%
 
 
 #Inputs
-filename = "Example"
+filename = "Framework_Example"
 ```
 
 Perform calculations
@@ -987,8 +987,173 @@ heatmap_plot_all
 
 ```
 
+### Stacked barplot of overlapped genes
+```{r fig.width=10, fig.height=4}
+# Get best and worst predicted genes ----
+## Which genes have the least zscore?
 
-#Genes correlation, intra- and inter-species
+#Import datasets
+pairwise_human_fit_measures = readRDS(here("tables", "influenza_fluad_human_mouse_fit_dge_pairwise2human.rds")) %>% 
+  rename(human_symbol = symbol)
+ImmuneGO_Mouse_Manual_genes <- read_excel(here("VaxGO", "ImmuneGO_Mouse.xlsx")) %>% 
+  separate_rows(genes)
+
+
+degs_wide_human_mouse = pairwise_human_fit_measures
+
+#Get total genes by each condition
+degs_mouse = degs_wide_human_mouse %>% 
+  filter(pval_adj_mouse <= 0.05)
+degs_human = degs_wide_human_mouse %>% 
+  filter(pval_adj_human <= 0.05)
+degs_fit = degs_wide_human_mouse %>% 
+  filter(pval_adj_fit <= 0.05)
+degs_mouse_summarize = degs_mouse %>% 
+    group_by(timepoint) %>% 
+  summarize(n_genes = n(),
+            condition = "Mouse") %>% 
+  bind_rows(degs_human %>%
+              group_by(timepoint) %>%
+              summarize(n_genes = n(),
+                        condition = "Human"))
+
+#Print
+degs_mouse_summarize
+```
+
+
+```{r fig.width=10, fig.height=4}
+#Get overlap -----
+#Get symbols
+degs_mouse_genes = degs_mouse %>% 
+  select(human_symbol, timepoint) %>% 
+  distinct()
+
+degs_human_genes = degs_human %>% 
+  select(human_symbol, timepoint) %>% 
+  distinct()
+
+#Inner join, Mouse and Human ------
+
+#Mouse
+degs_human_and_mouse_genes = degs_human_genes %>% 
+  inner_join(degs_mouse_genes, 
+             by = join_by("human_symbol", "timepoint")) %>% 
+  mutate(condition = "Mouse AND Human",
+         comparison = "Mouse vs Human",
+         organism = "Mouse",
+         group = "Common")
+
+#Duplicate rows for human
+degs_human_and_mouse_genes_human = degs_human_and_mouse_genes %>% 
+  mutate(organism = "Human")
+
+
+#Anti join, Human vs Mouse -------
+#Human
+#Human vs Mouse
+degs_human_Not_mouse_genes = degs_human_genes %>% 
+  anti_join(degs_mouse_genes, 
+             by = join_by("human_symbol", "timepoint")) %>% 
+  mutate(condition = "Human NOT Mouse", 
+         comparison = "Mouse vs Human",
+         organism = "Human",
+         group = "Not common")
+
+#Models
+#Mouse vs Human
+degs_mouse_Not_human_genes = degs_mouse_genes %>% 
+  anti_join(degs_human_genes, 
+             by = join_by("human_symbol", "timepoint")) %>% 
+  mutate(condition = "Mouse NOT Human",
+         organism = "Mouse",
+         comparison = "Mouse vs Human",
+         group = "Not common")
+
+
+#Merge data ------
+degs_human_mouse_overlap_genes = 
+  bind_rows(degs_human_and_mouse_genes,
+            degs_human_and_mouse_genes_human,
+            degs_human_Not_mouse_genes,
+            degs_mouse_Not_human_genes 
+            )
+
+#Classify by same and exclusive DEGs -----
+degs_human_mouse_overlap_genes_summary = degs_human_mouse_overlap_genes %>% 
+  group_by(condition, timepoint) %>% 
+  summarize(n = n(),
+            organism,
+            comparison,
+            group) %>% 
+  distinct()
+
+#Print
+degs_human_mouse_overlap_genes_summary
+```
+
+
+### Plot overlap (bars)
+
+```{r fig.height=5, fig.width=4}
+#Plot overlap
+degs_human_mouse_overlap_common_plot = degs_human_mouse_overlap_genes_summary %>%
+  ggplot() +
+  aes(x = organism,
+      y = n,
+      fill = fct_rev(group)) + 
+  geom_col(alpha = 1) +
+  facet_nested(rows = vars(fct_rev(comparison)), 
+               cols = vars(paste("Day", timepoint)), 
+               scales = "free", 
+               nest_line = element_line(linetype = 1, color = "black", size = 2),
+               independent = "x") +
+  scale_y_continuous(n.breaks = 5,
+                     expand = c(0.01, 0.01)) +
+  scale_fill_manual(values = c("Common" = "#4DBBD5FF",
+                               "Not common" = "gray90"))    +
+  scale_color_manual(values = c("Common" = "#4DBBD5FF",
+                               "Not common" = "gray90"))    +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.text.y = element_text(hjust = 0.5, size = 10),
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+    axis.text.y = element_text(size = 10),
+    panel.spacing.x = unit(0, "lines"), 
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    legend.position = "top",
+    legend.position.inside = c(0.5, 0.95),
+    legend.direction = "horizontal", 
+    legend.key.width = unit(0.4, 'cm'),
+    legend.key.height = unit(0.4, 'cm'),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 7, vjust = 0.5, hjust = -0.2)
+  ) +
+  labs(
+    x = "",
+    y = "Total",
+    color = ""
+    ) 
+#Print
+degs_human_mouse_overlap_common_plot
+
+#Save
+degs_human_mouse_overlap_common_plot %>%
+  ggsave(filename = here("Figures", "framework_human_mouse_dge_degs_overlap_barplot.png"),
+         width = 4,
+         height = 5)
+```
+
+
+
+
+
+
+
+# 3. Correlation analysis
+## Genes correlation, intra- and inter-species
 
 Import
 
@@ -1484,7 +1649,366 @@ correlation_long_all_mouse_human_timepoints_summary_plot %>%
 
 
 
-# Found in translation
+
+
+
+## Zscores - Mouse vs Human
+
+Get highly correlated genes and discretize by quantile
+
+#### Mouse
+```{r fig.height=5, fig.width=10}
+#Get highly correlated genes and discretize by quantile -----
+#By zscores ------
+#Mouse
+zscore_genes_mouse = pairwise_human_fit_measures %>% 
+  select(human_symbol,timepoint,  mean_human, mean_mouse, pval_adj_mouse, pval_adj_human, z_score_h2m) %>% 
+  arrange(z_score_h2m, human_symbol) %>% 
+  group_by(timepoint) %>%
+                    arrange(abs(z_score_h2m)) %>% 
+  mutate(diff = mean_human - mean_mouse,
+         diff = round(diff, 3),
+         mean_human = round(mean_human, 3),
+         mean_mouse = round(mean_mouse, 3),
+         comparison = "Human vs Mouse") %>% 
+  rename(zscore = z_score_h2m,
+         mean_model = mean_mouse,
+         pval_model_adj = pval_adj_mouse) %>% 
+  
+  #Discretize by quantile (zscore)
+  mutate(
+    quartile_label = cut(abs(zscore),
+                         breaks = quantile(abs(zscore),
+                                           probs = c(0, 0.10, 0.25, 0.5, 0.75, 1),
+                                           na.rm = TRUE),
+                         include.lowest = TRUE,
+                         labels = c("Q10", "Q25", "Q50", "Q75", "Q100")),
+    timepoint_day = paste0("Day ", timepoint)) %>% 
+  mutate(pval_model_adj = if_else(pval_model_adj <= 0.05, "DEG", "Not DEG"),
+         pval_human_adj = if_else(pval_adj_human <= 0.05, "DEG", "Not DEG")) 
+
+#Pivot and sum only DEGs
+zscore_genes_mouse %>% 
+  ungroup() %>% 
+  select(human_symbol, timepoint, pval_model_adj, pval_human_adj) %>% 
+  pivot_longer(cols = c(pval_model_adj, pval_human_adj),
+               names_to =  "model",
+               values_to = "deg") %>% 
+  group_by(timepoint, model, deg) %>% 
+  summarize(n = n()) %>% 
+  filter(deg =="DEG")
+```
+
+
+Summarize genes by quantile
+```{r fig.height=5, fig.width=10}
+#Summarize genes by quantile ------
+degs_pos_neg_summary_quantiles_best_worst_data <- zscore_genes_mouse %>%
+  filter(pval_model_adj == pval_human_adj,
+         pval_model_adj == "DEG") %>% 
+  mutate(
+    quartiles_grouped = case_when(
+      quartile_label %in% c("Q10", "Q25") ~ "<=Q25",
+      quartile_label %in% c("Q75", "Q100") ~ ">=Q75",
+      TRUE ~ NA_character_)) %>%
+  drop_na(quartiles_grouped) %>% 
+  group_by(comparison, timepoint, quartiles_grouped) %>%
+  summarize(n = n()) %>% 
+  mutate(condition = case_when(comparison == "Human vs Mouse" ~ paste("Mouse", quartiles_grouped),
+                               T~comparison)) %>% 
+  ungroup() 
+
+#Print
+degs_pos_neg_summary_quantiles_best_worst_data
+```
+
+### Scatterplot of correlation
+```{r fig.height=4, fig.width=8}
+#Scatterplot of correlation --------
+#Get all genes by quantile
+quantiles <- zscore_genes_mouse %>%
+  group_by(comparison) %>%
+  summarise(
+    q10  = quantile(abs(zscore), probs = 0.10, na.rm = TRUE),
+    q25  = quantile(abs(zscore), probs = 0.25, na.rm = TRUE),
+    q50  = quantile(abs(zscore), probs = 0.50, na.rm = TRUE),
+    q75  = quantile(abs(zscore), probs = 0.75, na.rm = TRUE),
+    q100 = quantile(abs(zscore), probs = 1.00, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#Cumulative quantiles
+diff_correlation_plot_data <- zscore_genes_mouse %>%
+  ungroup() %>%
+  left_join(quantiles, by = "comparison") %>%
+  mutate(
+    Q10  = abs(zscore) <= q10,
+    Q25  = abs(zscore) <= q25,
+    Q50  = abs(zscore) <= q50,
+    Q75  = abs(zscore) <= q75,
+    Q100 = abs(zscore) <= q100
+  ) %>%
+  pivot_longer(
+    cols = c(Q10, Q25, Q50, Q75, Q100),
+    names_to = "quantile_label_grouped",
+    values_to = "in_quantile"
+  ) %>%
+  mutate(
+    quantile_label_grouped = fct_relevel(quantile_label_grouped, "Q10", "Q25", "Q50", "Q75", "Q100")
+  ) %>%
+  filter(in_quantile) %>%
+  select(-in_quantile)
+
+#Print
+diff_correlation_plot_data
+
+#Diagnostics
+diff_correlation_plot_data %>% 
+  ungroup() %>% 
+  select(human_symbol, timepoint, pval_model_adj, pval_human_adj, comparison) %>% 
+  pivot_longer(cols = c(pval_model_adj, pval_human_adj),
+               names_to =  "model",
+               values_to = "deg") %>% 
+  group_by(comparison, model, timepoint, deg) %>% 
+  summarize(n = n()) %>% 
+  filter(deg =="DEG")
+```
+
+
+#### Mouse
+```{r fig.height=4, fig.width=8}
+#Plot correlation -----
+#Mouse
+abs_diff_correlation_plot_data_split_plot_mouse = diff_correlation_plot_data %>% 
+  #Get only DEGs (in human OR mouse)
+  filter(comparison == "Human vs Mouse",
+         pval_model_adj == "DEG" | pval_human_adj == "DEG") %>% 
+  ggplot() +
+  aes(
+    x = mean_model,
+    y = mean_human
+    ) +
+  facet_wrap(~paste("Day", timepoint) ~comparison) +
+  #All points, colored by differences
+  geom_point(
+             aes(color = quartile_label,
+                 fill = quartile_label),
+             pch = 21) +
+
+  # #Same DEGs (WORST)
+  geom_point(color = "#4DBBD5FF",
+             fill = "#4DBBD5FF",
+             alpha = 1,
+             size = 1,
+             pch = 21,
+             data = zscore_genes_mouse %>%
+               filter(comparison == "Human vs Mouse") %>%
+               filter(pval_model_adj == pval_human_adj,
+                      pval_model_adj == "DEG") %>%
+               filter(quartile_label %in% c("Q50", "Q75", "Q100"))) +
+  
+  #Same DEGs (Worst, Immune)
+  geom_point(color = "#4361ee",
+             fill = "#4361ee",
+             alpha = 1,
+             size = 1, 
+             pch = 21,
+             data = zscore_genes_mouse %>%
+               filter(human_symbol %in% c(ImmuneGO_BTM_grouped_genes$genes)) %>% 
+               filter(comparison == "Human vs Mouse") %>%
+               filter(pval_model_adj == pval_human_adj,
+                      pval_model_adj == "DEG") %>%
+               filter(quartile_label %in% c("Q50", "Q75", "Q100"))) +
+  #Same DEGs (BEST)
+  geom_point(color = "black",
+             fill = "#4DBBD5FF",
+             alpha = 1,
+             size = 2,
+             pch = 21,
+             data = zscore_genes_mouse %>%
+               filter(comparison == "Human vs Mouse") %>%
+               filter(pval_model_adj == pval_human_adj,
+                      pval_model_adj == "DEG") %>%
+               filter(quartile_label %in% c(
+                 "Q10",
+                 "Q25"
+                 ))) +
+  
+  #Same DEGs (Best, Immune)
+  geom_point(color = "black",
+             fill = "#4361ee",
+             alpha = 1,
+             size = 2,
+             pch = 21,
+             data = zscore_genes_mouse %>%
+               filter(human_symbol %in% c(ImmuneGO_BTM_grouped_genes$genes)) %>% 
+               filter(comparison == "Human vs Mouse") %>%
+               filter(pval_model_adj == pval_human_adj,
+                      pval_model_adj == "DEG") %>%
+               filter(quartile_label %in% c(
+                 "Q10",
+                 "Q25"
+                 ))) +
+   #Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  
+  scale_color_manual(values = c("Q10" = "black",
+                               "Q25" = "gray25",
+                               "Q50" = "gray50",
+                               "Q75" = "gray75",
+                               "Q100" = "gray90")) +
+  scale_fill_manual(values = c("Q10" = "black",
+                               "Q25" = "gray25",
+                               "Q50" = "gray50",
+                               "Q75" = "gray75",
+                               "Q100" = "gray90")) +
+  scale_x_continuous(limits = c(-4, 4)) +
+  scale_y_continuous(limits = c(-2, 4)) +
+  
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        legend.position = "right",
+        legend.direction = "vertical",
+        legend.key.width = unit(0.4, 'cm'),
+        legend.key.height = unit(0.4, 'cm'),
+        legend.key = element_blank(),
+        legend.title = element_text(size = 10, vjust = 0.9),
+        legend.text = element_text(size = 7, vjust = 0.5, hjust = -0.2)) +
+  labs(x = "Mouse L2FC",
+       y = "Human L2FC",
+       alpha = "Quantiles",
+       fill = "Quantiles",
+       color = "|Z|")
+
+abs_diff_correlation_plot_data_split_plot_mouse
+
+```
+
+
+
+### ORA: best and worst quartiles
+
+#### MSigDB Hallmarks
+```{r fig.width=10, fig.height= 8}
+# Enrichment analysis -------
+organism = "org.Hs.eg.db"
+#Hallmarks
+#Retrieve human H (hallmark) gene set
+msigdbr_raw <- msigdbr(species = "human", category = "H") 
+#Clean
+msigdbr_df = msigdbr_raw %>% 
+  select(process = gs_name, genes = gene_symbol) %>% 
+  mutate(process = str_remove(process, "HALLMARK_"))
+
+#Discretize by quartile
+df_genes_best_worst_fit_mouse = zscore_genes_mouse %>% 
+  ungroup() %>% 
+  mutate(quartiles_grouped = case_when(
+    quartile_label %in% c("Q10", "Q25") ~ "<Q25",
+    quartile_label %in% c("Q75", "Q100") ~ ">Q75",
+    TRUE ~ quartile_label)) %>% 
+    mutate(condition = paste0(comparison, "", quartiles_grouped, " (", timepoint_day,")")) %>% 
+  filter(quartiles_grouped != "Q50") %>% 
+  select(genes = human_symbol,
+         condition)
+
+#Run ORA Hallmarks
+ora_all_diff_hallmark <- enricher_condition(
+  df = df_genes_best_worst_fit_mouse,
+  term2gene_df = msigdbr_df) %>% 
+  mutate(log_p_adjust = -log(p_adjust)) %>% 
+  mutate(description = str_replace_all(description, "_", " ")) %>% 
+  mutate(timepoint = str_extract(condition, "(?<=\\(Day )\\d+")) %>% 
+  mutate(comparison = case_when(str_detect(condition, "FIT") ~ "FIT",
+                                str_detect(condition, "Mouse") ~ "Mouse"))
+
+#Save
+ora_all_diff_hallmark %>% 
+  saveRDS(file = here("tables", "Framework_Example_ora_all_diff_hallmark.rds"))
+
+#Print
+ora_all_diff_hallmark
+```
+
+Plot
+```{r fig.height=8, fig.width=8}
+##### Plot ORA Hallmark ------
+#Import
+ora_all_diff_hallmark = readRDS(file = here("tables", "Framework_Example_ora_all_diff_hallmark.rds"))
+#Cluster rows
+row_clustered = ora_all_diff_hallmark %>% 
+    dplyr::select(condition, description, log_p_adjust) %>% 
+    distinct() %>% 
+    pivot_wider(names_from = "condition",
+                values_from= "log_p_adjust") %>%
+    column_to_rownames("description") %>% 
+    as.matrix() %>% 
+    replace(is.na(.), 0) %>% 
+    dist(.) %>% 
+    hclust()
+
+#Plot
+ora_all_diff_hallmark_heatmap = ora_all_diff_hallmark %>% 
+  clean_names() %>% 
+  filter(description %in% c(row_clustered$labels)) %>% 
+  ungroup() %>% 
+  select(condition, description, log_p_adjust, p_adjust, everything()) %>% 
+    mutate(signific = case_when(p_adjust <= 0.10 ~ "*",
+                              p_adjust <= 0.25 ~ "-",
+                              p_adjust <= 0.50 ~ "/",
+                              p_adjust <= 0.05 ~ "**",
+                              TRUE ~ ""),
+           quantile = str_extract(condition, "Q\\d{2,3}"),
+        condition = paste(quantile)) %>% 
+  ggplot(aes(x=condition, y = str_to_upper(description), fill = log_p_adjust)) +
+  geom_tile(color = "black", 
+            size = 0.2, na.rm = F, stat = "identity") +
+  geom_text(aes(label = signific), size = 4, vjust = 0.5, color = "black") +
+  scale_fill_gradient2(
+        low = "white",     
+        high = "#4DBBD5FF",   
+        n.breaks = 3,
+        oob = scales::squish,
+        limits = c(0, 4),      # fixa o intervalo
+        name = "-Log(FDR)") +
+    theme_vaxgo() +
+    theme(axis.text = element_text(color = "black", size = 8) ,
+          legend.text = element_text(size = 8),
+          legend.title = element_text(size = 8),
+          legend.key.width = unit(0.2, 'cm'),
+          legend.key.height = unit(0.4, 'cm'),
+          axis.line.y  = element_blank(),
+          axis.text.x = element_text(angle = 0, vjust = 1, hjust=0.5),
+          axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
+          axis.ticks = element_blank(),
+          strip.background.x = element_rect(fill = "black"),
+          strip.text.x = element_text(color = "white"),
+          panel.grid = element_blank(),
+          plot.margin = margin(0, 0.5, 0, 1, unit = "cm"),
+          legend.direction = "horizontal",
+          legend.position = "top") +
+    scale_y_discrete(position = "right") +
+     labs(x = "",
+         y = "",
+         title = "ORA, MSigDB Hallmarks") +
+  facet_nested(~ paste("Day", timepoint) + fct_rev(comparison), scales = "free", space = "free") 
+
+#Print
+ora_all_diff_hallmark_heatmap
+
+#Save
+ora_all_diff_hallmark_heatmap %>%
+  ggsave(filename = here("Figures", "Framework_Example_ORA_Best_Worst_heatmap.png"),
+         width = 8,
+         height = 8)
+```
+
+
+
+
+# 4. Prediction: Found in translation
 Ref: Normand, R., Du, W., Briller, M. et al. Found In Translation: a machine learning model for mouse-to-human inference. Nat Methods 15, 1067–1073 (2018). https://doi.org/10.1038/s41592-018-0214-9
 Github: https://github.com/shenorrLabTRDF/FIT.mouse2man 
 ```{r}
@@ -1504,13 +2028,13 @@ AllData_V2.0 = FIT.mouse2man::AllData_V2.0 #Training data
 ```
 
 
-### Loop for every time point
-Obs.: Make sure that datasets from FIT package were retrieved
-Initial number of genes: 15503
-Number of genes for which FIT predictions will be calculated: 14401
 ```{r}
 all_degs_mouse = readRDS(file = here("tables", "Fluad_GSE120661_degs_mouse.rds"))
 mouse_fluad_log2_hgnc_symbol = readRDS(here("tables", "mouse_fluad_log2_hgnc_symbol.rds"))
+```
+
+
+```{r}
 ### Loop for every time point -----
 all_degs_fit2 = all_degs_mouse %>% 
   select(symbol, EffectSize = logFC, condition) %>%
@@ -1570,11 +2094,12 @@ fit_results_combined %>%
 
 
 
-#Immune functional analysis
+#5. Functional analysis
 
+## Immune
 BTMs correlation, intra- and inter-species
 
-## Mean Log2FC and GSEA
+### Mean Log2FC and GSEA
 Compare means and NES
 Import
 ```{r}
@@ -2660,7 +3185,7 @@ mouse_correlation_ggpairs_btms_gsea_day1 %>%
 
 
 
-# Performance tests 
+# 6. Performance tests 
 
 ## ROC Curve 
 
