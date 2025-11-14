@@ -1012,10 +1012,9 @@ eset_human %>% saveRDS(file = here("tables", "saureus_infection_human_eset.rds")
 
 ### Differential expression
 
-#### Differential expression (Limma)
-Paired samples design
-```{r}
+#### Limma
 
+```{r}
 #Import
 human_log2_hgnc_symbol = readRDS(file = here("tables", "saureus_infection_human_exprs_hgnc_symbol.rds"))
 human_metadata = readRDS(file = here("tables", "saureus_infection_human_metadata.rds"))
@@ -1079,6 +1078,74 @@ all_degs_human %>%
 ```
 
 
+#### t-Test
+```{r}
+#Import ================
+human_log2_hgnc_symbol = readRDS(file = here("tables", "saureus_infection_human_exprs_hgnc_symbol.rds"))
+human_metadata = readRDS(file = here("tables", "saureus_infection_human_metadata.rds"))
+
+#Wrangle ==============
+#Pivot to long and wide format, and annotate
+human_log2_samples_log2fc_long = human_log2_hgnc_symbol %>% 
+  pivot_longer(cols = -c(human_symbol, probe),
+               names_to = "geo_sample",
+               values_to = "log2fc") %>% 
+  inner_join(human_metadata,
+             by = "geo_sample")
+
+human_log2_wide = human_log2_hgnc_symbol %>%
+  pivot_longer(cols = -c(human_symbol, probe),
+               names_to = "geo_sample",
+               values_to = "log2") %>% 
+  inner_join(human_metadata %>% 
+               select(geo_sample, participant_id, pathogen),
+             by = "geo_sample") %>% 
+  select(human_symbol, participant_id, timepoint, log2) %>% 
+  distinct() %>% 
+  select(participant_id, human_symbol, timepoint, value = log2) %>%
+  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_")
+
+human_exprs_log2_infected_healthy = human_exprs_metadata %>% 
+  filter(pathogen == "Healthy") %>% 
+  select(probe_id, value_raw_ref = value_raw) %>% 
+  group_by(probe_id) %>% 
+  summarize(value_raw_ref = mean(value_raw_ref)) %>% 
+  inner_join(human_exprs_metadata %>% 
+               filter(pathogen != "Healthy"),
+             by = join_by("probe_id")) %>% 
+  filter(pathogen != "Healthy") %>% 
+  inner_join(human_log2_samples_log2fc_long %>% 
+               select(probe_id = probe, human_symbol),
+             by = join_by("probe_id")) %>% 
+  mutate(log2fc = value_raw - value_raw_ref) %>% 
+  distinct() 
+
+# Unpaired t-test ----------
+human_log2fc_unpaired_ttest <- human_exprs_log2_infected_healthy %>%
+  group_by(human_symbol) %>%
+  
+  summarise(
+    pval = tryCatch(
+      t.test(value_raw, value_raw_ref,
+             paired = FALSE, var.equal = FALSE, 
+             alternative = "two.sided")$p.value,
+      error = function(e) NA_real_
+    ),
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    padj = p.adjust(pval, method = "fdr")
+    ) %>% 
+  mutate(
+    condition = "Saureus infection",
+    timepoint = "1",
+    test = "t-Test",
+    paired = "Unpaired")
+
+
+human_log2fc_unpaired_ttest %>% saveRDS(file = here("tables", "saureus_infection_human_dge_unpaired_ttest.rds"))
+
+```
 
 
 
@@ -1119,264 +1186,11 @@ GSE33341_log2fc_sample_wide = GSE33341_counts_log2_summary_annotated_probes %>%
   ungroup()
 ```
 
-#### Correlation plots, pairwise
-```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
-#Plot correlation between animals ------
-#Change params in geoms
-#Density
-my_dens <- function(data, mapping, ...) {
-  ggplot(data = data, mapping=mapping) +
-    geom_density(alpha = 0.2, color = "black")
-}
-#Points
-my_point <- function(data, mapping, ...) {
-  ggplot(data = data, mapping = mapping) +
-    geom_point(alpha = 0.8, ...)  
-}
 
-# Plot correlations for human -------
-participant_id_selected = human_log2_samples_log2fc_long %>% 
-  ungroup() %>% 
-  select(participant_id) %>% 
-  distinct() %>% 
-  slice_sample(n = 5) %>% 
-  pull()
-
-#All timepoints
-human_correlation_ggpairs_alldays = ggpairs(human_log2_samples_log2fc_wide %>% 
-                                              select(human_symbol, timepoint, participant_id_selected) %>% 
-                                              mutate(timepoint = as.character(timepoint),
-                                                     timepoint = fct_reorder(timepoint, as.numeric(timepoint))),
-                                    columns = 3:7,
-                                    mapping = ggplot2::aes(color = timepoint,
-                                                           fill = timepoint),
-                                    title = "All days, GSE33341, Human", 
-                                    diag = list(continuous = my_dens),
-                                    lower = list(continuous = my_point)
-                                    ) +
-  theme_vaxgo() +
-  scale_color_manual(values = c("1" = "#219ebc")) +
-  scale_fill_manual(values = c("1" = "#219ebc"))
-
-human_correlation_ggpairs_alldays
-#Save
-human_correlation_ggpairs_alldays %>%
-  ggsave(filename = here("Figures", "saureus_infection_human_correlation_ggpairs_alldays.png"),
-         height = 10,
-         width = 10)
-beep()
-
-
-```
-
-
-#### BTMs
-```{r}
-#New BTM Annotation
-ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
-btm_annotation = read.table(file = here("VaxGO",  "BTM functional groups V3.txt"), sep="\t", header=TRUE) %>% 
-  clean_names() %>% 
-  rename(id = name) %>% 
-  filter(group != "")
-
-btm_annotation_genes = ImmuneGO_BTM_grouped_genes %>% 
-               inner_join(btm_annotation %>% 
-                            rename(process = id), 
-                          by = "process") %>% 
-               rename(symbol = genes)
-
-#Annotate genes by BTM
-GSE33341_genes_btm = GSE33341_counts_log2_summary_annotated_probes %>% 
-  rename(hs_entrez = entrezgene_id,
-         human_symbol = hgnc_symbol) %>% 
-  inner_join(HS_MM_Symbol_Entrez %>% 
-               clean_names() %>% 
-               rename(mgi_symbol = mouse_symbol) %>% 
-               select(mgi_symbol, human_symbol), 
-             by = join_by("human_symbol")) %>% 
-  select(mgi_symbol, symbol = human_symbol, participant_id, geo_sample, timepoint, pathogen, log2fc) %>% 
-  inner_join(btm_annotation_genes, by = "symbol")
-
-
-dge_btm_mean_process = GSE33341_genes_btm %>%
-  mutate(condition = paste0(participant_id, "_Day", timepoint)) %>% 
-  group_by(participant_id, timepoint, process) %>% 
-  summarize(mean_log2fc = mean(log2fc)) %>%
-  pivot_wider(names_from = "participant_id", values_from = "mean_log2fc") %>% 
-  inner_join(btm_annotation_genes %>% 
-               select(process, group, subgroup) %>% 
-               distinct(),
-             by = "process")
-
-dge_btm_mean_process
-```
-
-
-
-
-
-
-
-```{r fig.height=8, fig.width=10}
-#Sample 5 participants
-set.seed(31415)
-sample_participants_5 = ggpairs_data_dge_btm_mean_process %>% 
-  select(3:35) %>% 
-  colnames() %>% 
-  sample(5)
-
-
-plot_data <-
-  #Pivot longer, 1st participatn
-  ggpairs_data_dge_btm_mean_process %>%
-  select(group, process, sample_participants_5) %>%
-  pivot_longer(cols = !c("group", "process"), 
-               names_to = "participant_1", 
-               values_to = "participant_1_value") %>%
-  
-  #Add a column to the 2nd participant
-  inner_join(
-    ggpairs_data_dge_btm_mean_process %>%
-      select(group, process, sample_participants_5) %>%
-      pivot_longer(cols = !c("group", "process"), 
-                   names_to = "participant_2",
-                   values_to = "participant_2_value"),
-    by = c("process", "group")) %>%
-  #Remove pares idênticos (mesma variável)
-  filter(participant_1 != participant_2) %>%
-  
-  #Remove dupes (ex: A-B e B-A → A-B)
-  mutate(pair_min = pmin(participant_1, participant_2),
-         pair_max = pmax(participant_1, participant_2)) %>%
-  distinct(process, pair_min, pair_max, .keep_all = TRUE) %>% 
-  
-  # Arrange participants to create a pairwise matrix
-  mutate(
-    participant_1 = factor(participant_1, levels = sample_participants_5),
-    participant_2 = factor(participant_2, levels = rev(sample_participants_5)))
-
-
-cor_labels <- plot_data %>%
-  group_by(participant_1, participant_2) %>%
-  summarise(cor_value = cor(participant_1_value, participant_2_value, use = "pairwise.complete.obs", method = "pearson"),
-            .groups = "drop") %>%
-  mutate(
-    r_squared = cor_value^2,
-    cor_label = paste0("r = ", round(cor_value, 2), ", R² = ", round(r_squared, 2))
-  )
-
-
-#Plot 
-plot_data %>% 
-ggplot(aes(x = participant_1_value, y = participant_2_value, color = group)) +
-  geom_point(alpha = 0.5) +
-  stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
-  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
-  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
-    geom_label(data = cor_labels,
-            aes(x = 0, y = Inf, label = cor_label), 
-            hjust = 0.5, vjust = 1, inherit.aes = FALSE, size = 3) +
-  facet_grid(participant_2 ~ participant_1, scales = "free", drop = T) +
-  theme_vaxgo() +
-  ylim(-3, 3) +
-  xlim(-3, 3) +
-  theme(strip.text = element_text(size = 8),
-        strip.text.y = element_text(angle = 0, hjust = 0)) +
-  scale_color_manual(values = immune_colors) +
-  labs(x = "Log2FC", 
-       y = "Log2FC", 
-       color = "",
-       title = "GSE33341, Human, SAureus infeciton, random sample")
-
-```
 
 
 
 ### Compare Human vs Mouse
-
-```{r}
-#Unite Mouse and Human datasets. Samples.
-human_mouse_saureus_log2fc_samples = 
-#Mouse
-GSE19668_counts_log2_summary_annotated_probes %>%
-  ungroup() %>% 
-  select(human_symbol, log2fc, participant_id, value_raw, 
-         timepoint, pathogen = treatment,
-         value_raw_ref = day0_value_raw) %>% 
-  mutate(organism = "Mouse") %>% 
-  
-  #Human
-  bind_rows(GSE33341_counts_log2_summary_annotated_probes %>% 
-  ungroup() %>% 
-  select(human_symbol = hgnc_symbol, log2fc, value_raw, value_raw_ref, 
-         participant_id, timepoint, pathogen) %>% 
-  mutate(organism = "Human"))
-
-human_mouse_saureus_log2fc_samples %>% 
-  saveRDS(file = here("tables", "saureus_infection_human_mouse_samples_log2fc.rds"))
-```
-
-####Import
-```{r}
-
-#Import
-human_mouse_saureus_log2fc_samples =
-  readRDS(file = here("tables", "saureus_infection_human_mouse_samples_log2fc.rds"))
-
-GSE19668_metadata_filtered =
-  readRDS(file = here("tables", "saureus_infection_mouse_metadata_clean.rds"))
-
- #Calculate the mean log2fc
-human_mouse_saureus_log2fc_avg = human_mouse_saureus_log2fc_samples %>% 
-  group_by(organism, human_symbol, timepoint) %>% 
-  summarize(
-    mean_log2fc = mean(log2fc, na.rm = TRUE),
-    sd_log2fc   = sd(log2fc, na.rm = TRUE),
-    se_log2fc   = sd(log2fc, na.rm = TRUE) / sqrt(n()),   # erro padrão
-    
-    # Test t paired
-    ttest = list(tryCatch(
-      t.test(value_raw, value_raw_ref, paired = TRUE),
-      error = function(e) NULL
-    )),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    p_value = map_dbl(ttest, ~ if (!is.null(.x)) .x$p.value else NA_real_),
-    ci_low  = map_dbl(ttest, ~ if (!is.null(.x)) .x$conf.int[1] else NA_real_),
-    ci_high = map_dbl(ttest, ~ if (!is.null(.x)) .x$conf.int[2] else NA_real_),
-    t_stat  = map_dbl(ttest, ~ if (!is.null(.x)) .x$statistic else NA_real_),
-    df      = map_dbl(ttest, ~ if (!is.null(.x)) .x$parameter else NA_real_),
-    p_adj   = p.adjust(p_value, method = "BH")
-  ) %>%
-  select(-ttest) %>% 
-  filter(human_symbol != "") %>%
-  ungroup() %>% 
-  filter(timepoint %in% c(1, 2)) %>% 
-  mutate(timepoint = "1-2")
-
-
-
-human_mouse_saureus_log2fc_avg
-
-human_mouse_saureus_log2fc_avg %>% 
-  saveRDS(file = here("tables", "saureus_infection_human_mouse_samples_log2fc_avg.rds"))
-
-#Pivot wider
-human_mouse_saureus_log2fc_avg_wide = human_mouse_saureus_log2fc_avg %>% 
-  select(organism, human_symbol, timepoint, mean_log2fc) %>% 
-  pivot_wider(names_from = "organism",
-              values_from = "mean_log2fc") %>% 
-  #Add padj columns
-  inner_join(human_mouse_saureus_log2fc_avg %>%
-               select(organism, human_symbol, timepoint, p_adj) %>%
-               pivot_wider(names_from = "organism",
-                           values_from = "p_adj") %>%
-               rename(padj_human = Human, padj_mouse = Mouse))
-
-human_mouse_saureus_log2fc_avg_wide
-
-```
 
 
 ```{r fig.height=5, fig.width=5}
@@ -2119,63 +1933,6 @@ Positive control: Human
 Neg control: Random permutation
 
 
-Import data
-```{r}
-#ImmuneGO ontologies
-ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
-#Import DEGs table
-human_mouse_saureus_log2fc_avg =
-  readRDS(file = here("tables", "saureus_infection_human_mouse_samples_log2fc_avg.rds"))
-
-dge_long_genes = human_mouse_saureus_log2fc_avg  %>% 
-  rename(log2fc = mean_log2fc, se = se_log2fc, sd = sd_log2fc, adj_p_val = p_adj, symbol = human_symbol) 
-
-#Use only same genes
-dge_long_genes = dge_long_genes %>% 
-  filter(organism == "Mouse") %>% 
-  select(symbol) %>% 
-  distinct() %>% 
-  inner_join(dge_long_genes %>%
-               filter(organism == "Human") %>%
-               select(symbol) %>%
-               distinct(), 
-             by = "symbol") %>% 
-  inner_join(dge_long_genes,
-             by = "symbol")
-
-```
-
-Calculate ROC curve
-```{r fig.height=4, fig.width=3}
-set.seed(123)
-
-######### Input -----
-
-filename = "Saureus_Infection_Immune"
-filename_title ="S. aureus infection,\nImmune genes"
-
-genes_df_input = dge_long_genes %>% 
-  # Filter immune genes only
-  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 ADD THIS
@@ -2433,47 +2190,3 @@ auc_results
 roc_curve_data 
 ```
 
-
-```{r fig.height=4, fig.width=3}
-##### PLOT ROC Curve ------
-
-roc_curve_plot = roc_curve_data %>% 
-  ggplot(aes(x = 1 - specificity, 
-             y = sensitivity, 
-             color = model)) +
-  geom_path(linewidth = 1) +
-  geom_abline(lty = 3) +
-  theme_vaxgo() +
-  facet_grid(~fct_rev(comparison)~paste0(timepoint, "h")) + 
-  scale_color_manual(values = c(
-    "Mouse" = "#4DBBD5FF",
-    "FIT"   = "#4361ee",
-    "Human" = "#90A4AEFF",
-    "Uniform" = "gray80"
-    )) +
-  labs(
-    title = filename_title, 
-  x = "FPR",
-  y = "TPR",
-  color = "Model") + 
-  theme(
-    strip.text = element_text(size = 10),
-    strip.placement = "outside",
-    strip.text.y = element_text(size = 10,),
-    axis.text.x = element_text(size = 10, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.text.y = element_text(size = 10),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank()
-  ) +
-  scale_x_continuous(n.breaks = 3) +
-  scale_y_continuous(n.break = 3)
-
-
-roc_curve_plot
-
-roc_curve_plot %>%
-  ggsave(filename = here("Figures", paste0("roc_curve_plot_", filename, ".png")),
-         width = 3.5,
-         height = 4)
-
-```
