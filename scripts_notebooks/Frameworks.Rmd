@@ -10,63 +10,62 @@ editor_options:
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
 #Download datasets
-GSEXXXX <- getGEO("GSEXXXX", GSEMatrix = TRUE) 
+filename = "Example_GSEXXXX"
+
+GSE_matrix <- getGEO("GSEXXXX", GSEMatrix = TRUE) 
 
 #Get Expression Set
-eset <- GSEXXXX[[1]] #Some series may have two or more eSets listed
+eset <- GSE_matrix[[1]] #Some series may have two or more eSets listed
 
 #Get metadata -------
-GSEXXXX_metadata = eset %>% 
-  pData()
+GSE_metadata = eset %>% pData()
 
 #Select, clean, and standardize attributes
-GSEXXXX_metadata_annotated = GSEXXXX_metadata %>% 
+GSE_metadata_annotated = GSE_metadata %>% 
   select(geo_sample = "geo_accession") %>% 
   mutate(treatment = fct_relevel(treatment, "reference"))
 
 #Save metadata
-write_csv(GSEXXXX_metadata_annotated, 
-          file = here("tables", "GSEXXXX_metadata_annotated.csv"))
+write_csv(GSE_metadata_annotated, file = here("tables", paste0(filename, "_metadata_annotated.csv")))
 
 #Get counts matrix ------
-eset <- exprs(eset)
+GSE_exprs <- eset %>% exprs()
 
 #Save as RDS
-eset %>% 
-  as.data.frame() %>% 
-  saveRDS(here("tables", "GSE120661_exprs.rds"))
+GSE_exprs %>% as.data.frame() %>% 
+  saveRDS(here("tables", paste0(filename, "exprs.rds")))
 
 ```
 
 ### Import and check distribution
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
 #Import
-GSE120661_eset = readRDS(here("tables", "GSE120661_exprs.rds"))
+GSE_exprs = readRDS(here("tables", "influenza_hepatitisb_GSE120661_exprs.rds"))
 GSE120661_counts_not_normalized_log2 = readRDS(here("tables", "GSE120661_counts_not_normalized_log2.rds"))
 
 #Check distribution
-GSE120661_exprs_distribution = GSE120661_eset %>% 
+GSE_exprs_distribution = GSE_exprs %>% 
   rownames_to_column("probes") %>% 
   pivot_longer(cols = -probes,
                names_to = "sample_id",
                values_to = "value") 
 
 #Plot
-GSE120661_exprs_distribution %>% 
+GSE_exprs_distribution %>% 
   filter(sample_id == "GSM3407136") %>% 
   ggplot() +
   aes(x = value) +
   geom_histogram()
+
 ```
 
 ## Get metadata
-
 ```{r}
 #Import
-GSE120661_metadata = read_csv(here("tables", "GSE120661_metadata.csv")) 
+GSE_metadata = read_csv(here("tables", "influenza_hepatitisb_GSE120661_metadata.csv")) 
 
 #Clean
-GSE120661_metadata = GSE120661_metadata %>% 
+GSE_metadata = GSE_metadata %>% 
   mutate(timepoint = as.integer(timepoint) %>% 
            as.character() %>% 
            as.factor() %>% 
@@ -77,8 +76,6 @@ GSE120661_metadata = GSE120661_metadata %>%
 #Save
 GSE120661_metadata %>% saveRDS(here("tables", "GSE120661_metadata.rds"))
 ```
-
-### Import
 
 ```{r}
 #Import
@@ -106,34 +103,105 @@ GSE120661_counts_not_normalized_log2 = GSE120661_counts_not_normalized_log2 %>%
 ```
 
 ## Annotate genes
+### Mouse datasets
+```{r}
+#Import datasets
+ecoli_mouse_exprs = readRDS(here("tables", "ecoli_infection_mouse_exprs.rds"))
+ecoli_mouse_human_metadata = readRDS(file = here("tables", "ecoli_infection_human_mouse_metadata.rds"))
+
+#Inputs
+filename = "ecoli_infection_mouse"
+mouse_exprs = ecoli_mouse_exprs
+mouse_metadata = ecoli_mouse_human_metadata
+
+#Annotate genes ------
+#Mouse -----
+#Annotate data and calculate log2fc
+mouse_exprs_metadata  = mouse_exprs %>% 
+  pivot_longer(cols = 2:125,
+               names_to = "geo_sample",
+               values_to = "value_raw") %>% 
+  inner_join(mouse_metadata, 
+             by = "geo_sample") 
+
+mouse_exprs_metadata_filtered = mouse_exprs_metadata %>% 
+               filter(host_strain == "C57BL/6J",
+                      batch == "8")
+
+#Save metadata
+mouse_exprs_metadata_filtered %>% saveRDS(file = here("tables", paste0(filename, "_metadata_filtered.rds")))
+
+#Get value from day 0 and calculate Log2FC (non-paired)
+mouse_exprs_log2fc_sample = mouse_exprs_metadata %>% 
+  #Filter batch
+  filter(organism == "Mus musculus",
+         status == "Healthy",
+         host_strain == "C57BL/6J",
+         batch == "8") %>% 
+  select(probe_id, batch, subject_num, day0_value_raw = value_raw) %>% 
+  #If the dataset is paired, ignore this part
+  ########################
+  #Get the mean expression value for healthy
+  group_by(probe_id, batch) %>% 
+  summarize(n = n(),
+            #Mean of healthy
+            day0_value_raw = sum(day0_value_raw)/n,
+            batch) %>% 
+  ungroup() %>% 
+  ########################
+  select(probe_id, day0_value_raw, batch) %>% 
+  distinct() %>% 
+  #Filter batch
+  inner_join(mouse_exprs_metadata %>% 
+               filter(timepoint != "0",
+                      host_strain == "C57BL/6J",
+                      batch == "8"),
+             by = join_by("probe_id", "batch")) %>% 
+  mutate(log2fc = value_raw - day0_value_raw) %>% 
+  distinct() 
+
+#Check duplicates
+mouse_exprs_log2fc_sample %>% 
+  filter(subject_id == "Mouse_C57BL/6J_Animal1_Batch8",
+         probe_id == "1415670_at")
+
+```
 
 ```{r}
+########### Filter and annotate probes -----
 ## Set up biomart
 ensembl_mart <- useMart("ensembl")
 ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
 
 ## Get the MGI symbol
-gene_id <- GSE120661_counts_not_normalized_log2 %>% rownames()
+gene_id <- mouse_exprs$probe_id %>% unique()
 
-#Get other annotations
-listAttributes(ensembl_mart)
-
+# listAttributes(ensembl_mart)
 #Annotate
 annot <- getBM(
-  attributes = c("agilent_sureprint_g3_ge_8x60k", #Agilent microarray data (design ID 028005, retrieved from GEO)
+  attributes = c("affy_mouse430_2",
                  "ensembl_gene_id",
                  "entrezgene_id",
                  "mgi_symbol",
                  "description"),
-  filters = "agilent_sureprint_g3_ge_8x60k",
+  filters = "affy_mouse430_2", #Probes
   values = gene_id,
   mart = ensembl_mart)
 
+#Get lookup table from FIT
+#Install model package
+# library(devtools)
+# devtools::install_github('shenorrLabTRDF/FIT.mouse2man')
+library(FIT.mouse2man)
+HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez %>% 
+  clean_names() %>% 
+  rename(mouse_entrez = mouse_ortholog)
+
 #Get annotations for each probe 
-### Filter genes with highest median expression
-GSE120661_counts_not_normalized_log2_summary = GSE120661_counts_not_normalized_log2 %>% 
+### Filter probes with highest median expression
+mouse_log2summary = mouse_exprs %>% #20,845 probes
   as.data.frame() %>% 
-  rownames_to_column("probe") %>% 
+  rename(probe = probe_id) %>% 
   pivot_longer(cols = -probe,
                names_to = "sample",
                values_to = "expression") %>% 
@@ -141,106 +209,70 @@ GSE120661_counts_not_normalized_log2_summary = GSE120661_counts_not_normalized_l
   summarize(mean = mean(expression,na.rm = TRUE),
             median = median(expression, na.rm = T)) %>%  
   inner_join(annot %>% 
-              rename(probe = agilent_sureprint_g3_ge_8x60k), 
-            by = "probe") 
-
-#Print out the annotated table
-GSE120661_counts_not_normalized_log2_summary
-```
-
-### Get stats
-Stats 
-- XXXXX probes in the microarray, 
-- XXXXX that were annotated in
-BiomaRt (\~99.90%) 
-- XXXXX probes had a correspondent mgi symbol
-(96.33% of probes in microarray) 
-- XXXXX probes had a correspondent
-entrez id (78.97% of probes in microarray) 
-- XXXXX probes with entrez
-id also had a correspondent mgi_symbol (78.08% of probes in
-microarray) 
-- XXXXX probes have an entrez gene id. As this is the input
-in FIT, we used this to filter, not mgi_symbol (56.89% of probes in
-microarray) 
-- XXXXX genes were filtered by the highest median (55.14%
-were kept from the microarray) 
-- XXXXX Dupes. The duplication is due to
-different mgi_symbols. Same Entrez IDs can correspond to different
-mgi_symbol 
-- XXXXX probes were used (52.87%)
-
-```{r}
-# Stats
-## 24009 probes in the microarray
-GSE120661_counts_not_normalized_log2_summary %>% dim()
-## 24009 probes with mgi_symbol
-GSE120661_counts_not_normalized_log2_summary %>% 
-  drop_na(mgi_symbol) %>% 
-  filter(mgi_symbol != "")
-## 22363 probes with Entrez gene id
-GSE120661_counts_not_normalized_log2_summary %>% 
-  drop_na(entrezgene_id) %>% 
-  dim()
-## 22082 of these probes with mgi_symbol also had a correspondent entrez gene id
-GSE120661_counts_not_normalized_log2_summary %>% 
-  drop_na(mgi_symbol) %>% 
-  filter(mgi_symbol != "") %>% 
-  drop_na(entrezgene_id) %>% 
-  dim()
-## 22082 probes with entrez id also had a correspondent mgi_symbol
-GSE120661_counts_not_normalized_log2_summary %>% 
-  drop_na(entrezgene_id) %>% 
-  filter(mgi_symbol != "") %>% 
-  dim()
-
-#Get the probes with the highest median across samples for each entrez_id
-GSE120661_expression_highest_median_probes = GSE120661_counts_not_normalized_log2_summary %>% 
-  drop_na(entrezgene_id) %>% 
-  group_by(entrezgene_id) %>% 
-  slice_max(median) %>% 
+              rename(probe = affy_mouse430_2), 
+            by = "probe") %>%  #24.009 rows
+  #Filter ensembl id
+  group_by(ensembl_gene_id) %>% 
+  slice_max(median, n = 1) %>%
   ungroup() %>% 
-  arrange(entrezgene_id, probe)  %>% 
-  select(probe, entrezgene_id, mgi_symbol, median) %>% 
-  distinct()
+  select(-ensembl_gene_id) %>% 
+  distinct() %>% 
+  
+  #Filter entrez id
+  group_by(entrezgene_id) %>% 
+  slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
+  ungroup() %>% 
+  rename(mouse_entrez = entrezgene_id) %>% 
+  
+  #Filter hgnc symbol
+  inner_join(HS_MM_Symbol_Entrez, by = c("mouse_entrez", "mgi_symbol")) %>% 
+  group_by(hgnc_symbol) %>% 
+  slice_max(median, n = 1)  %>% #14.396
+  ungroup()
 
-#84 Dupes. The duplication is due to different mgi_symbols. Same Entrez IDs can correspond to different mgi_symbol
-GSE120661_expression_highest_median_probes %>% 
-  get_dupes(entrezgene_id)
+#Filter out genes with multiple mgi_symbols
+hgnc_symbol_dupes = mouse_log2summary %>% 
+  #filter ensembl id with multiple mgi_symbols
+  get_dupes(hgnc_symbol)
 
-
-#Modify dataset
-GSE120661_counts_not_normalized_log2_annotations = GSE120661_counts_not_normalized_log2 %>% 
-  as.data.frame() %>% 
-  rownames_to_column("probe") %>% 
-  inner_join(GSE120661_expression_highest_median_probes, by = "probe") %>% 
-  select(colnames(GSE120661_expression_highest_median_probes), -median, everything())
+mouse_log2summary = mouse_log2summary %>% 
+  select(probe, hgnc_symbol) %>% 
+  filter(!hgnc_symbol %in% c(hgnc_symbol_dupes$hgnc_symbol %>% unique())) 
 
 #Modify expression matrix
-GSE120661_counts_not_normalized_log2 = GSE120661_counts_not_normalized_log2 %>% 
+
+#Filtered probes
+mouse_log2_filtered_probes = mouse_exprs %>% 
   as.data.frame() %>% 
-  rownames_to_column("probe") %>% 
-  filter(probe %in% c(GSE120661_expression_highest_median_probes$probe)) %>% 
-  column_to_rownames("probe") %>% 
-  as.matrix()
+  rename(probe = probe_id) %>% 
+  inner_join(mouse_log2summary, by = "probe") %>%   #214,396
+  select(human_symbol = hgnc_symbol,
+         probe,
+         c(mouse_metadata %>% 
+             pull(geo_sample)))
+#Check
+mouse_log2_filtered_probes %>% dim()
+mouse_log2_hgnc_symbol = mouse_log2_filtered_probes 
+mouse_log2_hgnc_symbol %>% get_dupes(human_symbol)
 
-#20845
-GSE120661_counts_not_normalized_log2 %>% dim()
+#Save
+mouse_log2_hgnc_symbol %>% saveRDS(file = here("tables", paste0(filename, "_exprs_hgnc_symbol.rds")))
+
+#Pivot to long and wide format, and annotate
+mouse_log2_samples_log2fc_long = mouse_log2_filtered_probes %>% 
+  pivot_longer(cols = -c(human_symbol, probe),
+               names_to = "geo_sample",
+               values_to = "log2fc") %>% 
+  inner_join(mouse_metadata,
+             by = "geo_sample")
 
 
-#---------------
+mouse_log2_samples_log2fc_wide = mouse_log2_samples_log2fc_long %>% 
+  select(human_symbol, probe, subject_id, timepoint, log2fc) %>%
+  pivot_wider(names_from = "subject_id",
+              values_from = "log2fc") %>% 
+  mutate(timepoint = fct_reorder(timepoint, timepoint %>% as.numeric()))
 
-#Save 
-GSE120661_counts_not_normalized_log2 %>% 
-  saveRDS(here("tables", "GSE120661_counts_not_normalized_log2.rds"))
-
-GSE120661_counts_not_normalized_log2_annotations %>% 
-  saveRDS(here("tables", "GSE120661_counts_not_normalized_log2_annotations_not_normalized_log2.rds"))
-
-GSE120661_samples_pbmc %>% 
-  mutate(sample_id = subject_id,
-         subject_id = str_remove(subject_id, "_\\d+h")) %>% 
-  saveRDS(here("tables", "GSE120661_samples_pbmc.rds"))
 ```
 
 
