@@ -3230,22 +3230,50 @@ Import data
 #Import DEGs table
 dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds")) 
 #Import metadata
-human_mouse_fluad_metadata = readRDS(file = here("tables", "human_mouse_fluad_metadata.rds"))
+human_mouse_metadata = readRDS(file = here("tables", "human_mouse_fluad_metadata.rds"))
 #ImmuneGO ontologies
 ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
+```
 
 
-dge_long_genes = dge_long_genes %>% 
+```{r}
+#Data wrangling
+
+# When model and reference are EQUAL in timepoints
+dge_long_genes_matched = dge_long_genes %>% 
   filter(organism != "FIT") %>% 
-  inner_join(human_mouse_fluad_metadata %>%
+  inner_join(human_mouse_metadata %>%
                group_by(organism, timepoint) %>%
                summarize(n = n()) %>% 
                mutate(timepoint = as.numeric(timepoint)),
                by = join_by("organism", "timepoint"))
+
+# When model and reference DIFFER in timepoints
+# Use when human and model timepoints are DIFFERENT and you want one human timepoint to serve as the reference for all model timepoints.
+timepoint_reference = "24"
+human_data_reference <- all_degs_human_mouse %>% filter(organism == "Human")
+new_timepoints <- c(all_degs_human_mouse %>% filter(organism != "Human") %>% pull(timepoint) %>% unique() %>% as.character())
+duplicated_human_data <- map_dfr(new_timepoints, ~ {
+  df_copy <- human_data_day1
+  df_copy <- df_copy %>%
+    mutate(timepoint = .x)
+
+  return(df_copy)
+})
+
+dge_long_genes_unmatched = all_degs_human_mouse %>% 
+  filter(organism == "Human" & timepoint == timepoint_reference) %>% 
+  bind_rows(duplicated_human_data) 
+
+#Input
+dge_long_genes = dge_long_genes_matched
+# dge_long_genes = dge_long_genes_unmatched
+
+#Filter datasets
 #All genes
 genes_roc_allgenes = dge_long_genes
 #Filter immune genes
-genes_roc_allgenes_immunegenes = dge_long_genes %>% 
+genes_roc_allgenes_immunegenes = genes_roc_allgenes %>% 
   filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
 
 #Only DEGs
@@ -3273,18 +3301,19 @@ Inputs
 ```{r fig.height=4, fig.width=10}
 set.seed(123)
 ######### Input -----
-# filename = "Fluad_All_OnlyImmune"
-# genes_df_input = bind_rows(
-#   genes_roc_allgenes %>% mutate(model_type = "Mouse"),
-#   genes_roc_allgenes_immunegenes %>% mutate(model_type = "Immune")
-# )
-
-
-filename = "Fluad_AllDEGs_HumanDEGs_OnlyImmune"
+filename = "influenza_fluad"
+gene_set_filename = "All_OnlyImmune"
 genes_df_input = bind_rows(
-  genes_roc_DEGs_all %>% mutate(model_type = "Mouse"),
-  genes_roc_DEGs_immune %>% mutate(model_type = "Immune")
+  genes_roc_allgenes %>% mutate(model_type = "Mouse"),
+  genes_roc_allgenes_immunegenes %>% mutate(model_type = "Immune")
 )
+
+# filename = "influenza_fluad"
+# gene_set_filename = "HumanDEGs_OnlyImmune"
+# genes_df_input = bind_rows(
+#   genes_roc_DEGs_all %>% mutate(model_type = "Mouse"),
+#   genes_roc_DEGs_immune %>% mutate(model_type = "Immune")
+# )
 
 ```
 
@@ -3441,11 +3470,16 @@ auc_results_down = classified_df_probs_down %>%
 #PLOT ROC Curve
 roc_curve_plot = roc_curve_up_notup %>% 
   bind_rows(roc_curve_down_notdown) %>%
-  ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
+  mutate(timepoint_num = readr::parse_number(timepoint),
+    timepoint = paste0(timepoint, "h"),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) %>% 
+  ggplot(aes(x = 1 - specificity, 
+             y = sensitivity, 
+             color = model)) +
   geom_path(size = 1, alpha = 1) +
   geom_abline(lty = 3) +
   theme_vaxgo() +
-  facet_grid(~fct_rev(comparison)~paste("Day", timepoint)) + 
+  facet_grid(~fct_rev(comparison)~timepoint) +
   scale_color_manual(values = c(
     "Mouse" = "#4DBBD5FF",
     "Human" = "#90A4AEFF",
@@ -3470,6 +3504,7 @@ roc_curve_plot = roc_curve_up_notup %>%
   scale_x_continuous(n.breaks = 3) +
   scale_y_continuous(n.break = 3)
 
+roc_curve_plot
 
 # Visualize AUC
 auc_plot <- bind_rows(auc_results_up, 
@@ -3477,16 +3512,18 @@ auc_plot <- bind_rows(auc_results_up,
   mutate(model = factor(model, levels = c("Perfect", "Mouse", "Immune", "Uniform")),
          comparison = factor(comparison, levels = c("Up", "Down"))) %>%
   
-  ggplot(aes(x = auc, y = factor(timepoint) %>% fct_rev(), fill = model)) +
-  geom_col(width = 0.8,
-           position = position_dodge()) +
+  ggplot(aes(x = auc, 
+             y = fct_reorder(timepoint, as.numeric(timepoint)) %>% fct_rev(), 
+             fill = model)) +
+  geom_col(width = 1,
+           position = position_dodge(1)) +
   
   # Add a reference line for random prediction (AUC = 0.5)
   geom_vline(xintercept = 0.5, linetype = "dashed", color = "black", linewidth = 0.5) +
   
   geom_text(aes(label = round(auc, 2)),
-            position = position_dodge2(0.9),
-            hjust = 1.2, size = 2) +
+            position = position_dodge2(1),
+            hjust = -0.2, size = 2, vjust = 0.5) +
   
   facet_grid(comparison ~ ., scales = "free_y") +
   
@@ -3516,15 +3553,16 @@ auc_plot <- bind_rows(auc_results_up,
   scale_x_continuous(expand = c(0,0), limits = c(0,1))
 
 roc_auc_curve_plot = ((roc_curve_plot) |
-  auc_plot) +
+  (auc_plot + theme(legend.position = "none"))) +
   plot_layout(guides = "collect", widths = c(1, 0.4))+
   plot_annotation(theme = theme(legend.position = "top", plot.title = element_text(hjust = 0.5)),
                   title = filename)
 
 roc_auc_curve_plot %>%
-  ggsave(filename = here("Figures", paste0("roc_curve_plot_", filename, ".png")),
+  ggsave(filename = here("Figures", paste0(filename, "_performance_roc_", gene_set_filename, ".png")),
          width = 8,
          height = 5)
+
 
 roc_auc_curve_plot
 ```

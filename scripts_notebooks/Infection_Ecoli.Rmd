@@ -109,7 +109,8 @@ GSE33341_ecoli_human_metadata = eset_human %>%
                               paste0("Healthy_human_", geo_sample)),
          site_infection = if_else(site_infection == "-", "none", site_infection),
          condition = subject_id) %>% 
-  select(geo_sample, condition, subject_id, everything())
+  select(geo_sample, condition, subject_id, everything()) %>% 
+  mutate(timepoint = if_else(pathogen == "Escherichia coli", 24, timepoint))
 
 GSE33341_ecoli_human_metadata
 
@@ -418,7 +419,8 @@ all_degs_mouse_ecoli= all_contrasts_degs %>%
                                comparisonA == "conditionMouse_C57BL.6J_12"	~ "Ecoli_12h",
                                comparisonA == "conditionMouse_C57BL.6J_24"	~ "Ecoli_24h",
                                T~comparisonA),
-         organism = "Mouse") %>% 
+         organism = "Mouse",
+         timepoint = str_remove(condition, "Ecoli_") %>% str_remove("h")) %>% 
   select(condition, everything()) %>% 
   clean_names() %>% 
   rename(human_symbol = symbol,
@@ -820,7 +822,11 @@ GSE33341_human_expression_metadata  = GSE33341_human_exprs %>%
 GSE33341_human_expression_metadata %>% 
   saveRDS(file = here("tables", "ecoli_infection_human_GSE33341_metadata.rds"))
 
-human_metadata =  GSE33341_ecoli_mouse_human_metadata %>% 
+
+GSE33341_human_expression_metadata =
+  readRDS(file = here("tables", "ecoli_infection_human_GSE33341_metadata.rds"))
+
+human_metadata =  GSE33341_human_expression_metadata %>% 
   filter(organism == "Human")
 
 human_metadata %>% 
@@ -967,7 +973,7 @@ GSE33341_human_log2fc_sample_wide
 
 ##### Differential expression
 
-#### Create ExpressionSet
+###### Create ExpressionSet
 
 ```{r}
 #Import
@@ -1006,7 +1012,7 @@ eset_human_ecoli %>% saveRDS(file = here("tables", "ecoli_infection_human_eset.r
 
 
 
-#### Differential expression (Limma)
+###### Limma
 Paired samples design
 ```{r}
 
@@ -1060,7 +1066,8 @@ all_degs_human_ecoli= all_contrasts_degs %>%
   dplyr::mutate(comparisonRef = str_replace(comparisonRef, "treatment", "Time0")) %>% 
   dplyr::mutate(condition = case_when(comparisonA == "statusinfected"	~ "Ecoli_24h",
                                T~comparisonA),
-         organism = "Human") %>% 
+         organism = "Human",
+        timepoint = str_remove(condition, "Ecoli_") %>% str_remove("h")) %>% 
   dplyr::select(condition, everything()) %>% 
   clean_names() %>% 
   dplyr::rename(human_symbol = symbol,
@@ -2296,283 +2303,55 @@ correlation_long_all_btm_mouse_human_timepoints_summary_plot
 
 #Performance tests
 ## ROC Curve
-Do for one direction (up and then down)
-Do one sided t test for mouse, fit, and human
-Positive control: Human
-Neg control: Random permutation
 
-
-Import data
 ```{r}
+#Import ============
+#Import DEGs table
+all_degs_mouse_ecoli = readRDS(file = here("tables", "ecoli_infection_mouse_dge_limma_degs.rds"))
+all_degs_human_ecoli = readRDS(file = here("tables", "ecoli_infection_human_dge_limma_degs.rds"))
+
 #ImmuneGO ontologies
 ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
 
-#Import DEGs table
-human_mouse_ecoli_log2fc_avg =
-  readRDS(file = here("tables", "ecoli_infection_human_mouse_qc_raw_qn_samples_log2fc_avg.rds"))
-
-dge_long_genes = human_mouse_ecoli_log2fc_avg  %>% 
-  rename(log2fc = mean_log2fc, se = se_log2fc, sd = sd_log2fc, adj_p_val = p_adj, symbol = human_symbol) %>% 
-  mutate(timepoint = if_else(timepoint == "Hospitalization", "24", timepoint)) %>% 
-  filter(timepoint == "24")
-
-```
-
-Calculate ROC curve
-```{r fig.height=5, fig.width=4}
-set.seed(123)
-
-######### Input -----
-
-#All genes
-# genes_df_input = dge_long_genes 
-# filename = "EcoliInfection_Mouse24h_HumanHospitalization_AllGenes"
-# filename_title ="Ecoli Infection,\nMouse (24h) to Human (Hospitalization),\nAll"
-
-#Immune
-genes_df_input = dge_long_genes 
-  #Filter immune genes only
-  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes$genes %>% unique()))
-filename = "EcoliInfection_Mouse24h_HumanHospitalization_Immune"
-filename_title ="Ecoli Infection,\nMouse (24h) to Human (Hospitalization),\nImmune genes"
-
-######### UP -----------
-#Do one sided t-test for each model
-dge_long_genes_up = genes_df_input %>% 
-  mutate(
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    pval_one_sided = pnorm(z, lower.tail = F), #onesided, p(gene) > 0 (right tail)
-    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    direction = if_else(pval_one_sided_adj < 0.05, "up", "not_up")) %>%
-  select(-adj_p_val) %>% 
-  rename(adj_p_val = pval_one_sided_adj)
-
-#Assign human log2fc direction as truth
-truth_human = dge_long_genes_up %>% 
-  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
-  filter(organism == "Human") %>% 
-  distinct() %>% 
-  pivot_wider(names_from = "organism",
-              values_from = "direction") %>% 
-  rename(truth = Human) %>% 
-  mutate(organism = "Human")
-
-#Generate comparable distributions
-perfect_prediction = truth_human %>%
-  mutate(prob = adj_p_val) %>%
-  rename(pred = truth)
-
-uniform_prediction = perfect_prediction %>%
-  group_by(timepoint) %>% 
-  mutate(prob = runif(n()),
-         organism = "Uniform")
-
-#Get only up and not up genes from models
-models_up = genes_df_input %>% 
-  mutate(
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    pval_one_sided = pnorm(z, lower.tail = F), #one sided, higher
-    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    direction = if_else(pval_one_sided_adj < 0.05, "up", "not_up")) %>%
-  select(-adj_p_val) %>% 
-  rename(adj_p_val = pval_one_sided_adj) %>% 
-  filter(organism != "Human") %>% 
-  mutate(pred = direction,
-         prob = adj_p_val) %>% 
-  #Add controls
-  bind_rows(
-    perfect_prediction,
-    uniform_prediction
-    )
-
-#Get probabilities (UP)
-classified_df_probs_up = truth_human %>% 
-  select(symbol, timepoint, truth) %>%
-  inner_join(models_up %>% 
-               select(symbol, timepoint, pred, prob, model = organism),
-             by = join_by("symbol", "timepoint")) %>% 
-  mutate(not_prob = 1 - prob,
-         sum = prob + not_prob,
-         truth = as.factor(truth)) %>% 
-  distinct()
-
-
-#Get ROC
-roc_curve_up_notup = classified_df_probs_up %>% 
-  filter(model %in% c("Human", "Mouse", "Uniform", "FIT")) %>%
-  select(symbol, timepoint, truth, pred, model, prob, not_prob, sum) %>%
-  group_by(model, timepoint) %>%
-  roc_curve(truth, prob) %>%
-  mutate(comparison = "Up vs Non-Up")
-
-classified_df_probs_up %>% 
-  dplyr::count(model, timepoint)
-
-######### DOWN -----------
-#Do one sided t-test for each model
-dge_long_genes_down = genes_df_input %>% 
-  mutate(
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    pval_one_sided = pnorm(z, lower.tail = T), #onesided, p(gene) < 0 (left tail)
-    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    direction = if_else(pval_one_sided_adj < 0.05, "down", "not_down")) %>%
-  select(-adj_p_val) %>% 
-  rename(adj_p_val = pval_one_sided_adj)
-
-#Assign human log2fc direction as truth
-truth_human = dge_long_genes_down %>% 
-  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
-  filter(organism == "Human") %>% 
-  distinct() %>% 
-  pivot_wider(names_from = "organism",
-              values_from = "direction") %>% 
-  rename(truth = Human) %>% 
-  mutate(organism = "Human")
-
-#Generate comparable distributions
-perfect_prediction = truth_human %>%
-  #Invert probabilities
-  mutate(prob = 1 - adj_p_val) %>%
-  rename(pred = truth)
-uniform_prediction = perfect_prediction %>%
-  group_by(timepoint) %>% 
-  mutate(prob = runif(n()),
-         organism = "Uniform")
-
-
-#Get only up and not up genes from models
-models_down = genes_df_input %>% 
-  mutate(
-    se = (ci_high - ci_low) / (2 * 1.96),
-    z = log2fc / se,
-    pval_one_sided = pnorm(z, lower.tail = T), #one sided, less
-    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-    #Invert probabilities
-    pval_one_sided_adj = 1 - pval_one_sided_adj,
-    direction = if_else(pval_one_sided_adj < 0.05, "down", "not_down")) %>%
-  select(-adj_p_val) %>% 
-  rename(adj_p_val = pval_one_sided_adj) %>% 
-  filter(organism != "Human") %>% 
-  mutate(pred = direction,
-         prob = adj_p_val) %>% 
-  #Add controls
-  bind_rows(perfect_prediction, uniform_prediction)
-
-#Get probabilities (DOWN)
-classified_df_probs_down = truth_human %>% 
-  select(symbol, timepoint, truth) %>%
-  inner_join(models_down %>% 
-               select(symbol, timepoint, pred, prob, model = organism),
-             by = join_by("symbol", "timepoint")) %>% 
-  mutate(not_prob = 1 - prob,
-         sum = prob + not_prob,
-         truth = as.factor(truth)) %>% 
-  distinct()
-
-
-#Get ROC
-roc_curve_down_notdown = classified_df_probs_down %>% 
-  filter(model %in% c("Human", "Mouse", "Uniform", "FIT")) %>%
-  select(symbol, timepoint, truth, pred, model, prob, not_prob, sum) %>%
-  group_by(model, timepoint) %>%
-  roc_curve(truth, prob) %>%
-  mutate(comparison = "Down vs Non-Down")
-
-#Calculate AUC --------
-#Get AUC
-auc_results = classified_df_probs_down %>%
-  group_by(model, timepoint) %>%
-  yardstick::roc_auc(truth, prob) %>% 
-  mutate(comparison = "Down vs Non-Down") %>% 
-  bind_rows(
-    classified_df_probs_up %>%
-      group_by(model, timepoint) %>%
-      yardstick::roc_auc(truth, prob) %>%
-      mutate(comparison = "Up vs Non-Up")) %>% 
-  mutate(.estimate = round(.estimate, 2)) %>% 
-  rename(roc_auc = .estimate)
-
-#Merge data -------
-roc_curve_data = roc_curve_up_notup %>% 
-  bind_rows(roc_curve_down_notdown) %>% 
-  left_join(auc_results, 
-            by = c("model", "comparison", "timepoint")) %>% 
-  mutate(condition = "E. coli infection",
-         filename = filename)
-
-roc_curve_data %>% 
-  saveRDS(file = here("tables", paste0("roc_curve_data_", filename, ".rds")))
-
-#PLOT ROC Curve
-roc_curve_plot = roc_curve_data %>% 
-  ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
-  geom_path(size = 1, alpha = 1) +
-  geom_abline(lty = 3) +
-  theme_vaxgo() +
-  facet_grid(~fct_rev(comparison)~paste0(timepoint, "h")) + 
-  scale_color_manual(values = c(
-    "Mouse" = "#4DBBD5FF",
-    "FIT"   = "#4361ee",
-    "Human" = "#90A4AEFF",
-    "Uniform" = "gray80"
-    )) +
-  labs(
-    title = filename_title, 
-  x = "FPR",
-  y = "TPR",
-  color = "Model") + 
-  theme(
-    strip.text = element_text(size = 10),
-    strip.placement = "outside",
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 10,),
-    axis.text.x = element_text(size = 10, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.text.y = element_text(size = 10),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank()
-  ) +
-  scale_x_continuous(n.breaks = 3) +
-  scale_y_continuous(n.break = 3)
-
-roc_curve_plot
-
-roc_curve_plot %>%
-  ggsave(filename = here("Figures", paste0(filename, "_roc_curve_plot", ".png")),
-         width = 4,
-         height = 5)
-
-```
-
-
-
-# Performance tests 
-
-## ROC Curve 
-
-Do for one direction (up and then down) Do one sided t test for mouse,
-fit, and human Positive control: Human Neg control: Random permutation
-
-Import data
-
-```{r}
-#Import DEGs table
-dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds")) 
 #Import metadata
-human_mouse_fluad_metadata = readRDS(file = here("tables", "human_mouse_fluad_metadata.rds"))
-#ImmuneGO ontologies
-ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
+human_mouse_metadata = readRDS(file = here("tables", "ecoli_infection_human_mouse_metadata.rds")) %>% 
+  mutate(timepoint = if_else(organism == "Human" & pathogen == "Escherichia coli", "24", timepoint),
+         organism = if_else(organism == "Mus musculus", "Mouse", organism))
 
 
-dge_long_genes = dge_long_genes %>% 
+
+#Pre-process data =============
+all_degs_human_mouse = all_degs_mouse_ecoli %>% 
+  bind_rows(all_degs_human_ecoli) %>% 
+  mutate(timepoint = str_remove(condition, "Ecoli_") %>% str_remove("h")) %>% 
+  arrange(human_symbol) %>% 
   filter(organism != "FIT") %>% 
-  inner_join(human_mouse_fluad_metadata %>%
+  inner_join(human_mouse_metadata %>%
                group_by(organism, timepoint) %>%
-               summarize(n = n()) %>% 
-               mutate(timepoint = as.numeric(timepoint)),
+               summarize(n = n()),
                by = join_by("organism", "timepoint"))
+
+human_mouse_metadata %>% select(timepoint, organism) %>% distinct()
+
+#Timpoints differ from human and model
+timepoint_reference = "24"
+human_data_reference <- all_degs_human_mouse %>% filter(organism == "Human")
+new_timepoints <- c(all_degs_human_mouse %>% filter(organism != "Human") %>% pull(timepoint) %>% unique() %>% as.character())
+duplicated_human_data <- map_dfr(new_timepoints, ~ {
+  df_copy <- human_data_day1
+  df_copy <- df_copy %>%
+    mutate(timepoint = .x)
+
+  return(df_copy)
+})
+
+dge_long_genes_matched = all_degs_human_mouse %>% 
+  filter(organism == "Human" & timepoint == timepoint_reference) %>% 
+  bind_rows(duplicated_human_data) 
+
+#Input
+dge_long_genes = dge_long_genes_matched
+
 #All genes
 genes_roc_allgenes = dge_long_genes
 #Filter immune genes
@@ -2604,18 +2383,20 @@ Inputs
 ```{r fig.height=4, fig.width=10}
 set.seed(123)
 ######### Input -----
-# filename = "Fluad_All_OnlyImmune"
-# genes_df_input = bind_rows(
-#   genes_roc_allgenes %>% mutate(model_type = "Mouse"),
-#   genes_roc_allgenes_immunegenes %>% mutate(model_type = "Immune")
-# )
-
-
-filename = "Fluad_AllDEGs_HumanDEGs_OnlyImmune"
+filename = "ecoli_infection_human_mouse"
+gene_set_filename = "All_OnlyImmune"
 genes_df_input = bind_rows(
-  genes_roc_DEGs_all %>% mutate(model_type = "Mouse"),
-  genes_roc_DEGs_immune %>% mutate(model_type = "Immune")
+  genes_roc_allgenes %>% mutate(model_type = "Mouse"),
+  genes_roc_allgenes_immunegenes %>% mutate(model_type = "Immune")
 )
+
+
+# filename = "ecoli_infection_human_mouse"
+# gene_set_filename = "HumanDEGs_OnlyImmune"
+# genes_df_input = bind_rows(
+#   genes_roc_DEGs_all %>% mutate(model_type = "Mouse"),
+#   genes_roc_DEGs_immune %>% mutate(model_type = "Immune")
+# )
 
 ```
 
