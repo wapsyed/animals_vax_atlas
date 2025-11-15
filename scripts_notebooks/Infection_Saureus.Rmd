@@ -86,7 +86,7 @@ GSE19668_metadata_filtered = GSE19668_metadata %>%
 #Save
 GSE19668_metadata_filtered %>% saveRDS(file = here("tables", "saureus_infection_mouse_metadata_filtered.rds"))
 
-
+GSE19668_metadata %>% filter(treatment == "Staphylococcus aureus")
 ```
 
 
@@ -1972,7 +1972,28 @@ all_degs_human_mouse = all_degs_human_mouse %>%
                summarize(n = n()) %>% 
                mutate(timepoint = as.character(timepoint)),
                by = join_by("organism", "timepoint")) %>% 
-  mutate(symbol = human_symbol)
+  mutate(symbol = human_symbol) %>% 
+  mutate(timepoint = if_else(organism == "Human", "24", timepoint))
+
+
+# Duplicate the human reference data to match with the mice timepoints
+human_data_day1 <- all_degs_human_mouse %>% filter(organism == "Human")
+new_timepoints <- c("2", "4", "6", "12")
+duplicated_human_data <- map_dfr(new_timepoints, ~ {
+  df_copy <- human_data_day1
+  df_copy <- df_copy %>%
+    mutate(timepoint = .x)
+
+  return(df_copy)
+})
+
+all_degs_human_mouse = all_degs_human_mouse %>% 
+  filter(organism != "Human") %>% 
+  bind_rows(duplicated_human_data) 
+
+all_degs_human_mouse %>% 
+  select(organism, timepoint) %>% 
+  distinct()
 
 #Input
 dge_long_genes = all_degs_human_mouse
@@ -2029,7 +2050,7 @@ genes_df_input = bind_rows(
 
 
 Calculate ROC curve
-```{r fig.height=5, fig.width=8}
+```{r fig.height=5, fig.width=10}
 #=====================================================
 # Compute probabilities
 #=====================================================
@@ -2145,13 +2166,16 @@ roc_curve_up_notup = classified_df_probs_up %>%
   filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
   group_by(model, timepoint) %>%
   roc_curve(truth, prob) %>%
-  mutate(comparison = "Up")
+  mutate(comparison = "Up") %>% 
+  ungroup()
+
 
 roc_curve_down_notdown = classified_df_probs_down %>% 
   filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
   group_by(model, timepoint) %>%
   roc_curve(truth, prob) %>%
-  mutate(comparison = "Down")
+  mutate(comparison = "Down") %>% 
+  ungroup()
 
 #=====================================================
 #Compute AUC 
@@ -2180,11 +2204,16 @@ auc_results_down = classified_df_probs_down %>%
 #PLOT ROC Curve
 roc_curve_plot = roc_curve_up_notup %>% 
   bind_rows(roc_curve_down_notdown) %>%
-  ggplot(aes(x = 1 - specificity, y = sensitivity, color = model)) +
+  mutate(timepoint_num = readr::parse_number(timepoint),
+    timepoint = paste0(timepoint, "h"),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) %>% 
+  ggplot(aes(x = 1 - specificity, 
+             y = sensitivity, 
+             color = model)) +
   geom_path(size = 1, alpha = 1) +
   geom_abline(lty = 3) +
   theme_vaxgo() +
-  facet_grid(~fct_rev(comparison)~paste("Day", timepoint)) + 
+  facet_grid(~fct_rev(comparison)~timepoint) +
   scale_color_manual(values = c(
     "Mouse" = "#4DBBD5FF",
     "Human" = "#90A4AEFF",
@@ -2209,6 +2238,7 @@ roc_curve_plot = roc_curve_up_notup %>%
   scale_x_continuous(n.breaks = 3) +
   scale_y_continuous(n.break = 3)
 
+roc_curve_plot
 
 # Visualize AUC
 auc_plot <- bind_rows(auc_results_up, 
@@ -2216,7 +2246,9 @@ auc_plot <- bind_rows(auc_results_up,
   mutate(model = factor(model, levels = c("Perfect", "Mouse", "Immune", "Uniform")),
          comparison = factor(comparison, levels = c("Up", "Down"))) %>%
   
-  ggplot(aes(x = auc, y = factor(timepoint) %>% fct_rev(), fill = model)) +
+  ggplot(aes(x = auc, 
+             y = fct_reorder(timepoint, as.numeric(timepoint)) %>% fct_rev(), 
+             fill = model)) +
   geom_col(width = 0.8,
            position = position_dodge()) +
   
@@ -2261,10 +2293,16 @@ roc_auc_curve_plot = ((roc_curve_plot) |
                   title = filename)
 
 roc_auc_curve_plot %>%
-  ggsave(filename = here("Figures", paste0(filename, "_performance_roc_curve_", gene_set_filename, ".png")),
-         width = 8,
+  ggsave(filename = here("Figures", paste0("roc_curve_plot_", filename, ".png")),
+         width = 10,
          height = 5)
 
 roc_auc_curve_plot
 ```
+
+
+```{r fig.height=5, fig.width=10}
+roc_auc_curve_plot
+```
+
 
