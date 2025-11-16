@@ -133,7 +133,7 @@ autoGSEA <- function(df, TERM2GENE, geneset_name) {
       filter(condition == condition_i) %>%
       dplyr::select(genes, log2fold_change) %>%
       distinct() %>%
-      # mutate(rank = rank(log2fold_change, ties.method = "random")) %>%
+      mutate(rank = rank(log2fold_change, ties.method = "random")) %>%
       arrange(desc(log2fold_change)) %>% 
       deframe()
     

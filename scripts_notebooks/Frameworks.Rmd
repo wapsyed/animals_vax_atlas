@@ -2174,23 +2174,24 @@ Import
 ```{r}
 #Import datasets ------
 #Import DGE output
-dge_long_genes = read_rds(file= here("tables", "dge_fit_mouse_human_long.rds"))
-
+all_degs_human_mouse = readRDS(here("tables", "ecoli_infection_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Ecoli")
 #Import BTMs annotation table
-ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
 
+filename = "ecoli_infection_human_mouse"
 
 #Clean metadata 
-annotation_conditions = dge_long_genes %>% 
+annotation_conditions = all_degs_human_mouse %>% 
   select(condition, timepoint, model = organism) %>% 
-  distinct()
+  distinct() 
 
 # Gene set enrichment analysis (GSEA) --------
 #Get calculate means -----
 #Annotate genes by BTM 
 
-dge_btm_process = dge_long_genes %>% 
+dge_btm_process = all_degs_human_mouse %>% 
+  rename(symbol = human_symbol) %>% 
   ungroup() %>% 
   inner_join(btm_annotation_genes, by = "symbol") %>% 
   filter(immune_set == "BTM by Modules") %>%
@@ -2198,11 +2199,11 @@ dge_btm_process = dge_long_genes %>%
   group_by(condition, timepoint, process)
 
 dge_btm_mean_process = dge_btm_process %>% 
-  summarize(mean_log2fc = mean(log2fc),
-            median_log2fc = median(log2fc),
-            sd_log2fc = sd(log2fc),
-            var_log2fc = var(log2fc),
-            organism,
+  summarize(mean_log2fc = mean(mean_l2fc),
+            median_log2fc = median(mean_l2fc),
+            sd_log2fc = sd(mean_l2fc),
+            var_log2fc = var(mean_l2fc),
+            organism, pathogen,
             group, subgroup) %>%
   distinct() %>% 
   ungroup()
@@ -2212,20 +2213,27 @@ dge_btm_mean_process
 ```
 
 ```{r}
+library(clusterProfiler)
+library("stats")
 #Run GSEA for DGE outputs-----
 #Human ImmuneGO/BTMs
-term2gene = ImmuneGO_BTM_grouped_genes %>% 
-  select(process, genes)
+term2gene = btm_annotation_genes %>% 
+  select(process, genes = symbol)
 
 #Clean table for GSEA standard
-df_genes2GSEA_human = dge_long_genes %>% 
+df_genes2GSEA = all_degs_human_mouse %>% 
   distinct() %>% 
-  select(condition, genes = symbol, log2fold_change = log2fc)  
+  select(organism, pathogen, timepoint, genes = human_symbol, log2fold_change = mean_l2fc)  %>% 
+  mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) %>% 
+  select(condition, genes, log2fold_change)
 
 #Run multiple GSEA and unite means
-gsea_results_immuneGO_Manual_human = autoGSEA(df = df_genes2GSEA_human,
+gsea_btm_results = autoGSEA(df = df_genes2GSEA,
          TERM2GENE = term2gene,
-         geneset_name = "Human_ImmuneGO") %>% 
+         geneset_name = "ImmuneGO_Human")
+
+
+gsea_btm_results$gsea
   clean_names() %>% 
   rename(process = id) %>% 
   #Unite means and GSEA
@@ -2233,8 +2241,8 @@ gsea_results_immuneGO_Manual_human = autoGSEA(df = df_genes2GSEA_human,
   
   
 #Save
-gsea_results_immuneGO_Manual_human %>% 
-    saveRDS(here("GSEA_ORA", "gsea_results_immuneGO_BTM_Human_Manual.rds"))
+gsea_btm_results %>% 
+    saveRDS(here("tables", paste0(filename, "_gsea_btm_results.rds")))
 ```
 
 #### Plot distributions
