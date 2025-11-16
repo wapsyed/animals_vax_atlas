@@ -328,8 +328,10 @@ mouse_fluad_metadata %>%
 
 ```
 
-## Mixed models (Limma)
-### VariancePartition
+## Modelling
+
+### Mixed models
+#### VariancePartition
 
 ```{r}
 library("variancePartition")
@@ -364,7 +366,7 @@ plotStratify(Expression ~ Timepoint, GE,
 
 
 
-### Limma
+#### Limma
 Paired samples design
 ```{r}
 #Create model matrix
@@ -436,145 +438,179 @@ all_degs_mouse %>% saveRDS(file = here("tables", "Example_GSE120661_degs_mouse.r
 ```
 
 
-## T test and wilcoxon (REFAZER)
+
+
+
+### T test
 ```{r}
-#Tests
-example_log2fc_avg_paired_ttest_wilcoxon <- human_mouse_example_raw_log2fc %>% 
-  # Group by gene and experimental variables
-  group_by(symbol, organism, timepoint, measure) %>% 
+#Import
+mouse_fluad_log2fc_filtered_sample_long = 
+  readRDS(here("tables", "ecoli_fluad_mouse_exprs_clean_long.rds"))
+#Import
+mouse_fluad_log2_hgnc_symbol = readRDS(here("tables", "influenza_fluad_mouse_exprs_hgnc_symbol.rds")) %>% 
+  distinct()
+```
+
+
+```{r}
+#Compute summary statistics
+fluad_log2fc_summary = mouse_fluad_log2fc_filtered_sample_long %>% 
+  group_by(human_symbol, timepoint) %>%
   summarize(
-    # --- Basic descriptive statistics ---
     avg_log2fc = mean(log2fc, na.rm = TRUE),  # mean log2 fold change
     n_subjects = n(),                         # number of samples
     sd = sd(value, na.rm = TRUE),             # standard deviation
     se = sd / sqrt(n_subjects),               # standard error
-    effect_size = avg_log2fc / sd,            # Cohen’s d-like effect size
+    effect_size = avg_log2fc / sd)            # Cohen’s d-like effect size
 
-    # --- Paired t-test ---
-    pval_ttest_paired = tryCatch(
-      t.test(value, day0, paired = TRUE, var.equal = FALSE)$p.value,
-      error = function(e) NA_real_
-    ),
+mouse_fluad_log2_hgnc_symbol_wide = mouse_fluad_log2_hgnc_symbol %>%
+  # rownames_to_column("human_symbol") %>% 
+  pivot_longer(cols = -human_symbol,
+               names_to = "geo_sample",
+               values_to = "log2") %>% 
+  inner_join(mouse_fluad_metadata %>% 
+               select(geo_sample, participant_id, timepoint),
+             by = "geo_sample") %>% 
+  select(human_symbol, participant_id, timepoint, log2) %>% 
+  distinct() %>% 
+  select(participant_id, human_symbol, timepoint, value = log2) %>%
+  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_") 
 
-    # --- Paired Wilcoxon signed-rank test ---
-    pval_wilcoxon_paired = tryCatch(
-      wilcox.test(value, day0, paired = TRUE)$p.value,
-      error = function(e) NA_real_
-    ),
-
-    # --- Unpaired (independent) t-test ---
-    pval_ttest_unpaired = tryCatch(
-      t.test(value, day0, paired = FALSE, var.equal = FALSE)$p.value,
-      error = function(e) NA_real_
-    ),
-
-    # --- Unpaired (independent) Wilcoxon rank-sum test ---
-    pval_wilcoxon_unpaired = tryCatch(
-      wilcox.test(value, day0, paired = FALSE)$p.value,
-      error = function(e) NA_real_
-    )
-  ) %>% 
-  ungroup() %>% 
-  mutate(
-    # --- Confidence intervals for the mean log2FC ---
-    ci_low = avg_log2fc - 1.96 * se,
-    ci_high = avg_log2fc + 1.96 * se,
-
-    # --- Multiple testing correction (FDR) ---
-    pval_adj_ttest_paired = p.adjust(pval_ttest_paired, method = "fdr"),
-    pval_adj_wilcoxon_paired = p.adjust(pval_wilcoxon_paired, method = "fdr"),
-    pval_adj_ttest_unpaired = p.adjust(pval_ttest_unpaired, method = "fdr"),
-    pval_adj_wilcoxon_unpaired = p.adjust(pval_wilcoxon_unpaired, method = "fdr"),
-    
-    
-    # --- Significance classification for paired t-test ---
-    significant_ttest_paired = case_when(
-      pval_adj_ttest_paired <= 0.01 ~ "0.01",
-      pval_adj_ttest_paired <= 0.05 ~ "0.05",
-      pval_adj_ttest_paired <= 0.10 ~ "0.10",
-      TRUE ~ "ns"
-    ), # --- Significance classification for paired Wilcoxon ---
-    significant_wilcoxon_paired = case_when(
-      pval_adj_wilcoxon_paired <= 0.01 ~ "0.01",
-      pval_adj_wilcoxon_paired <= 0.05 ~ "0.05",
-      pval_adj_wilcoxon_paired <= 0.10 ~ "0.10",
-      TRUE ~ "ns"
-    ), # --- Significance classification for unpaired t-test ---
-    significant_ttest_unpaired = case_when(
-      pval_adj_ttest_unpaired <= 0.01 ~ "0.01",
-      pval_adj_ttest_unpaired <= 0.05 ~ "0.05",
-      pval_adj_ttest_unpaired <= 0.10 ~ "0.10",
-      TRUE ~ "ns"
-    ), # --- Significance classification for unpaired Wilcoxon ---
-    significant_wilcoxon_unpaired = case_when(
-      pval_adj_wilcoxon_unpaired <= 0.01 ~ "0.01",
-      pval_adj_wilcoxon_unpaired <= 0.05 ~ "0.05",
-      pval_adj_wilcoxon_unpaired <= 0.10 ~ "0.10",
-      TRUE ~ "ns"
-    )
-
-# Summarize DEG counts per significance cutoff and test
-example_log2fc_avg_paired_ttest_summary <- example_log2fc_avg_paired_ttest_wilcoxon %>%
-  # Keep only relevant columns for summarization
-  select(organism, timepoint, starts_with("significant_")) %>%
+# Paired t-test
+mouse_fluad_log2fc_paired_ttest <- mouse_fluad_log2_hgnc_symbol_wide %>%
+  group_by(human_symbol) %>%
   
-  # Convert wide → long format (each test becomes a "test" entry)
-  pivot_longer(
-    cols = starts_with("significant_"),
-    names_to = "test",
-    values_to = "significance"
+  summarise(
+    pval_day1 = tryCatch(t.test(day_1, day_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day3 = tryCatch(t.test(day_3, day_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day7 = tryCatch(t.test(day_7, day_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    .groups = 'drop'
   ) %>%
   
-  # Group by organism, timepoint, test type, and significance level
-  group_by(organism, timepoint, test, significance) %>%
-  
-  # Count number of genes (rows) in each category
-  summarise(n_genes = n(), .groups = "drop")
-
-example_log2fc_avg_paired_ttest_summary %>% 
-  filter(significance == "**")
-
-
-#Visualize
-example_log2fc_avg_paired_ttest_summary_plot <- example_log2fc_avg_paired_ttest_summary %>%
   mutate(
-    # Identify paired/unpaired *before* cleaning the name
-    paired = if_else(str_detect(test, "_paired"), "Paired", "Unpaired")) %>% 
-  mutate(# Clean up test names
-    test = gsub("significant_", "", test),
-    test = case_when(
-      grepl("ttest", test) ~ "t-Test",
-      grepl("wilcoxon", test) ~ "Wilcoxon",
-      TRUE ~ test
-    ),
-    
-    # Order significance cutoffs and convert to factor
-    significance = factor(significance, levels = c("***", "**", "*", "ns"))
-  )
+    padj_day1 = p.adjust(pval_day1, method = "fdr"),
+    padj_day3 = p.adjust(pval_day3, method = "fdr"),
+    padj_day7 = p.adjust(pval_day7, method = "fdr")
+  ) %>% 
+  pivot_longer(
+    cols = starts_with(c("pval_", "padj_")),
+    names_to = c(".value", "timepoint"),
+    names_pattern = "(pval|padj)_(day\\d+)"
+  ) %>% 
+  mutate(condition = case_when(timepoint == "day1"	~ "Fluad_24_PBMC",
+                               timepoint == "day3"	~ "Fluad_72_PBMC",
+                               timepoint == "day7"	~ "Fluad_168_PBMC",
+                               T~timepoint),
+         timepoint = str_remove(timepoint, "day"),
+         test = "t-Test",
+         paired = "Paired")
 
+#Unpaired
+mouse_fluad_log2fc_unpaired_ttest <- mouse_fluad_log2_hgnc_symbol_wide %>%
+  group_by(human_symbol) %>%
+  
+  summarise(
+    pval_day1 = tryCatch(t.test(day_1, day_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day3 = tryCatch(t.test(day_3, day_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day7 = tryCatch(t.test(day_7, day_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    .groups = 'drop'
+  ) %>%
+  
+  mutate(
+    padj_day1 = p.adjust(pval_day1, method = "fdr"),
+    padj_day3 = p.adjust(pval_day3, method = "fdr"),
+    padj_day7 = p.adjust(pval_day7, method = "fdr")
+  ) %>% 
+  pivot_longer(
+    cols = starts_with(c("pval_", "padj_")),
+    names_to = c(".value", "timepoint"),
+    names_pattern = "(pval|padj)_(day\\d+)"
+  ) %>% 
+  mutate(condition = case_when(timepoint == "day1"	~ "Fluad_24_PBMC",
+                               timepoint == "day3"	~ "Fluad_72_PBMC",
+                               timepoint == "day7"	~ "Fluad_168_PBMC",
+                               T~timepoint),
+         timepoint = str_remove(timepoint, "day"),
+         test = "t-Test",
+         paired = "Unpaired")
+
+mouse_fluad_log2fc_paired_unpaired_ttest = mouse_fluad_log2fc_paired_ttest %>% 
+  bind_rows(mouse_fluad_log2fc_unpaired_ttest) 
+
+mouse_fluad_log2fc_paired_unpaired_ttest %>% 
+  saveRDS(file = here("tables", "influenza_fluad_mouse_log2fc_paired_unpaired_ttest.rds"))
+
+```
+
+
+### Compare DGE methods
+
+```{r}
+#Import ------
+#t-Test
+mouse_fluad_log2fc_paired_unpaired_ttest =
+  readRDS(file = here("tables", "influenza_fluad_mouse_log2fc_paired_unpaired_ttest.rds")) %>% 
+  mutate(organism = "Mouse")
+
+#Limma
+fluad_mouse_degs = readRDS(file = here("tables", "influenza_fluad_mouse_dge_limma_degs.rds")) %>% 
+  clean_names() %>% 
+  rename(padj = adj_p_val) %>% 
+  mutate(organism = "Mouse",
+         timepoint = str_remove(comparison_a, "Time"),
+         test = "Limma",
+         paired = "Paired") 
+
+
+#Merge datasets
+degs_ttest_limma_mouse =
+  bind_rows(
+    mouse_fluad_log2fc_paired_unpaired_ttest,
+    fluad_mouse_degs
+    )
+
+#Summarize  
+degs_ttest_limma_mouse_summary = degs_ttest_limma_mouse %>% 
+  group_by(organism, timepoint, test, paired) %>% 
+  summarise(
+    n_degs = sum(padj <= 0.05, na.rm = TRUE),
+    .groups = "drop"
+  ) 
+
+degs_ttest_limma_mouse_summary
+
+```
+
+
+```{r fig.height=5, fig.width=5}
 # Plot number of DEGs per test and significance level
-example_log2fc_avg_paired_ttest_summary_plot_gg <- example_log2fc_avg_paired_ttest_summary_plot %>%
-  filter(significance %in% c("**")) %>%
+degs_ttest_limma_mouse_summary_plot_gg <- degs_ttest_limma_mouse_summary %>%
   ggplot(aes(
     x = timepoint,
-    y = n_genes,
+    y = n_degs,
     fill = test,
     alpha = paired
   )) +
-  geom_col(width = 0.6, position = position_dodge2()) +
+  geom_col(width = 0.8, position = position_dodge2()) +
   
   # Manual colors per test
   scale_fill_manual(values = c(
-    "t-Test" = "gray50",
-    "Wilcoxon" = "#4DBBD5FF"
+    "t-Test" = "gray25",
+    "Limma" = "#4DBBD5FF"
   )) +
   
   # Alpha: paired = 1, unpaired = 0.5
-  scale_alpha_manual(values = c("Paired" = 1, "Unpaired" = 0.5)) +
+  scale_alpha_manual(values = c("Paired" = 1, "Unpaired" = 0.2)) +
   
   # Continuous x-axis for numeric timepoints
   scale_x_discrete(
-    breaks = sort(unique(example_log2fc_avg_paired_ttest_summary_plot$timepoint)),
+    breaks = sort(unique(degs_ttest_limma_mouse_summary$timepoint)),
     expand = c(0.01, 0.01)
   ) +
   scale_y_continuous(expand = c(0, 0)) +
@@ -582,13 +618,13 @@ example_log2fc_avg_paired_ttest_summary_plot_gg <- example_log2fc_avg_paired_tte
   theme_vaxgo() +
   labs(
     title = "Total DEGs by test and timepoint",
-    subtitle = "Comparison across paired and unpaired tests (FDR ≤ 0.05)",
+    subtitle = "Comparison across tests (FDR ≤ 0.05), Fluad vaccine",
     x = "Day",
     y = "Number of DEGs",
     fill = "Test",
     alpha = "Pairing"
   ) +
-  facet_grid(~organism, scales = "free_y") +
+  facet_wrap(~organism, scales = "free_y") +
   theme(
     legend.position = "top",
     axis.line.y = element_blank(),
@@ -597,7 +633,12 @@ example_log2fc_avg_paired_ttest_summary_plot_gg <- example_log2fc_avg_paired_tte
   )
 
 # Render plot
-example_log2fc_avg_paired_ttest_summary_plot_gg
+degs_ttest_limma_mouse_summary_plot_gg
+
+degs_ttest_limma_mouse_summary_plot_gg %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_mouse_dge_ttest_limma_summary.png"),
+         width = 5,
+         height = 5)
 ```
 
 
@@ -1205,10 +1246,6 @@ human_mouse_fluad_metadata_grouped = human_mouse_fluad_metadata %>%
 
 #Input -------
 results_log2fc = human_mouse_fluad_raw_qn_log2fc %>% 
-  filter(measure == "value_raw",
-         timepoint %in% c(1, 3, 7))
-
-results_log2fc_avg_ttest = human_mouse_fluad_raw_qn_log2fc_avg %>% 
   filter(measure == "value_raw",
          timepoint %in% c(1, 3, 7))
 
