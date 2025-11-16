@@ -1270,6 +1270,7 @@ ggplot(aes(x = participant_1_value, y = participant_2_value, color = group)) +
 
 ## Compare Human vs Mouse
 
+### Combine datasets
 ```{r}
 #Unite Mouse and Human datasets. Samples.
 human_mouse_log2fc_samples = 
@@ -1306,8 +1307,447 @@ human_mouse_log2fc_samples %>%
 human_mouse_engerix_metadata %>% 
   saveRDS(file = here("tables", "hepatitisb_engerixb_human_mouse_metadata.rds"))
 
+
+all_degs_human = readRDS(file = here("tables", "hepatitisb_engerixb_human_dge_limma_degs.rds")) %>% 
+  mutate(timepoint = str_remove(comparison_a, "Time"))
+all_degs_mouse = readRDS(file = here("tables", "hepatitisb_engerixb_mouse_degs_mouse.rds")) %>% 
+  mutate(timepoint = str_remove(condition, "Engerix_") %>% str_remove("_PBMC"))
+all_degs_human_mouse = all_degs_mouse %>% 
+  bind_rows(all_degs_human) %>% 
+  select(condition, timepoint, human_symbol, mean_l2fc:organism)
+all_degs_human_mouse %>% saveRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds"))
 ```
 
+
+
+
+## Get overlap
+
+Input
+
+```{r}
+# Import datasets
+dge_long_genes = readRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(timepoint = if_else(organism == "Mouse", (as.numeric(timepoint)/24) %>% round(0) %>% as.character(), timepoint) ,
+         condition = paste0(organism, "_", timepoint)) %>% 
+  distinct()
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+
+# DEGs table
+degs_all_updown = dge_long_genes %>% 
+  dplyr::filter(organism %in% c("Human", "Mouse")) %>% 
+  dplyr::filter(adj_p_val <= 0.05) %>% 
+  dplyr::mutate(condition = paste0(organism, "_", timepoint)) %>% 
+  dplyr::select(process = condition, genes = human_symbol) 
+
+# Metadata
+annotation_metadata = dge_long_genes %>% 
+  #Arrange columns in the desired order to be displayed on the heatmap
+  dplyr::select(condition, 
+                organism, 
+                # type, 
+                # vaccine, 
+                timepoint) %>% 
+  distinct()
+
+annotation_metadata$condition %>% unique()
+#Inputs
+filename = "hepatitisb_engerixb"
+```
+
+Perform calculations
+
+```{r}
+conflicted::conflicts_prefer(base::intersect)
+conflicted::conflicts_prefer(base::setdiff)
+
+# Perform calculations
+unique_cond <- unique(degs_all_updown$process) # List sets
+shared_genes_df <- data.frame() # Store data
+
+for (i in 1:(length(unique_cond) - 1)) {
+  for (j in (i + 1):length(unique_cond)) {
+    results_temp <- overlap_genes(unique_cond[i], unique_cond[j], degs_all_updown)
+    shared_genes_df <- bind_rows(shared_genes_df, results_temp)
+  }
+}
+
+# Fisher's exact test
+fisher_exact_test <- function(shared, notshared1, notshared2) {
+  cont_table <- matrix(c(shared, notshared1, notshared2, 0), nrow = 2)
+  results_fisher <- stats::fisher.test(cont_table)
+  return(results_fisher$p.value)
+}
+shared_genes_df = shared_genes_df %>%
+  mutate(pvalue = pmap_dbl(list(Shared, NotShared_cond1, NotShared_cond2), fisher_exact_test),
+         p_adj = p.adjust(pvalue))
+
+
+#Mirror table
+shared_genes_df2 = shared_genes_df %>% 
+  dplyr::rename(Cond1_temp = Cond1, Cond2_temp = Cond2) %>%
+  dplyr::rename(Cond1 = Cond2_temp, Cond2 = Cond1_temp)
+
+shared_genes_df_mirror = shared_genes_df %>% 
+  dplyr::bind_rows(shared_genes_df2) %>% 
+  dplyr::mutate(Percentage_Shared_Cond1 = round(Percentage_Shared_Cond1, 2),
+         Percentage_Shared_Cond2 = round(Percentage_Shared_Cond2, 2))
+  
+#Jaccard distance
+jaccard.matrix <- degs_all_updown %>%
+  dplyr::mutate(present = 1) %>% 
+  dplyr::distinct() %>% 
+  pivot_wider(names_from = genes, values_from = present, values_fill = 0) %>%
+  column_to_rownames(var = "process") %>%
+  vegan::vegdist(binary = TRUE, method = "jaccard", diag = TRUE, upper = TRUE) %>%
+  as.matrix() %>%
+  {1 - .}
+shared_genes_df_mirror = jaccard.matrix %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Cond1") %>% 
+  pivot_longer(cols = -"Cond1",
+               names_to = "Cond2",
+               values_to = "jaccard_distance") %>% 
+  inner_join(shared_genes_df_mirror, by = join_by(Cond1, Cond2)) %>% 
+  mutate(jaccard_distance = round(jaccard_distance, 3))
+
+#Save
+write_csv(shared_genes_df_mirror, 
+          file = here("Tables", paste0(filename, "_sharedgenes_Fisher_Jaccard.csv")))
+shared_genes_df_mirror
+```
+
+### Heatmap
+
+#### Shared genes
+
+```{r}
+shared_genes_df_mirror = read_csv(file = here("Tables", "hepatitisb_engerixb_sharedgenes_Fisher_Jaccard.csv"))
+
+matrix_data = shared_genes_df_mirror %>% 
+  dcast(Cond1 ~ Cond2, 
+        value.var = "Shared", 
+        fun.aggregate = mean) %>% 
+  column_to_rownames("Cond1") %>%
+  mutate_if(is.character, as.numeric) %>% 
+  as.matrix() 
+
+# Create a matrix of p-values
+pvalue_matrix <- shared_genes_df_mirror %>%
+  dcast(Cond1 ~ Cond2,
+        value.var = "p_adj",
+        fun.aggregate = mean) %>%
+  column_to_rownames("Cond1") %>%
+  as.matrix()
+
+dim(matrix_data)
+
+annotation_metadata_complex = matrix_data %>% 
+  as.data.frame() %>%
+  rownames_to_column("condition") %>% 
+  dplyr::select(condition) %>% 
+  inner_join(annotation_metadata , by = "condition") %>%
+  distinct() 
+
+# merge
+annotation_metadata_heatmap = matrix_data %>% 
+  colnames() %>% 
+  data.frame() %>% 
+  dplyr::filter(. != "process") %>% 
+  dplyr::rename(condition = '.') %>% 
+  dplyr::inner_join(annotation_metadata_complex, by = "condition") %>% 
+  dplyr::arrange(condition) %>% 
+  column_to_rownames(var= "condition")
+
+
+# Reorder
+matrix_data_ordered = matrix_data %>% 
+  as.data.frame() %>% 
+  dplyr::select(c(annotation_metadata_complex %>% pull(condition))) %>% 
+  rownames_to_column("rownames") %>% 
+  dplyr::filter(rownames %in% c(annotation_metadata_complex %>% pull(condition))) %>% 
+  column_to_rownames(var= "rownames") %>% 
+  as.matrix()
+
+#Check
+dim(matrix_data_ordered) 
+dim(annotation_metadata_complex)
+
+col_fun <- colorRamp2(c(0, max(matrix_data_ordered, na.rm = T)), c("white", "#00A087FF"))
+
+
+######## HEATMAP ANNOTATION
+annotation_metadata_heatmap = annotation_metadata_heatmap %>% 
+  mutate(timepoint = as_factor(timepoint),
+         timepoint = fct_reorder(timepoint, as.numeric(timepoint)))
+
+ha = HeatmapAnnotation(df = annotation_metadata_heatmap, 
+                       col = colors_immune, 
+                       annotation_name_side = "left",
+                       show_legend = F)
+
+row_ha = rowAnnotation(df = annotation_metadata_heatmap, 
+                       col = colors_immune, 
+                       show_annotation_name = F)
+
+
+
+mat = matrix_data_ordered
+width_image = 15
+height_image = 15
+width = unit(5, "cm")
+height = unit(5, "cm")
+column_names_gp = gpar(fontsize = 10)
+row_names_gp = gpar(fontsize = 10)
+gp = gpar(fontsize = 10)
+rect_gp = gpar(col = "gray1", lwd = 0)
+
+
+
+fileimageheatmap_grouped = paste0(filename, sep ="_", "Shared_Heatmap.png")
+
+png(
+  file = here("Figures", fileimageheatmap_grouped),
+  width = width_image,
+  height = height_image,
+  units = "cm",
+  res = 900
+)
+
+heatmap_plot_all = Heatmap(mat,
+                        top_annotation = ha,
+                        left_annotation = row_ha,
+                        show_row_names = TRUE,
+                        show_heatmap_legend = TRUE,
+                        heatmap_legend_param = list(direction = "vertical"),
+                        name = "Shared", #Legend
+                        col = col_fun, #color
+                         cell_fun = function(j, i, x, y, width, height, fill) {
+  if (!is.na(mat[i, j]) && mat[i, j] > 0) {
+    grid.text(sprintf("%.f", mat[i, j]), x, y, gp = gpar(fontsize = 8, color = "white"))
+  }
+                           i# Add significance stars based on p-value thresholds
+  if (!is.na(pvalue_matrix[i, j])) {
+    pval <- pvalue_matrix[i, j]
+    sig <- ""
+    if (pval < 0.01) {
+      sig <- "***"
+    } else if (pval < 0.05) {
+      sig <- "**"
+    } else if (pval < 0.10) {
+      sig <- "*"
+    }
+    
+    # Draw the symbol slightly above the cell center
+    if (sig != "") {
+      grid.text(sig, x, y + unit(2, "mm"), gp = gpar(fontsize = 6, fontface = "plain", color = "white"))
+    }
+  }
+},
+                        column_title = fileimageheatmap_grouped,
+                        column_title_gp = gpar(fontsize = 15, fontface = "bold"),
+                        column_names_rot = 45,
+row_names_rot = 0,
+                        column_names_gp = column_names_gp,
+                        cluster_rows = TRUE,
+                        rect_gp = rect_gp,
+                        row_names_gp = row_names_gp,
+                        # row_split = 2, #Split row clusters
+                        row_gap = unit(2, "mm"),
+                        cluster_columns = TRUE,
+                        na_col = "black",
+                        column_split = NULL, #Split group clusters
+                        #column_km = 3,
+                        column_gap = unit(8, "mm"),
+                        show_column_dend = F,
+                        show_row_dend = F,
+                        row_dend_side = "left",
+                        column_dend_side = "top",
+                        clustering_distance_rows = "euclidean",
+                        border = TRUE,
+                        column_dend_reorder = TRUE,
+                        width = width, 
+                        height = height
+)
+
+draw(heatmap_plot_all,  heatmap_legend_side = "left", annotation_legend_side = "left")
+
+dev.off()
+```
+
+
+### Stacked barplot of overlapped genes
+```{r fig.width=10, fig.height=4}
+#Import datasets
+all_degs_human_mouse = readRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds"))  
+ImmuneGO_Mouse_Manual_genes <- read_excel(here("VaxGO", "ImmuneGO_Mouse.xlsx")) %>% 
+  separate_rows(genes)
+
+
+#Compare every mouse timepoint to a human reference
+timepoint_reference = "7"
+human_data_reference <- all_degs_human_mouse %>% filter(organism == "Human")
+new_timepoints <- c(all_degs_human_mouse %>% filter(organism != "Human") %>% pull(timepoint) %>% unique() %>% as.character())
+duplicated_human_data <- map_dfr(new_timepoints, ~ {
+  df_copy <- human_data_reference
+  df_copy <- df_copy %>%
+    mutate(timepoint = .x)
+
+  return(df_copy)
+})
+
+dge_long_genes_matched = all_degs_human_mouse %>% 
+  ungroup() %>% 
+  filter(organism != "Human") %>% 
+  bind_rows(duplicated_human_data)  %>% 
+    mutate(timepoint_num = readr::parse_number(timepoint),
+    timepoint = paste0(timepoint, "h"),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+
+
+#Get total genes by each condition
+degs_mouse = dge_long_genes_matched %>% 
+  filter(adj_p_val <= 0.05,
+         organism == "Mouse")
+degs_human = dge_long_genes_matched %>% 
+  filter(adj_p_val <= 0.05,
+         organism == "Human")
+
+degs_mouse_summarize = dge_long_genes_matched %>% 
+  filter(adj_p_val <= 0.05) %>% 
+  group_by(organism, timepoint) %>% 
+  summarize(n_genes = n()) 
+
+#Print
+degs_mouse_summarize
+
+#Get overlap -----
+#Get symbols
+degs_mouse_genes = degs_mouse %>% 
+  select(human_symbol, timepoint) %>% 
+  distinct()
+
+degs_human_genes = degs_human %>% 
+  select(human_symbol, timepoint) %>% 
+  distinct()
+
+#Inner join, Mouse and Human ------
+
+#Mouse
+degs_human_and_mouse_genes = degs_human_genes %>% 
+  inner_join(degs_mouse_genes, 
+             by = join_by("human_symbol", "timepoint")) %>% 
+  mutate(condition = "Mouse AND Human",
+         comparison = "Mouse vs Human",
+         organism = "Mouse",
+         group = "Common")
+
+#Duplicate rows for human
+degs_human_and_mouse_genes_human = degs_human_and_mouse_genes %>% 
+  mutate(organism = "Human")
+
+
+#Anti join, Human vs Mouse -------
+#Human
+#Human vs Mouse
+degs_human_Not_mouse_genes = degs_human_genes %>% 
+  anti_join(degs_mouse_genes, 
+             by = join_by("human_symbol", "timepoint")) %>% 
+  mutate(condition = "Human NOT Mouse", 
+         comparison = "Mouse vs Human",
+         organism = "Human",
+         group = "Not common")
+
+#Models
+#Mouse vs Human
+degs_mouse_Not_human_genes = degs_mouse_genes %>% 
+  anti_join(degs_human_genes, 
+             by = join_by("human_symbol", "timepoint")) %>% 
+  mutate(condition = "Mouse NOT Human",
+         organism = "Mouse",
+         comparison = "Mouse vs Human",
+         group = "Not common")
+
+
+#Merge data ------
+degs_human_mouse_overlap_genes = 
+  bind_rows(degs_human_and_mouse_genes,
+            degs_human_and_mouse_genes_human,
+            degs_human_Not_mouse_genes,
+            degs_mouse_Not_human_genes 
+            )
+
+#Classify by same and exclusive DEGs -----
+degs_human_mouse_overlap_genes_summary = degs_human_mouse_overlap_genes %>% 
+  group_by(condition, timepoint) %>% 
+  summarize(n = n(),
+            organism,
+            comparison,
+            group) %>% 
+  distinct()
+
+#Print
+degs_human_mouse_overlap_genes_summary
+```
+
+
+### Plot overlap (bars)
+
+```{r fig.height=5, fig.width=4}
+#Plot overlap
+degs_human_mouse_overlap_common_plot = degs_human_mouse_overlap_genes_summary %>%
+  ggplot() +
+  aes(x = organism,
+      y = n,
+      fill = fct_rev(group)) + 
+  geom_col(alpha = 1) +
+  facet_nested(rows = vars(fct_rev(comparison)), 
+               cols = vars(timepoint), 
+               scales = "free", 
+               nest_line = element_line(linetype = 1, color = "black", size = 2),
+               independent = "x") +
+  scale_y_continuous(n.breaks = 5,
+                     expand = c(0.01, 0.01)) +
+  scale_fill_manual(values = c("Common" = "#4DBBD5FF",
+                               "Not common" = "gray90"))    +
+  scale_color_manual(values = c("Common" = "#4DBBD5FF",
+                               "Not common" = "gray90"))    +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.text.y = element_text(hjust = 0.5, size = 10),
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+    axis.text.y = element_text(size = 10),
+    panel.spacing.x = unit(0, "lines"), 
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    legend.position = "top",
+    legend.position.inside = c(0.5, 0.95),
+    legend.direction = "horizontal", 
+    legend.key.width = unit(0.4, 'cm'),
+    legend.key.height = unit(0.4, 'cm'),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 7, vjust = 0.5, hjust = -0.2)
+  ) +
+  labs(
+    x = "",
+    y = "Total",
+    color = ""
+    ) 
+#Print
+degs_human_mouse_overlap_common_plot
+
+#Save
+degs_human_mouse_overlap_common_plot %>%
+  ggsave(filename = here("Figures", "hepatitisb_engerixb_human_mouse_dge_degs_overlap_barplot.png"),
+         width = 4,
+         height = 5)
+```
+
+
+
+
+###Plot correlation
 ```{r}
 #Import
 human_mouse_log2fc_samples =
@@ -1332,10 +1772,11 @@ human_mouse_engerixb_log2fc_avg_wide = all_degs_human %>%
   pivot_wider(names_from = "organism",
               values_from = "mean_log2fc") %>% 
   #Add padj columns
-  inner_join(human_mouse_engerixb_log2fc_avg %>%
-               select(organism, human_symbol, timepoint, p_adj) %>%
+  inner_join(all_degs_human %>%
+               bind_rows(all_degs_mouse) %>% 
+               select(organism, human_symbol, timepoint, adj_p_val) %>%
                pivot_wider(names_from = "organism",
-                           values_from = "p_adj") %>%
+                           values_from = "adj_p_val") %>%
                rename(padj_human = Human, padj_mouse = Mouse)) %>% 
   #Drop genes that are absent in one of the organisms 
   drop_na()
@@ -1345,7 +1786,7 @@ cor_data <- human_mouse_engerixb_log2fc_avg_wide %>%
   group_by(timepoint) %>% 
   filter(padj_human <= 0.05 | padj_human <= 0.05) %>%
   summarize(
-    cor_value = cor(Mouse, Human, method = "pearson", use = "complete.obs"),
+    cor_value = cor(Mouse, Human, method = "spearman", use = "complete.obs"),
     label_pos_x = max(Mouse, na.rm = TRUE),
     label_pos_y = max(Human, na.rm = TRUE),
     .groups = "drop"

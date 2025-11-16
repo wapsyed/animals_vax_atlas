@@ -1681,7 +1681,7 @@ degs_human_mouse_overlap_common_plot %>%
 
 
 
-## Plot correlation
+## Correlation analysis (TERMINAR)
 ```{r}
 #Pivot wider to compare human to different mouse times
 #Human
@@ -1856,14 +1856,14 @@ human_mouse_ecoli_log2fc_avg_wide_scatterplot %>%
 
 
 
-#### Plot correlation between genes (log2fc for every sample)
+#### Plot correlation between genes
 
 ```{r}
 #Import
 human_mouse_saureus_log2fc_samples = readRDS(here("tables", "saureus_infection_human_mouse_samples_log2fc.rds"))
 all_degs_human_mouse = readRDS(here("tables", "saureus_infection_human_mouse_dge_limma_degs.rds"))
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
-
+human_mouse_metadata = readRDS(file = here("tables", "saureus_infection_human_mouse_metadata.rds"))
 
 human_mouse_saureus_log2fc_samples = human_mouse_saureus_log2fc_samples %>% 
   mutate(timepoint = as.character(timepoint)) %>% 
@@ -1874,11 +1874,11 @@ human_mouse_saureus_log2fc_samples = human_mouse_saureus_log2fc_samples %>%
 
 ```{r}
 #Input
-filename = "saureus_infection_human_mouse"
-gene_set_name = "AllGenes"
-human_mouse_log2fc_samples = human_mouse_saureus_log2fc_samples %>% 
-  select(-probe_id) %>% 
-  distinct()
+# filename = "saureus_infection_human_mouse"
+# gene_set_name = "AllGenes"
+# human_mouse_log2fc_samples = human_mouse_saureus_log2fc_samples %>% 
+#   select(-probe_id) %>% 
+#   distinct()
 
 #Input
 # filename = "saureus_infection_human_mouse"
@@ -1888,14 +1888,14 @@ human_mouse_log2fc_samples = human_mouse_saureus_log2fc_samples %>%
 
 
 # #Input
-# filename = "saureus_infection_human_mouse"
-# gene_set_name = "DEGs"
-# human_degs = all_degs_human_mouse %>%
-#   filter(organism == "Human", adj_p_val <= 0.05) %>%
-#   select(human_symbol)
-# 
-# human_mouse_log2fc_samples = human_mouse_ecoli_log2fc_samples  %>%
-#   inner_join(human_degs, by = join_by("human_symbol"))
+filename = "saureus_infection_human_mouse"
+gene_set_name = "DEGs"
+human_degs = all_degs_human_mouse %>%
+  filter(organism == "Human", adj_p_val <= 0.05) %>%
+  select(human_symbol)
+
+human_mouse_log2fc_samples = human_mouse_ecoli_log2fc_samples  %>%
+  inner_join(human_degs, by = join_by("human_symbol"))
 
 
 # filename = "saureus_infection_human_mouse"
@@ -1906,6 +1906,7 @@ human_mouse_log2fc_samples = human_mouse_saureus_log2fc_samples %>%
 
 
 ```
+
 
 
 ```{r fig.height=3, fig.width=3}
@@ -1919,6 +1920,7 @@ timepoint_combinations <- expand.grid(timepoint_human = timepoints_human,
                                       timepoint_mouse = timepoints_mouse,
                                       stringsAsFactors = FALSE)
 
+# Loop
 cor_human_mouse_timepoint <- timepoint_combinations %>%
   pmap_dfr(function(timepoint_human, timepoint_mouse) {
     
@@ -1934,60 +1936,48 @@ cor_human_mouse_timepoint <- timepoint_combinations %>%
     # manter apenas genes em comum
     common_genes <- intersect(human_df$human_symbol, mouse_df$human_symbol)
     human_df <- human_df %>% filter(human_symbol %in% common_genes)
-    mouse_df <- mouse_df %>% filter(human_symbol %in% common_genes) 
+    mouse_df <- mouse_df %>% filter(human_symbol %in% common_genes)
     
-    # pivot wide
-    human_wide <- human_df %>% 
-      pivot_wider(names_from = participant_id, values_from = log2fc)
-
-    mouse_wide <- mouse_df %>% 
-      pivot_wider(names_from = participant_id, values_from = log2fc, values_fn = mean) 
+    # pivot para wide
+    human_wide <- human_df %>% pivot_wider(names_from = participant_id, values_from = log2fc)
+    mouse_wide <- mouse_df %>% pivot_wider(names_from = participant_id, values_from = log2fc, values_fn = max)
     
-    # ids dos participantes
+    # IDs de participantes
     human_ids <- setdiff(colnames(human_wide), "human_symbol")
     mouse_ids <- setdiff(colnames(mouse_wide), "human_symbol")
     
-    # funções seguras
-    safe_ci1  <- possibly(~ .x$conf.int[1], otherwise = NA_real_)
-    safe_ci2  <- possibly(~ .x$conf.int[2], otherwise = NA_real_)
-    safe_est  <- possibly(~ .x$estimate,   otherwise = NA_real_)
-    safe_pval <- possibly(~ .x$p.value,    otherwise = NA_real_)
-
-    expand.grid(human = human_ids, mouse = mouse_ids) %>%
-  mutate(
-    cor_test = map2(human, mouse, ~{
-      x <- human_wide[[.x]]
-      y <- mouse_wide[[.y]]
-      keep <- complete.cases(x, y)
-
-      tryCatch(
-        cor.test(x[keep], y[keep], method = "spearman"),
-        error = function(e) NULL
-      )
-    }),
-    r        = map_dbl(cor_test, safe_est),
-    p_value  = map_dbl(cor_test, safe_pval),
-    ci_low   = map_dbl(cor_test, safe_ci1),
-    ci_high  = map_dbl(cor_test, safe_ci2)
-  ) %>%
-  select(-cor_test)
+    # calcular correlação para todos pares humano x mouse
+    expand.grid(human = human_ids, mouse = mouse_ids, stringsAsFactors = FALSE) %>%
+      mutate(
+        cor_test = map2(human, mouse, ~{
+          x <- human_wide[[.x]]
+          y <- mouse_wide[[.y]]
+          # remover NAs correspondentes
+          keep <- complete.cases(x, y)
+          cor.test(x[keep], y[keep], method = "spearman")
+        }),
+        r       = map_dbl(cor_test, ~.x$estimate),
+        p_value = map_dbl(cor_test, ~.x$p.value),
+        # ci_low  = map_dbl(cor_test, ~.x$conf.int[1]),
+        # ci_high = map_dbl(cor_test, ~.x$conf.int[2])
+      ) %>%
+      select(-cor_test) %>%
+      mutate(timepoint_human = timepoint_human,
+             timepoint_mouse = timepoint_mouse)
   }) %>% 
   group_by(timepoint_human, timepoint_mouse) %>%
   summarize(
     comparison = "Human vs. Mouse",
     mean = mean(r, na.rm = TRUE),
     sd   = sd(r, na.rm = TRUE),
-    n    = sum(!is.na(r)),
-    se   = sd / sqrt(n),
-    tval = qt(0.975, df = n - 1),
-    ci_low  = mean - tval * se,
+    n      = sum(!is.na(r)),
+    se     = sd / sqrt(n),
+    tval   = qt(0.975, df = n - 1),
+    ci_low = mean - tval * se,
     ci_high = mean + tval * se,
     .groups = "drop"
   )
-```
 
-
-```{r fig.height=3, fig.width=3}
 # --- 2) Human vs Human (entre timepoints) ---
 cor_human_human <- human_mouse_log2fc_samples %>%
   filter(organism == "Human") %>%
@@ -2027,11 +2017,11 @@ cor_mouse_mouse <- human_mouse_log2fc_samples %>%
   group_modify(~{
     df <- .x %>%
       select(participant_id, human_symbol, log2fc) %>%
-      pivot_wider(names_from = participant_id, values_from = log2fc) %>%
+      pivot_wider(names_from = participant_id, values_from = log2fc, values_fn = max) %>%
       select(-human_symbol)
     
     # Calculate correlation
-    cor_mat <- cor(df, use = "pairwise.complete.obs", method = "spearman")
+    cor_mat <- cor(df, use = "pairwise.complete.obs", method = "pearson")
     
     # Long format
     cor_long <- as.data.frame(cor_mat) %>%
@@ -2063,14 +2053,17 @@ correlation_long_all_mouse_human_timepoints_summary = cor_human_mouse_timepoint 
   mutate(timepoint = timepoint_mouse) %>% 
   bind_rows(
     cor_human_human %>% mutate(timepoint = "24"),
-    cor_mouse_mouse)
+    cor_mouse_mouse) %>% 
+  mutate(timepoint_num = readr::parse_number(timepoint),
+    timepoint = paste0(timepoint, "h"),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
 
 correlation_long_all_mouse_human_timepoints_summary
 
 
 correlation_long_all_mouse_human_timepoints_summary_plot = correlation_long_all_mouse_human_timepoints_summary %>% 
   ggplot() +
-  aes(x = as.numeric(timepoint),
+  aes(x = timepoint,
       y = mean,
       group = comparison,
       color = comparison,
@@ -2095,9 +2088,10 @@ correlation_long_all_mouse_human_timepoints_summary_plot = correlation_long_all_
                 vjust = -0.5,
                 hjust = 1,
                 linewidth = 1,
+                angle = 90,
                 data = correlation_long_all_mouse_human_timepoints_summary %>% 
                   filter(comparison == "Human vs. Human")) +
-  scale_x_continuous(breaks = c(0, 2, 6, 12, 24), expand = c(0.01, 0.01)) +
+  # scale_x_discrete(expand = c(0.01, 0.01)) +
   scale_y_continuous(expand = c(0.01, 0.01)) +
   theme_vaxgo() +
   scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
@@ -2123,6 +2117,14 @@ correlation_long_all_mouse_human_timepoints_summary_plot %>%
 
 correlation_long_all_mouse_human_timepoints_summary_plot
 ```
+
+
+
+
+
+
+
+
 
 
 
