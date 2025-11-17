@@ -121,36 +121,38 @@ overlap_genes <- function(cond1, cond2, data) {
 
 #Run GSEA for a given contrast
 autoGSEA <- function(df, TERM2GENE, geneset_name) {
+  
   gsea_results <- list()
   
-  conditions <- df$condition %>%
-    unique() %>%
-    as.character()
+  conditions <- df$condition %>% unique() %>% as.character()
   
   for (condition_i in conditions) {
     
     degs_condition <- df %>%
       filter(condition == condition_i) %>%
-      dplyr::select(genes, log2fold_change) %>%
+      select(genes, log2fold_change) %>%
       distinct() %>%
-      mutate(rank = rank(log2fold_change, ties.method = "random")) %>%
       arrange(desc(log2fold_change)) %>% 
-      deframe()
+      deframe()   
     
     auto_gsea <- tryCatch({
-      GSEA(geneList = degs_condition,
-           TERM2GENE = TERM2GENE,
-           minGSSize = 1,
-           maxGSSize = 1000,
-           pvalueCutoff = 1,
-           pAdjustMethod = "BH") %>%
+      
+      GSEA(
+        geneList = degs_condition,
+        TERM2GENE = TERM2GENE,
+        minGSSize = 1,
+        maxGSSize = 1000,
+        pvalueCutoff = 1,
+        pAdjustMethod = "BH"
+      ) %>%
         as.data.frame() %>%
         arrange(qvalue) %>%
-        mutate(condition = condition_i,
-               gsea_enrichment = geneset_name)
-    }, error = function(e) {
-      return(NULL)
-    })
+        mutate(
+          condition = condition_i,
+          gsea_enrichment = geneset_name
+        )
+      
+    }, error = function(e) NULL)
     
     if (!is.null(auto_gsea)) {
       key <- paste(condition_i, geneset_name, sep = "_")
@@ -158,9 +160,7 @@ autoGSEA <- function(df, TERM2GENE, geneset_name) {
     }
   }
   
-  return(list(
-    gsea = bind_rows(gsea_results)
-  ))
+  return(list(gsea = bind_rows(gsea_results)))
 }
 
 #Function for GSEA (Gene Ontology database)
