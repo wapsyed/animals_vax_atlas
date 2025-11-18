@@ -484,15 +484,20 @@ all_degs_mouse = all_contrasts_degs %>%
            str_replace(., "treatment", "")) %>% 
   separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef")) %>% 
   mutate(comparisonRef = str_replace(comparisonRef, "treatment", "Time0")) %>% 
-  mutate(condition = case_when(comparisonA == "Time1"	~ "Fluad_24_PBMC",
-                               comparisonA == "Time3"	~ "Fluad_72_PBMC",
-                               comparisonA == "Time7"	~ "Fluad_168_PBMC",
-                               T~comparisonA)) %>% 
-  select(condition, everything())
+  mutate(condition = case_when(comparisonA == "Time1"	~ "Fluad_1_PBMC",
+                               comparisonA == "Time3"	~ "Fluad_3_PBMC",
+                               comparisonA == "Time7"	~ "Fluad_7_PBMC",
+                               T~comparisonA),
+         timepoint = str_remove(comparisonA, "Time"),
+         organism = "Mouse") %>% 
+  select(condition, everything()) %>% 
+  clean_names() %>% 
+  select(condition, symbol, mean = log_fc, lower = ci_l, upper = ci_r, ave_expr,
+         everything())
 
 all_degs_mouse %>% 
   group_by(condition) %>%
-  filter(adj.P.Val <= 0.05) %>% 
+  filter(adj_p_val <= 0.05) %>% 
   summarize(n_degs = n())
 	
 #Save
@@ -1020,61 +1025,35 @@ human_fluad_log2fc_paired_unpaired_ttest %>%
 ## Integrate datasets
 
 ```{r}
+#Sample log2fc
+human_fluad_log2fc_filtered_sample_long = readRDS(here("tables", "influenza_fluad_human_log2fc_sample_long.rds"))
+mouse_fluad_log2fc_filtered_sample_long = readRDS(here("tables", "influenza_fluad_mouse_log2fc_sample_clean_long.rds"))
 
-mouse_fluad_log2_hgnc_symbol = readRDS(here("tables", "influenza_fluad_mouse_exprs_hgnc_symbol.rds"))
-mouse_fluad_metadata = readRDS(here("tables", "influenza_fluad_mouse_metadata.rds")) 
-mouse_fluad_log2fc_filtered_sample_long %>% 
-    saveRDS(here("tables", "influenza_fluad_mouse_log2fc_sample_clean_long.rds"))
-human_fluadd_not_normalized_symbol %>% saveRDS(file = here("tables", "influenza_GSE124689_exprs_not_normalized.rds"))
-saveRDS(flu_metadata_clean, file = here("tables", "influenza_fluad_human_metadata_clean.rds"))
+human_mouse_log2fc_samples = mouse_fluad_log2fc_filtered_sample_long %>% 
+  mutate(organism = "Mouse") %>% 
+  bind_rows(human_fluad_log2fc_filtered_sample_long %>% 
+              mutate(organism = "Human"))
 
+human_mouse_log2fc_samples %>% 
+  saveRDS(file = here("tables", "influenza_fluad_human_mouse_log2fc_samples.rds"))
 
+#Unite metadata
+fluad_human_metadata = readRDS(file = here("tables", "influenza_fluad_human_metadata_clean.rds"))
 
 
 #Unite Mouse and Human datasets. Samples.
-human_mouse_log2fc_samples = 
-#Mouse
-mouse_engerixb_log2fc_filtered_sample_long %>%
-  ungroup() %>% 
-  select(human_symbol, log2fc, participant_id,
-         timepoint, value, day0) %>% 
-  mutate(organism = "Mouse") %>% 
-  
-  #Human
-  bind_rows(human_engerixb_log2fc_filtered_sample_long %>%
-  ungroup() %>% 
-  select(human_symbol, log2fc, participant_id,
-         timepoint,  value, day0) %>% 
-  mutate(organism = "Human"))
+human_mouse_log2fc_samples
 
-#Unite metadata
-human_mouse_engerix_metadata = 
-  #Human
-  GSE124533_metadata_filtered %>% 
-  select(geo_sample, participant_id, sex, organism, timepoint) %>% 
-  mutate(timepoint = as.numeric(timepoint),
-         sex = str_to_title(sex)) %>% 
-  #Mouse
-  bind_rows(
-    mouse_engerixb_metadata %>%
-      select(geo_sample, participant_id, sex, timepoint) %>%
-      mutate(organism = "Mouse"))
+#Unite DEGs
+all_degs_human = readRDS(file = here("tables", "influenza_fluad_human_dge_limma_degs.rds")) 
+all_degs_mouse = readRDS(file = here("tables", "influenza_fluad_mouse_dge_limma_degs.rds")) 
 
-human_mouse_log2fc_samples %>% 
-  saveRDS(file = here("tables", "hepatitisb_engerixb_human_mouse_exprs_samples_log2fc.rds"))
-
-human_mouse_engerix_metadata %>% 
-  saveRDS(file = here("tables", "hepatitisb_engerixb_human_mouse_metadata.rds"))
-
-
-all_degs_human = readRDS(file = here("tables", "hepatitisb_engerixb_human_dge_limma_degs.rds")) %>% 
-  mutate(timepoint = str_remove(comparison_a, "Time"))
-all_degs_mouse = readRDS(file = here("tables", "hepatitisb_engerixb_mouse_degs_mouse.rds")) %>% 
-  mutate(timepoint = str_remove(condition, "Engerix_") %>% str_remove("_PBMC"))
 all_degs_human_mouse = all_degs_mouse %>% 
   bind_rows(all_degs_human) %>% 
-  select(condition, timepoint, human_symbol, mean_l2fc:organism)
-all_degs_human_mouse %>% saveRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds"))
+  select(condition:ave_expr, t:organism) %>% 
+  rename(human_symbol = symbol)
+
+all_degs_human_mouse %>% saveRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds"))
 ```
 
 
@@ -2048,27 +2027,19 @@ correlationplots_log2fc_effsize %>%
 
 ```{r}
 #Import
-human_mouse_log2fc_samples =
-  readRDS(file = here("tables", "influenza_fluad_human_mouse_exprs_samples_log2fc.rds"))
+human_mouse_fluad_log2fc_samples =
+  readRDS(file = here("tables", "influenza_fluad_human_mouse_log2fc_samples.rds")) %>% 
+  arrange(human_symbol, timepoint) %>% 
+  distinct() %>% 
+  drop_na(log2fc)
 
-human_mouse_engerix_metadata =
-  readRDS(file = here("tables", "hepatitisb_engerixb_human_mouse_metadata.rds"))
-
-all_degs_human = readRDS(file = here("tables", "hepatitisb_engerixb_human_dge_limma_degs.rds")) %>% 
-  mutate(timepoint = str_remove(comparison_a, "Time"))
-all_degs_mouse = readRDS(file = here("tables", "hepatitisb_engerixb_mouse_degs_mouse.rds")) %>% 
-  mutate(timepoint = str_remove(condition, "Engerix_") %>% str_remove("_PBMC") %>% as.numeric(),
-         timepoint = timepoint /24,
-         timepoint = timepoint %>% as.character())
-
-human_mouse_engerix_log2fc_samples = human_mouse_log2fc_samples %>% 
-  mutate(timepoint = as.character(timepoint)) %>% 
-  distinct()
+human_mouse_metadata =
+  readRDS(file = here("tables", "influenza_fluad_human_mouse_metadata.rds"))
 
 
-human_mouse_log2fc_samples = human_mouse_engerix_log2fc_samples
+all_degs_human_mouse = readRDS(file = here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds"))
 
-human_mouse_engerix_log2fc_samples$organism %>% unique()
+human_mouse_log2fc_samples 
   
 ```
 
@@ -2076,31 +2047,34 @@ human_mouse_engerix_log2fc_samples$organism %>% unique()
 
 ```{r}
 # #Input
-# filename = "hepatitisb_engerixb_human_mouse"
+# filename = "influenza_fluad_human_mouse"
 # gene_set_name = "AllGenes"
-# human_mouse_log2fc_samples = human_mouse_engerix_log2fc_samples
+# human_mouse_log2fc_samples = human_mouse_fluad_log2fc_samples
 
 #Input
-# filename = "hepatitisb_engerixb_human_mouse"
+# filename = "influenza_fluad_human_mouse"
 # gene_set_name = "Immune"
-# human_mouse_log2fc_samples = human_mouse_engerix_log2fc_samples  %>%
+# human_mouse_log2fc_samples = human_mouse_fluad_log2fc_samples  %>%
 #   filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
 
 
 # #Input
-# filename = "hepatitisb_engerixb_human_mouse"
+# filename = "influenza_fluad_human_mouse"
 # gene_set_name = "DEGs"
+# 
 # human_degs = all_degs_human_mouse %>%
-#   filter(organism == "Human", adj_p_val <= 0.05) %>%
+#   filter(organism == "Human", 
+#          adj_p_val <= 0.05) %>%
 #   select(human_symbol)
-# human_mouse_log2fc_samples = human_mouse_engerix_log2fc_samples  %>%
-#   inner_join(human_degs, by = join_by("human_symbol"))
+# 
+# human_mouse_log2fc_samples = human_mouse_fluad_log2fc_samples  %>%
+#   filter(human_symbol %in% c(human_degs$human_symbol)) 
 
 # #Input
-filename = "hepatitisb_engerixb_human_mouse"
+filename = "influenza_fluad_human_mouse"
 gene_set_name = "DEGs_Immune"
-human_mouse_log2fc_samples = human_mouse_engerix_log2fc_samples  %>%
-  inner_join(human_degs, by = join_by("human_symbol")) %>%
+human_mouse_log2fc_samples = human_mouse_fluad_log2fc_samples  %>%
+  filter(human_symbol %in% c(human_degs$human_symbol))  %>%
   filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
 ```
 
@@ -2110,11 +2084,11 @@ human_mouse_log2fc_samples = human_mouse_engerix_log2fc_samples  %>%
 # --- 1) Mouse vs Human, matched timepoints ---
 #Get timepoints
 timepoints_human <- unique(human_mouse_log2fc_samples %>% filter(organism == "Human") %>% pull(timepoint))
-timepoints_mouse <- unique(human_mouse_log2fc_samples %>% filter(organism == "Mouse") %>% pull(timepoint))
+timepoints_mouse <- timepoints_human
 
 #Matched timepoints
 timepoint_combinations <- tibble(timepoint_human = timepoints_human,
-                                      timepoint_mouse = timepoints_mouse)
+                                 timepoint_mouse = timepoints_mouse)
 
 # Loop for matched timepoints
 cor_human_mouse_timepoint <- timepoint_combinations %>%
@@ -2320,176 +2294,7 @@ correlation_long_all_mouse_human_timepoints_summary_plot %>%
 
 
 
-####### Immune genes
-```{r}
-#Calculate correlation ------
-ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
 
-#Get DEGs from either organisms
-human_or_mouse_degs = human_mouse_fluad_raw_qn_log2fc_avg %>% 
-  filter(measure == "value_raw",
-         timepoint %in% c(1, 3, 7)) %>% 
-  select(symbol, organism, timepoint, pval_adj) %>% 
-  pivot_wider(names_from = "organism",
-              values_from = "pval_adj") %>% #14150 genes
-  filter(Human <= 0.05 & Mouse <= 0.05) %>%  #322 genes
-  select(symbol, timepoint) %>% 
-  distinct() %>% 
-  filter(symbol %in% c(ImmuneGO_BTM_grouped_genes %>% pull(genes)))
-
-human_and_mouse_degs_summary = human_or_mouse_degs %>% 
-  group_by(timepoint) %>% 
-  summarize(n_genes = n())
-```
-
-
-```{r}
-#Compute correlation
-correlation_long_all_mouse_human_timepoints <- human_mouse_fluad_raw_qn_log2fc %>%
-  filter(measure == "value_raw") %>%
-  select(timepoint, symbol, participant_id, log2fc) %>%
-  inner_join(human_or_mouse_degs,
-             by = join_by("timepoint", "symbol")) %>%
-  group_by(timepoint) %>%
-  
-  # Pivot wider and calculate correlation
-  group_modify(~ {
-    .x %>%
-      pivot_wider(names_from = participant_id, values_from = log2fc) %>%
-      select(-symbol) %>%
-      cor(use = "pairwise.complete.obs", method = "spearman") %>%
-      as.data.frame() %>%
-      rownames_to_column("participant1") %>%
-      pivot_longer(-participant1, names_to = "participant2", values_to = "correlation") %>%
-      filter(participant1 != participant2)
-  }) %>%
-  ungroup() %>% 
-  
-  #Filter by organism
-  inner_join(human_mouse_fluad_metadata %>% 
-               select(participant_id, participant_1_organism = organism, sex_p_1 = sex) %>% 
-               distinct(),
-             by = join_by("participant1" == "participant_id")) %>% 
-  inner_join(human_mouse_fluad_metadata %>% 
-               select(participant_id, participant_2_organism = organism, sex_p_2 = sex) %>% 
-               distinct(),
-             by = join_by("participant2" == "participant_id")) 
-
-
-# Remove duplicated lines only if the organism is the same
-correlation_long_all_timepoints_same_organisms = correlation_long_all_mouse_human_timepoints %>%
-  filter(participant_1_organism == participant_2_organism) %>%
-  mutate(
-    participant_min = pmin(participant1, participant2),
-    participant_max = pmax(participant1, participant2)
-  ) %>%
-  # Remove duplicates (ex: A vs B e B vs A)
-  distinct(timepoint, participant_min, participant_max, .keep_all = TRUE) %>%
-  select(timepoint, participant1, participant2, correlation, participant_1_organism, participant_2_organism, sex_p_1, sex_p_2) %>%
-  group_by(timepoint) %>%
-  arrange(-correlation)
-
-
-#Unite table with different organisms with table with deduplicated rows with the same organism
-correlation_long_all_mouse_human_timepoints = correlation_long_all_mouse_human_timepoints %>% 
-  filter(participant_1_organism != participant_2_organism) %>% 
-  bind_rows(correlation_long_all_timepoints_same_organisms)
-
-#Summarize data and save table
-correlation_long_all_mouse_human_timepoints_summary = correlation_long_all_mouse_human_timepoints %>% 
-  
-  #Filter only female and set Mouse as reference
-  filter(sex_p_1 == "Female", 
-         sex_p_2 == "Female") %>% 
-  mutate(sex_comparison = paste(sex_p_1, "vs.", sex_p_2),
-         comparison = paste(participant_1_organism, "vs.", participant_2_organism)) %>%
-  group_by(timepoint, comparison) %>% 
-  arrange(timepoint, -correlation) %>% 
-  mutate(correlation = round(correlation, 2),
-         timepoint = paste("Day", timepoint)) %>% 
-  summarize(mean = mean(correlation, na.rm = T) %>% round(2),
-            median = median(correlation, na.rm = T)%>% round(2),
-            min = min(correlation, na.rm = T)%>% round(2),
-            max = max(correlation, na.rm = T) %>% round(2),
-            sd = sd(correlation),
-            n = sum(!is.na(correlation)),
-            se = sd/sqrt(n),
-            t_critical = qt(0.975, 
-                            df = n - 1),
-            ci_lower = mean - t_critical * se,
-            ci_upper = mean + t_critical * se,
-            .groups = "drop") %>% 
-  filter(comparison != "Human vs. Mouse")
-
-correlation_long_all_mouse_human_timepoints_summary
-
-```
-
-
-Line plot
-```{r fig.height=3, fig.width=3}
-#Import
-
-correlation_long_all_mouse_human_timepoints_summary_df = correlation_long_all_mouse_human_timepoints_summary %>% 
-  separate(timepoint, into = c("unit", "timepoint"), remove = T) %>% 
-  filter(timepoint %in% c("1", "3", "7")) %>% 
-  inner_join(human_and_mouse_degs_summary, 
-             by = "timepoint")
-
-#Plot
-correlation_long_all_mouse_human_timepoints_summary_plot = correlation_long_all_mouse_human_timepoints_summary_df %>% 
-  ggplot() +
-  aes(x = as.numeric(timepoint),
-      y = mean,
-      group = comparison,
-      color = comparison,
-      fill = comparison) +
-  geom_line(size = 1) +
-  
-  geom_textline(aes(label = comparison), 
-                size = 3, 
-                vjust = -0.2,
-                hjust = 0.8,
-                linewidth = 1,
-                data = correlation_long_all_mouse_human_timepoints_summary_df %>% 
-                  filter(comparison == "Human vs. Human")) +
-  
-  geom_textline(aes(label = comparison), 
-                size = 3, 
-                vjust = 1,
-                hjust = 0.8,
-                linewidth = 1,
-                data = correlation_long_all_mouse_human_timepoints_summary_df %>% 
-                  filter(comparison != "Human vs. Human")) +
-  
-  geom_errorbar(aes(ymin = ci_lower, 
-                  ymax = ci_upper), width = 0.2,
-                 size = 0.5) +
-  geom_point(pch = 21, color = "black", size = 2) +
-  scale_x_continuous(breaks = c(0, 1, 3, 7), expand = c(0.01, 0.01)) +
-  scale_y_continuous(expand = c(0.01, 0.01), limits = c(-0.2, 1)) +
-  theme_vaxgo() +
-  scale_color_manual(values = c("Mouse vs. Human" = "#4361ee",
-                                "Mouse vs. Mouse" = "#4DBBD5FF",
-                                "Human vs. Human" = "#90A4AEFF")) +
-  scale_fill_manual(values = c("Mouse vs. Human" = "#4361ee",
-                                "Mouse vs. Mouse" = "#4DBBD5FF",
-                                "Human vs. Human" = "#90A4AEFF")) +
-  labs(title = "Correlation between organisms,\nImmune genes, Fluad vaccine",
-       x = "",
-       y = " rho, mean",
-       color = "Comparison") +
-  theme(legend.position = "none") +
-  guides(fill = "none") 
-
-correlation_long_all_mouse_human_timepoints_summary_plot
-
-correlation_long_all_mouse_human_timepoints_summary_plot %>% 
-  ggsave(filename = here("Figures", "influenza_fluad_human_mouse_correlation_timepoints_ImmuneGenes_summary_plot_square.png"),
-                         width =3,
-                         height = 3)
-  
-```
 
 
 
@@ -5396,7 +5201,7 @@ dev.off()
 
 ```
 
-####Samples' means
+#### Samples' means
 
 ```{r}
 #Import data
@@ -8356,7 +8161,7 @@ df_ora_mouse_fit_best_worst_perc_hallmark_heatmap %>%
 
 # 7. Performance tests 
 
-## ROC Curve 
+## ROC Curve: Genes
 
 Do for one direction (up and then down) Do one sided t test for mouse,
 fit, and human Positive control: Human Neg control: Random permutation
@@ -8430,8 +8235,6 @@ genes_df_input = bind_rows(
 ```
 
 
-
-### Using t statistic to compute probabilities
 ```{r fig.height=5, fig.width=8}
 
 #=====================================================
@@ -8673,6 +8476,305 @@ roc_auc_curve_plot
 ```
 
 
+## ROC Curve: BTMs
+
+```{r}
+#Import ============
+#Import DEGs table
+dge_btm_mean_process = readRDS(file = here("tables", "influenza_fluad_human_mouse_dge_btm_mean_process.rds"))
+
+#Import metadata
+human_mouse_metadata = readRDS(file = here("tables", "saureus_infection_human_mouse_metadata.rds")) %>% 
+  mutate(timepoint = if_else(organism == "Human", 24, timepoint),
+         time_unit = "hours")
+
+
+
+#Pre-process data =============
+all_btms_human_mouse = dge_btm_mean_process 
+
+human_mouse_metadata %>% select(timepoint, organism) %>% distinct()
+all_btms_human_mouse %>% select(timepoint, organism) %>% distinct()
+
+#Timpoints differ from human and model
+human_data_reference <- all_btms_human_mouse %>% filter(organism == "Human")
+new_timepoints <- c(all_btms_human_mouse %>% filter(organism != "Human") %>% pull(timepoint) %>% unique() %>% as.character())
+duplicated_human_data <- map_dfr(new_timepoints, ~ {
+  df_copy <- human_data_reference
+  df_copy <- df_copy %>%
+    mutate(timepoint = .x)
+
+  return(df_copy)
+})
+
+all_btms_human_mouse_matched = all_btms_human_mouse %>% 
+  filter(organism != "Human") %>% 
+  bind_rows(duplicated_human_data) 
+#Check
+all_btms_human_mouse_matched %>% select(timepoint, organism) %>% distinct()
+
+#Input ======================
+set.seed(123)
+filename = "saureus_infection"
+gene_set_filename = "BTMs"
+
+btms_df_input = all_btms_human_mouse_matched %>% 
+  rename(symbol = process)
+
+```
+
+Calculate ROC curve
+
+
+```{r fig.height=5, fig.width=10}
+#=====================================================
+# Compute probabilities
+#=====================================================
+
+dge_long_genes_up = btms_df_input %>% 
+  mutate(
+    df = n_genes - 1,
+    t = mean_log2fc/(sd_log2fc/sqrt(n_genes)), 
+    pval_one_sided = pt(t, df, lower.tail = FALSE),
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    direction = if_else(pval_one_sided_adj <= 0.05 & t > 0, "up", "not_up"),
+    prob = 1 - pval_one_sided_adj
+  ) %>%
+  rename(adj_p_val = pval_one_sided_adj)
+
+dge_long_genes_down = btms_df_input %>% 
+  mutate(
+    df = n_genes - 1,
+    t = mean_log2fc/(sd_log2fc/sqrt(n_genes)), 
+    pval_one_sided = pt(t, df, lower.tail = TRUE),
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    direction = if_else(pval_one_sided_adj <= 0.05 & t < 0, "down", "not_down"),
+    prob = 1 - pval_one_sided_adj
+  ) %>%
+  rename(adj_p_val = pval_one_sided_adj)
+
+#=====================================================
+# Assign human truth
+#=====================================================
+truth_human_up = dge_long_genes_up %>% 
+  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
+  filter(organism == "Human") %>% 
+  distinct() %>% 
+  pivot_wider(names_from = organism, values_from = direction) %>% 
+  rename(truth = Human) %>% 
+  mutate(organism = "Human")
+
+truth_human_down = dge_long_genes_down %>% 
+  select(symbol, organism, timepoint, adj_p_val, direction) %>% 
+  filter(organism == "Human") %>% 
+  distinct() %>% 
+  pivot_wider(names_from = organism, values_from = direction) %>% 
+  rename(truth = Human) %>% 
+  mutate(organism = "Human")
+
+#=====================================================
+#Generate reference distributions
+#=====================================================
+perfect_prediction_up = truth_human_up %>%
+  mutate(prob = if_else(truth == "up", 1, 0),
+         model = "Human") %>%
+  rename(pred = truth)
+
+uniform_prediction_up = perfect_prediction_up %>%
+  group_by(timepoint) %>% 
+  mutate(prob = runif(n()), organism = "Uniform",
+         model = "Uniform")
+
+perfect_prediction_down = truth_human_down %>%
+  mutate(prob = if_else(truth == "down", 1, 0),
+          model = "Human") %>%
+  rename(pred = truth)
+
+uniform_prediction_down = perfect_prediction_down %>%
+  group_by(timepoint) %>% 
+  mutate(prob = runif(n()), organism = "Uniform",
+         model = "Uniform")
+
+#=====================================================
+# Combine models (Mouse + Immune + Uniform + Perfect)
+#=====================================================
+models_up = dge_long_genes_up %>% 
+  filter(organism != "Human") %>% 
+  mutate(pred = direction,
+         model = organism) %>%
+  bind_rows(perfect_prediction_up, uniform_prediction_up)
+
+models_down = dge_long_genes_down %>% 
+  filter(organism != "Human") %>% 
+  mutate(pred = direction,
+         model = organism) %>%
+  bind_rows(perfect_prediction_down, uniform_prediction_down)
+
+#=====================================================
+# Classify probabilities 
+#=====================================================
+classified_df_probs_up = truth_human_up %>% 
+  select(symbol, timepoint, truth) %>%
+  inner_join(models_up %>% 
+               select(symbol, timepoint, pred, prob, model),
+             by = join_by(symbol, timepoint)) %>% 
+  mutate(
+    truth = factor(truth, levels = c("up", "not_up"))
+  ) %>% 
+  distinct()
+
+classified_df_probs_down = truth_human_down %>% 
+  select(symbol, timepoint, truth) %>%
+  inner_join(models_down %>% 
+               select(symbol, timepoint, pred, prob, model),
+             by = join_by(symbol, timepoint)) %>% 
+  mutate(
+    truth = factor(truth, levels = c("down", "not_down"))
+  ) %>% 
+  distinct()
+
+
+#=====================================================
+#Compute ROC 
+#=====================================================
+
+roc_curve_up_notup = classified_df_probs_up %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Up")
+
+roc_curve_down_notdown = classified_df_probs_down %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Down")
+
+#=====================================================
+#Compute AUC 
+#=====================================================
+auc_results_up = classified_df_probs_up %>% 
+  mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_auc(truth, prob) %>%
+  rename(auc = .estimate) %>%
+  mutate(comparison = "Up") %>% 
+  ungroup() %>% 
+  select(model, timepoint, auc, comparison)
+
+auc_results_down = classified_df_probs_down %>% 
+  mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Uniform", "Human", "FIT")) %>%
+  group_by(model, timepoint) %>%
+  roc_auc(truth, prob) %>%
+  rename(auc = .estimate) %>%
+  mutate(comparison = "Down") %>% 
+  ungroup() %>% 
+  select(model, timepoint, auc, comparison)
+
+#Plot curves ------------------
+#PLOT ROC Curve
+roc_curve_plot = roc_curve_up_notup %>% 
+  bind_rows(roc_curve_down_notdown) %>%
+  ungroup() %>% 
+  mutate(timepoint_num = readr::parse_number(timepoint),
+    timepoint = paste0(timepoint, "h"),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) %>% 
+  ggplot(aes(x = 1 - specificity, 
+             y = sensitivity, 
+             color = model)) +
+  geom_path(size = 1, alpha = 1) +
+  geom_abline(lty = 3) +
+  theme_vaxgo() +
+  facet_grid(~fct_rev(comparison)~timepoint) +
+  scale_color_manual(values = c(
+    "Mouse" = "#4DBBD5FF",
+    "Human" = "#90A4AEFF",
+    "Immune" = "#4361ee",
+    "Uniform" = "gray80"
+    )) +
+  labs(
+  x = "FPR",
+  y = "TPR",
+  color = "Model") + 
+  theme(
+    legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    # strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
+    axis.text.x = element_text(size = 10, angle = 0, hjust = 0.5, vjust = 0.5),
+    axis.text.y = element_text(size = 10),
+    panel.spacing.x = unit(0.5, "lines"),
+    legend.key = element_blank()
+  ) +
+  scale_x_continuous(n.breaks = 3) +
+  scale_y_continuous(n.break = 3)
+
+roc_curve_plot
+
+
+# Visualize AUC
+auc_plot <- bind_rows(auc_results_up, 
+                      auc_results_down) %>% 
+  mutate(model = factor(model, levels = c("Perfect", "Mouse", "Immune", "Uniform")),
+         comparison = factor(comparison, levels = c("Up", "Down"))) %>%
+  
+  ggplot(aes(x = auc, 
+             y = fct_reorder(timepoint, as.numeric(timepoint)) %>% fct_rev(), 
+             fill = model)) +
+  geom_col(width = 1,
+           position = position_dodge(1)) +
+  
+  # Add a reference line for random prediction (AUC = 0.5)
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "black", linewidth = 0.5) +
+  
+  geom_text(aes(label = round(auc, 2)),
+            position = position_dodge2(1),
+            color = "black", 
+            hjust = 1.2, size = 3, vjust = 0.5) +
+  
+  facet_grid(comparison ~ ., scales = "free_y") +
+  
+  labs(
+    x = "AUC",
+    y = "Day",
+    fill = "Model"
+  ) +
+    scale_fill_manual(values = c(
+    "Mouse" = "#4DBBD5FF",
+    "Immune" = "#4361ee",
+    "Human" = "#90A4AEFF",
+    "Uniform" = "gray80"
+    )) +
+  theme_vaxgo()  +
+  theme(
+    legend.position = "top",
+    strip.text = element_text(size = 10),
+    strip.placement = "outside",
+    # strip.background.x = element_rect(fill = "gray95", color = NA), 
+    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
+    axis.text.x = element_text(size = 10, angle = 0, hjust = 0.5, vjust = 0.5),
+    axis.text.y = element_text(size = 10),
+    panel.spacing.x = unit(0.5, "lines"),
+    legend.key = element_blank()
+  ) +
+  scale_x_continuous(expand = c(0,0), limits = c(0,1))
+
+roc_auc_curve_plot = ((roc_curve_plot) |
+  (auc_plot + theme(legend.position = "none"))) +
+  plot_layout(guides = "collect", widths = c(1, 0.3))+
+  plot_annotation(theme = theme(legend.position = "top", plot.title = element_text(hjust = 0.5)),
+                  title = paste(filename, gene_set_filename))
+
+roc_auc_curve_plot %>%
+  ggsave(filename = here("Figures", paste0(filename, "_performance_roc_", gene_set_filename, ".png")),
+         width = 10,
+         height = 5)
+
+roc_auc_curve_plot
+```
 
 
 # 8. Extras
