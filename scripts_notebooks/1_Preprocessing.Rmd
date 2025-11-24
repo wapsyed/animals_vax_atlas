@@ -1050,6 +1050,2583 @@ all_degs_human_mouse = all_degs_mouse %>%
 all_degs_human_mouse %>% saveRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds"))
 ```
 
+
+
+## Quality control
+Import
+```{r}
+#Import
+eset_human_mouse = readRDS(file = here("tables", "influenza_fluad_human_mouse_eset.rds"))
+human_mouse_fluad_matrix = eset_human_mouse %>% exprs()
+human_mouse_fluad_metadata = readRDS(file = here("tables", "influenza_fluad_human_mouse_metadata.rds.png"))
+```
+
+
+##### Array quality metrics
+```{r}
+# # Array quality metrics
+# #All
+# arrayQualityMetrics(expressionset = eset_human_mouse,
+#                     outdir = here("ArrayQM", "ArrayQM_All"),
+#                     do.logtransform = F,
+#                     intgroup = "organism")
+# 
+# 
+# #Mouse -----
+# #Filter mouse samples only
+# human_mouse_fluad_metadata_mouseonly = human_mouse_fluad_metadata %>% 
+#                filter(organism == "Mouse") %>% 
+#   filter(timepoint %in% c(0, 1, 3, 7))
+# #Select mouse samples only
+# human_mouse_fluad_matrix_mouse = human_mouse_fluad_matrix %>% 
+#   as.data.frame() %>% 
+#   dplyr::select(c(human_mouse_fluad_metadata_mouseonly %>% 
+#              pull(sample_id)))
+# 
+# #Create ESet
+# eset_mouse_normalized <- ExpressionSet(
+#   assayData = human_mouse_fluad_matrix_mouse %>% 
+#     as.matrix(),
+#   phenoData = AnnotatedDataFrame(human_mouse_fluad_metadata_mouseonly %>% 
+#                                    column_to_rownames("sample_id"))
+# )
+# #Run ArrayQM
+# arrayQualityMetrics(expressionset = eset_mouse_normalized,
+#                     outdir =here("ArrayQM", "ArrayQM_Mouse"),
+#                     do.logtransform = F,
+#                     intgroup = "organism")
+# 
+# 
+# #Human -----
+# #Filter mouse samples only
+# human_mouse_fluad_metadata_humanonly = human_mouse_fluad_metadata %>% 
+#                filter(organism == "Human") %>% 
+#   filter(timepoint %in% c(0, 1, 3, 7))
+# #Select mouse samples only
+# human_mouse_fluad_matrix_human = human_mouse_fluad_matrix %>% 
+#   as.data.frame() %>% 
+#   dplyr::select(c(human_mouse_fluad_metadata_humanonly %>% 
+#              pull(sample_id)))
+# 
+# #Create ESet
+# eset_human_normalized <- ExpressionSet(
+#   assayData = human_mouse_fluad_matrix_human %>% 
+#     as.matrix(),
+#   phenoData = AnnotatedDataFrame(human_mouse_fluad_metadata_humanonly %>% 
+#                                    column_to_rownames("sample_id"))
+# )
+# 
+# arrayQualityMetrics(expressionset = eset_human_normalized,
+#                     outdir =here("ArrayQM", "ArrayQM_Human"),
+#                     do.logtransform = F,
+#                     intgroup = "organism")
+```
+
+##### RLE plot
+```{r fig.height=8, fig.width=18}
+# Create a long format table
+long_expr <- as.data.frame(human_mouse_fluad_matrix) %>%
+  rownames_to_column("gene") %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression") %>%
+  inner_join(human_mouse_fluad_metadata, by = "sample_id")
+
+# Calculate the median for each gene by organism
+long_expr <- long_expr %>%
+  group_by(gene, organism) %>%
+  mutate(gene_median = median(expression, na.rm = TRUE),
+         RLE = expression - gene_median) %>%
+  ungroup()
+
+# Plot RLE
+rle_plot <- ggplot(long_expr, aes(x = participant_id, y = RLE, fill = organism, color = organism)) +
+  geom_boxplot(outlier.size = 0.5) +
+  geom_boxplot(outlier.size = 0.5, color = "red", fill = "red",
+               data = long_expr %>% 
+                 filter(participant_id %in% c("CRC305DGENT1483036",
+                                           "CRC305DGENT0351013",
+                                           "CRC305DGENT1471032"))) +
+  facet_wrap(~paste("Day", timepoint),  ncol = 1) +
+  theme_vaxgo() +
+  labs(title = "RLE Plot by Organism", y = "Relative Log Expression", x = "Sample") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8),
+        legend.position = "top") +
+    scale_fill_manual(values = c(FIT = "#4361ee",
+                               Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  scale_color_manual(values = c(FIT = "#4361ee",
+                                Mouse = "#4DBBD5FF",
+                                Human = "#90A4AEFF")) 
+
+# Print
+print(rle_plot)
+
+#Save
+rle_plot %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_mouse_qc_rle_plot.png"),
+         width = 18,
+         height = 8)
+
+beep()
+```
+
+#### Check distributions
+
+##### From expression and log2fc
+```{r}
+#Raw expression + normalized
+human_mouse_fluad_not_normalized = GSE124689_expression_not_normalized_log2_raw_symbol %>% 
+  rownames_to_column("symbol") %>% 
+  pivot_longer(-symbol,
+               names_to = "sample_id",
+               values_to = "value_raw") %>% 
+  bind_rows(GSE120661_counts_not_normalized_log2_symbol %>% 
+              pivot_longer(-symbol,
+                names_to = "sample_id",
+                values_to = "value_raw"))
+
+#Annotate ------
+human_mouse_fluad_raw_qn = human_mouse_fluad_matrix %>% 
+  as.data.frame() %>% 
+  rownames_to_column("symbol") %>% 
+  pivot_longer(-symbol,
+               names_to = "sample_id",
+               values_to = "value_qn") %>% 
+  inner_join(human_mouse_fluad_not_normalized, 
+               by = join_by("symbol", "sample_id")) %>% 
+  inner_join(human_mouse_fluad_metadata,
+             by = "sample_id") %>% 
+  pivot_longer(cols = c(value_qn, value_raw),
+               names_to = "measure",
+               values_to = "value")
+
+#Save
+human_mouse_fluad_raw_qn %>% 
+  saveRDS(file = here("tables", "influenza_fluad_human_mouse_qc_raw_qn.rds"))
+
+#Calculate the avg expression
+human_mouse_fluad_raw_qn_avg = human_mouse_fluad_raw_qn %>% 
+  group_by(symbol, organism, timepoint, measure) %>% 
+  summarize(avg = mean(value),
+            n_subjects = n(),
+            sd = sd(value),
+            se = sd/sqrt(n_subjects)) %>% 
+  ungroup()
+
+#Save
+human_mouse_fluad_raw_qn_avg %>% 
+  saveRDS(file = here("tables", "influenza_fluad_human_mouse_qc_raw_qn_avg.rds"))
+
+
+# Log2FoldChange ------
+human_mouse_fluad_raw_qn_log2fc <- human_mouse_fluad_raw_qn %>%
+  filter(measure %in% c("value_qn", "value_raw"),
+         # timepoint %in% c(0, 1, 3, 7)
+         ) %>%
+  select(participant_id, symbol, timepoint, value, measure, organism) %>%
+  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_") %>%
+  pivot_longer(cols = starts_with("day_"),
+               names_to = "timepoint",
+               names_prefix = "day_",
+               values_to = "value") %>%
+  group_by(participant_id, symbol, measure) %>% 
+  mutate(day0 = value[timepoint == "0"]) %>%
+  ungroup() %>%
+  mutate(log2fc = value - day0) %>%
+  filter(timepoint != "0")
+
+#Save
+human_mouse_fluad_raw_qn_log2fc %>% 
+  saveRDS(file = here("tables", "influenza_fluad_human_mouse_qc_raw_qn_log2fc.rds"))
+
+#Average L2FC
+human_mouse_fluad_raw_qn_log2fc_avg = human_mouse_fluad_raw_qn_log2fc %>% 
+  group_by(symbol, organism, timepoint, measure) %>% 
+  summarize(avg_log2fc = mean(log2fc, na.rm = T),
+            n_subjects = n(),
+            #Dispersion
+            sd = sd(value, na.rm = T),
+            se = sd/sqrt(n_subjects),
+            #Effect size
+            effect_size = avg_log2fc/sd,
+            #Get pval from paired t-test
+    pval = tryCatch(t.test(value, day0, paired = TRUE)$p.value, error = function(e) NA_real_),
+            .groups = "drop") %>% 
+  ungroup() %>% 
+  mutate(ci_low = avg_log2fc - 1.96*se,
+         ci_high = avg_log2fc + 1.96*se,
+         pval_adj = p.adjust(pval, method = "fdr"))
+  
+#Save
+human_mouse_fluad_raw_qn_log2fc_avg %>% 
+  saveRDS(file = here("tables", "influenza_fluad_human_mouse_qc_raw_qn_log2fc_avg.rds"))
+
+beep()
+```
+
+###### Import tables
+
+```{r}
+#Import
+human_mouse_fluad_raw_qn =
+  readRDS(file = here("tables", "influenza_fluad_human_mouse_qc_raw_qn.rds"))
+human_mouse_fluad_raw_qn_avg = 
+  readRDS(file = here("tables", "influenza_fluad_human_mouse_qc_raw_qn_avg.rds"))
+human_mouse_fluad_raw_qn_log2fc = 
+  readRDS(file = here("tables", "influenza_fluad_human_mouse_qc_raw_qn_log2fc.rds"))
+human_mouse_fluad_raw_qn_log2fc_avg =  
+  readRDS(file = here("tables", "influenza_fluad_human_mouse_qc_raw_qn_log2fc_avg.rds"))
+
+human_mouse_fluad_metadata = readRDS(file = here("tables", "influenza_fluad_human_mouse_metadata.rds.png"))
+
+beep()
+```
+
+
+
+
+Sanity check
+
+```{r}
+# Calculate quantiles for each sample and measure
+quantile_summary <- human_mouse_fluad_raw_qn %>%
+  group_by(sample_id, measure) %>%
+  summarize(
+    q0   = quantile(value, probs = 0.00, na.rm = TRUE),
+    q25  = quantile(value, probs = 0.25, na.rm = TRUE),
+    q50  = quantile(value, probs = 0.50, na.rm = TRUE),
+    q75  = quantile(value, probs = 0.75, na.rm = TRUE),
+    q100 = quantile(value, probs = 1.00, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(cols = starts_with("q"), names_to = "quantile", values_to = "value")
+
+# Plot the quantiles
+ggplot(quantile_summary, aes(x = quantile %>% fct_relevel("q0", "q25", "q50", "q75","q100"), 
+                             y = value, 
+                             group = measure, 
+                             color = measure)) +
+  geom_point(alpha = 0.3, position = position_dodge2(width = 0.2)) +
+  labs(title = "Per-sample quantile distribution: raw vs. quantile-normalized",
+       x = "Quantiles") +
+  theme_vaxgo()
+
+human_mouse_fluad_raw_qn %>%
+  group_by(measure, organism, timepoint) %>%
+  summarize(
+    q0   = quantile(value, 0.00, na.rm = TRUE),
+    q25  = quantile(value, 0.25, na.rm = TRUE),
+    q50  = quantile(value, 0.50, na.rm = TRUE),
+    q75  = quantile(value, 0.75, na.rm = TRUE),
+    q100 = quantile(value, 1.00, na.rm = TRUE)
+  ) 
+```
+
+
+###### Averaged
+```{r fig.height=5, fig.width=10}
+
+#Plot average expression
+distribution_check_avg_raw_qn_plot_data = human_mouse_fluad_raw_qn_avg %>% 
+  filter(timepoint %in% c(0, 1, 3, 7)) %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) 
+
+
+distribution_check_avg_raw_qn_plot = distribution_check_avg_raw_qn_plot_data %>% 
+  ggplot() +
+  aes(x = avg) +
+  
+  #Human
+  geom_density(aes(y = after_stat(count),
+                   fill = organism), 
+               na.rm = T,
+               color = NA,
+               position = position_identity(), 
+               alpha = 0.2,
+               data = distribution_check_avg_raw_qn_plot_data %>% 
+                 filter(organism == "Human")) +
+  
+  geom_density(aes(y = after_stat(count),
+                   color = organism), 
+               na.rm = T,
+               fill = NA,
+               size = 1,
+               position = position_identity(), 
+               alpha = 1,
+               data = distribution_check_avg_raw_qn_plot_data %>% 
+                 filter(organism == "Human")) +
+  
+  #Mouse
+  geom_density(aes(y = after_stat(count),
+                   fill = organism), 
+               color = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 0.2,
+               data = distribution_check_avg_raw_qn_plot_data %>% 
+                 filter(organism == "Mouse")) +
+  geom_density(aes(y = after_stat(count),
+                   color = organism), 
+               fill = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 1,
+               size = 1,
+               data = distribution_check_avg_raw_qn_plot_data %>% 
+                 filter(organism == "Mouse")) +
+  facet_grid(~measure~paste("Day", timepoint), scales = "fixed", axes = "all") +
+  scale_y_continuous(expand = c(0.01, 0.01))+
+  scale_fill_manual(values = c(FIT = "#4361ee",
+                               Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  scale_color_manual(values = c(FIT = "#4361ee",
+                                Mouse = "#4DBBD5FF",
+                                Human = "#90A4AEFF")) +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        legend.key = element_blank(),
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "",
+       x = "Expression",
+       y = "Frequency")
+
+distribution_check_avg_raw_qn_plot
+
+```
+
+
+
+
+
+###### Boxplot by organism, averaged
+```{r}
+#Boxplot by organism, averaged
+distribution_check_avg_raw_qn_boxplot = human_mouse_fluad_raw_qn_avg %>% 
+  filter(timepoint %in% c(1)) %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) %>% 
+  ggplot() +
+  aes(y = avg,
+      x = organism,
+      label = organism) +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+  facet_grid(~measure~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 20))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Expression")
+distribution_check_avg_raw_qn_boxplot
+```
+
+
+
+
+###### By subject
+```{r fig.height=7, fig.width=18}
+distribution_check_subject_raw_qn = human_mouse_fluad_raw_qn %>% 
+  filter(timepoint %in% c(0, 1, 3, 7)) %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) %>% 
+  droplevels()
+
+human_mouse_fluad_raw_qn_kaboxplot_data = human_mouse_fluad_raw_qn %>%
+  filter(timepoint == 1) %>%
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) %>% 
+  group_by(measure, organism, participant_id, timepoint) %>%
+  summarize(
+    q0  = quantile(value, 0),
+    q25 = quantile(value, 0.25),
+    q50 = quantile(value, 0.5),
+    q75 = quantile(value, 0.75),
+    q100 = quantile(value, 1)
+  ) %>% 
+  ungroup() %>% 
+  droplevels()
+
+human_mouse_fluad_raw_qn_kaboxplot_data_long = human_mouse_fluad_raw_qn_kaboxplot_data %>% 
+  pivot_longer(cols = q0:q100,
+               names_to = "quantile",
+               values_to = "value") %>% 
+  ungroup() %>% 
+  droplevels()
+
+distribution_check_subject_raw_qn_plot = distribution_check_subject_raw_qn %>% 
+  droplevels() %>% 
+  filter(timepoint == 1) %>% 
+  ggplot() +
+  aes(y = value,
+      x = participant_id,
+      label = participant_id) +
+  
+  # Retângulo do IQR
+  geom_boxplot(aes(fill = organism), alpha = 1, width = 1) +
+  
+  #Connect quantiles
+  geom_line(aes(group = quantile),
+            color = "black",
+            size = 1,
+            data = human_mouse_fluad_raw_qn_kaboxplot_data_long) +
+  
+  facet_grid(vars(measure), vars(fct_rev(organism)), 
+           scales = "free_x", 
+           space = "free", drop = TRUE) +
+  
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     limits = c(-5, 20)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF"
+    )) +
+  scale_color_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF"
+    )) +
+  guides(color=guide_legend(nrow=1,byrow=TRUE)) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "",
+       color = "",
+       x = "Participant",
+       y = "Expression")
+
+
+distribution_check_subject_raw_qn_plot
+```
+
+Combine boxplots
+```{r fig.height=5, fig.width=18}
+#With boxplot
+distribution_check_subject_raw_qn_all = (distribution_check_subject_raw_qn_plot + theme(strip.text.y = element_blank())) +
+  (distribution_check_avg_raw_qn_boxplot + theme(axis.title.y = element_blank(), legend.position = "none")) +
+  plot_layout(guides = "collect",
+              axes = "collect",
+              axis_titles = "collect",
+              widths = c(1, 0.1)) +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+distribution_check_subject_raw_qn_all %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_mouse_qc_distribution_subject_raw_qn_all.png"),
+         width = 18,
+         height = 5)
+
+distribution_check_subject_raw_qn_all
+
+```
+
+##### From Log2FC
+
+Averaged
+```{r fig.height=5, fig.width=10}
+distribution_check_raw_qn_log2fc_plot_data = human_mouse_fluad_raw_qn_log2fc %>% 
+  filter(timepoint %in% c(0, 1, 3, 7)) %>%
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure))
+
+
+distribution_check_raw_qn_log2fc_plot = distribution_check_raw_qn_log2fc_plot_data %>% 
+  ggplot() +
+  aes(x = log2fc) +
+  
+  #Human
+  geom_density(aes(fill = organism), 
+               na.rm = T,
+               color = NA,
+               position = position_identity(), 
+               size = 1,
+               alpha = 0.2,
+               data = distribution_check_raw_qn_log2fc_plot_data %>% 
+                 filter(organism == "Human")) +
+  
+  geom_density(aes(color = organism), 
+               na.rm = T,
+               fill = NA,
+               position = position_identity(), 
+               size = 1,
+               alpha = 1,
+               data = distribution_check_raw_qn_log2fc_plot_data %>% 
+                 filter(organism == "Human")) +
+  
+  #Mouse
+  geom_density(aes(fill = organism), 
+               color = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 0.2,
+               size = 1,
+               data = distribution_check_raw_qn_log2fc_plot_data %>% 
+                 filter(organism == "Mouse")) +
+  
+  geom_density(aes(color = organism), 
+               fill = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 1,
+               size = 1,
+               data = distribution_check_raw_qn_log2fc_plot_data %>% 
+                 filter(organism == "Mouse")) +
+  
+  facet_grid(~measure~paste("Day", timepoint), scales = "free_y") +
+  # scale_y_continuous(expand = c(0.01, 0.01))+
+  scale_x_continuous(limits = c(-5, 5)) +
+  scale_fill_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  scale_color_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        legend.key = element_blank(),
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "",
+       x = "Log2-Fold Change",
+       y = "Frequency")
+
+distribution_check_raw_qn_log2fc_plot
+
+```
+
+
+
+###### Plot correlation between genes (mean log2fc)
+```{r fig.height=5, fig.width=12}
+#Plot correlation------
+#Log2fc
+human_mouse_fluad_raw_qn_log2fc_avg_correlation_plot = human_mouse_fluad_raw_qn_log2fc_avg %>% 
+    filter(timepoint %in% c(1, 3, 7),
+         pval <= 0.05) %>% 
+  select(symbol, timepoint, measure, avg_log2fc, organism) %>% 
+  drop_na(avg_log2fc) %>% 
+  pivot_wider(names_from = "organism",
+              values_from = "avg_log2fc") %>% 
+  drop_na() %>%
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) %>% 
+  ggplot() +
+  aes(x = Mouse,
+      y = Human) +
+  facet_grid(~measure~paste("Day", timepoint), axes = "all") +
+  geom_point(color = "#90A4AEFF") +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  theme(legend.position = "none",
+        legend.direction = "horizontal") +
+  labs(x = "Mouse Log2-Fold Change",
+       y = "Human Log2-Fold Change",
+       title= "Correlation plot, Log2-Fold Change")
+
+human_mouse_fluad_raw_qn_log2fc_avg_correlation_plot
+
+#Average Effect size
+human_mouse_fluad_raw_qn_effectsize_correlation_plot = human_mouse_fluad_raw_qn_log2fc_avg %>% 
+  filter(timepoint %in% c(1, 3, 7),
+         pval <= 0.05) %>% 
+  select(symbol, timepoint, measure, effect_size, organism) %>% 
+  drop_na(effect_size) %>% 
+  pivot_wider(names_from = "organism",
+              values_from = "effect_size") %>% 
+  drop_na() %>%
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) %>% 
+  ggplot() +
+  aes(x = Mouse,
+      y = Human) +
+  facet_grid(~measure~paste("Day", timepoint), axes = "all") +
+  geom_point(color = "#90A4AEFF") +
+  # scale_y_continuous(limits = c(-1, 1)) +
+  # scale_x_continuous(limits = c(-10, 10)) +
+  # scale_y_continuous(limits = c(-2.5, 5)) +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  theme(legend.position = "none",
+        legend.direction = "horizontal") +
+  labs(x = "Mouse (Effect size)",
+       y = "Human (Effect size)",
+       title = "Correlation plot, Effect size")
+
+
+
+#Plot all
+correlationplots_log2fc_effsize = 
+  (human_mouse_fluad_raw_qn_log2fc_avg_correlation_plot + theme(strip.text.y = element_blank())) | 
+  (human_mouse_fluad_raw_qn_effectsize_correlation_plot)
+correlationplots_log2fc_effsize
+
+correlationplots_log2fc_effsize %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_mouse_correlationplots_log2fc_effsize.png"),
+         width = 12,
+         height = 5)
+```
+
+
+
+
+###### Plot correlation between genes (log2fc for every sample)
+
+```{r}
+#Import
+human_mouse_fluad_log2fc_samples =
+  readRDS(file = here("tables", "influenza_fluad_human_mouse_log2fc_samples.rds")) %>% 
+  arrange(human_symbol, timepoint) %>% 
+  distinct() %>% 
+  drop_na(log2fc)
+
+human_mouse_metadata =
+  readRDS(file = here("tables", "influenza_fluad_human_mouse_metadata.rds"))
+
+
+all_degs_human_mouse = readRDS(file = here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds"))
+
+human_mouse_log2fc_samples 
+  
+```
+
+
+
+```{r}
+# #Input
+# filename = "influenza_fluad_human_mouse"
+# gene_set_name = "AllGenes"
+# human_mouse_log2fc_samples = human_mouse_fluad_log2fc_samples
+
+#Input
+# filename = "influenza_fluad_human_mouse"
+# gene_set_name = "Immune"
+# human_mouse_log2fc_samples = human_mouse_fluad_log2fc_samples  %>%
+#   filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
+
+
+# #Input
+# filename = "influenza_fluad_human_mouse"
+# gene_set_name = "DEGs"
+# 
+# human_degs = all_degs_human_mouse %>%
+#   filter(organism == "Human", 
+#          adj_p_val <= 0.05) %>%
+#   select(human_symbol)
+# 
+# human_mouse_log2fc_samples = human_mouse_fluad_log2fc_samples  %>%
+#   filter(human_symbol %in% c(human_degs$human_symbol)) 
+
+# #Input
+filename = "influenza_fluad_human_mouse"
+gene_set_name = "DEGs_Immune"
+human_mouse_log2fc_samples = human_mouse_fluad_log2fc_samples  %>%
+  filter(human_symbol %in% c(human_degs$human_symbol))  %>%
+  filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
+```
+
+
+
+```{r fig.height=3, fig.width=3}
+# --- 1) Mouse vs Human, matched timepoints ---
+#Get timepoints
+timepoints_human <- unique(human_mouse_log2fc_samples %>% filter(organism == "Human") %>% pull(timepoint))
+timepoints_mouse <- timepoints_human
+
+#Matched timepoints
+timepoint_combinations <- tibble(timepoint_human = timepoints_human,
+                                 timepoint_mouse = timepoints_mouse)
+
+# Loop for matched timepoints
+cor_human_mouse_timepoint <- timepoint_combinations %>%
+  pmap_dfr(function(timepoint_human, timepoint_mouse) {
+    
+    # pegar os participantes do timepoint específico
+    human_df <- human_mouse_log2fc_samples %>%
+      filter(organism == "Human", timepoint == timepoint_human) %>%
+      select(participant_id, human_symbol, log2fc)
+    
+    mouse_df <- human_mouse_log2fc_samples %>%
+      filter(organism == "Mouse", timepoint == timepoint_mouse) %>%
+      select(participant_id, human_symbol, log2fc)
+    
+    # manter apenas genes em comum
+    common_genes <- intersect(human_df$human_symbol, mouse_df$human_symbol)
+    human_df <- human_df %>% filter(human_symbol %in% common_genes)
+    mouse_df <- mouse_df %>% filter(human_symbol %in% common_genes)
+    
+    # pivot para wide
+    human_wide <- human_df %>% pivot_wider(names_from = participant_id, values_from = log2fc)
+    mouse_wide <- mouse_df %>% pivot_wider(names_from = participant_id, values_from = log2fc)
+    
+    # IDs de participantes
+    human_ids <- setdiff(colnames(human_wide), "human_symbol")
+    mouse_ids <- setdiff(colnames(mouse_wide), "human_symbol")
+    
+    # calcular correlação para todos pares humano x mouse
+    expand.grid(human = human_ids, mouse = mouse_ids, stringsAsFactors = FALSE) %>%
+      mutate(
+        cor_test = map2(human, mouse, ~{
+          x <- human_wide[[.x]]
+          y <- mouse_wide[[.y]]
+          # remover NAs correspondentes
+          keep <- complete.cases(x, y)
+          cor.test(x[keep], y[keep], method = "pearson")
+        }),
+        r       = map_dbl(cor_test, ~.x$estimate),
+        p_value = map_dbl(cor_test, ~.x$p.value),
+        ci_low  = map_dbl(cor_test, ~.x$conf.int[1]),
+        ci_high = map_dbl(cor_test, ~.x$conf.int[2])
+      ) %>%
+      select(-cor_test) %>%
+      mutate(timepoint_human = timepoint_human,
+             timepoint_mouse = timepoint_mouse)
+  }) %>% 
+  group_by(timepoint_human, timepoint_mouse) %>%
+  summarize(
+    comparison = "Human vs. Mouse",
+    mean = mean(r, na.rm = TRUE),
+    sd   = sd(r, na.rm = TRUE),
+    n      = sum(!is.na(r)),
+    se     = sd / sqrt(n),
+    tval   = qt(0.975, df = n - 1),
+    ci_low = mean - tval * se,
+    ci_high = mean + tval * se,
+    .groups = "drop"
+  )
+
+# --- 2) Human vs Human ---
+cor_human_human <- human_mouse_log2fc_samples %>%
+  filter(organism == "Human") %>%
+  group_by(timepoint) %>%
+  group_modify(~{
+    df <- .x %>%
+      select(participant_id, human_symbol, log2fc) %>%
+      pivot_wider(names_from = participant_id, values_from = log2fc) %>%
+      select(-human_symbol)
+    
+    # Calculate correlation
+    cor_mat <- cor(df, use = "pairwise.complete.obs", method = "pearson")
+    
+    # Long format
+    cor_long <- as.data.frame(cor_mat) %>%
+      rownames_to_column("participant_1") %>%
+      melt(id.vars = "participant_1", variable.name = "participant_2", value.name = "correlation") %>%
+      filter(participant_1 != participant_2) %>%
+      rowwise() %>%
+      mutate(pair = paste(sort(c(participant_1, participant_2)), collapse = "_")) %>%
+      ungroup() %>%
+      distinct(pair, .keep_all = TRUE)
+    
+    # Summary
+    tibble(
+      comparison = "Human vs. Human",
+      mean = mean(cor_long$correlation, na.rm = TRUE),
+      sd   = sd(cor_long$correlation, na.rm = TRUE),
+      n    = nrow(cor_long),
+      se   = sd / sqrt(n),
+      tval = qt(0.975, df = n - 1),
+      ci_low  = mean - tval * se,
+      ci_high = mean + tval * se
+    )
+  }) %>%
+  ungroup()
+  
+
+# --- 3) Mouse vs Mouse ---
+cor_mouse_mouse <- human_mouse_log2fc_samples %>%
+  filter(organism == "Mouse") %>%
+  group_by(timepoint) %>%
+  group_modify(~{
+    df <- .x %>%
+      select(participant_id, human_symbol, log2fc) %>%
+      pivot_wider(names_from = participant_id, values_from = log2fc) %>%
+      select(-human_symbol)
+    
+    # Calculate correlation
+    cor_mat <- cor(df, use = "pairwise.complete.obs", method = "pearson")
+    
+    # Long format
+    cor_long <- as.data.frame(cor_mat) %>%
+      rownames_to_column("participant_1") %>%
+      melt(id.vars = "participant_1", variable.name = "participant_2", value.name = "correlation") %>%
+      filter(participant_1 != participant_2) %>%
+      rowwise() %>%
+      mutate(pair = paste(sort(c(participant_1, participant_2)), collapse = "_")) %>%
+      ungroup() %>%
+      distinct(pair, .keep_all = TRUE)
+    
+    # Summary
+    tibble(
+      comparison = "Mouse vs. Mouse",
+      mean = mean(cor_long$correlation, na.rm = TRUE),
+      sd   = sd(cor_long$correlation, na.rm = TRUE),
+      n    = nrow(cor_long),
+      se   = sd / sqrt(n),
+      tval = qt(0.975, df = n - 1),
+      ci_low  = mean - tval * se,
+      ci_high = mean + tval * se
+    )
+  }) %>%
+  ungroup()
+
+
+#Unite
+correlation_long_all_mouse_human_timepoints_summary = cor_human_mouse_timepoint %>% 
+  mutate(timepoint = timepoint_mouse) %>% 
+  bind_rows(
+    cor_human_human,
+    cor_mouse_mouse)
+
+correlation_long_all_mouse_human_timepoints_summary
+
+#Plot
+correlation_long_all_mouse_human_timepoints_summary_plot = correlation_long_all_mouse_human_timepoints_summary %>% 
+  ggplot() +
+  aes(x = as.numeric(timepoint),
+      y = mean,
+      group = comparison,
+      color = comparison,
+      fill = comparison) +
+  geom_line(size = 1) +
+  
+  geom_errorbar(aes(ymin = ci_low, 
+                  ymax = ci_high), width = 0.2,
+                 size = 0.5) +
+  geom_point(pch = 21, color = "black", size = 2) +
+  
+  
+  geom_textline(aes(label = comparison), 
+                size = 3, 
+                vjust = -0.5,
+                hjust = 0.8,
+                linewidth = 1,
+                data = . %>% 
+                  filter(comparison != "Human vs. Human")) +
+  geom_textline(aes(label = comparison), 
+                size = 3, 
+                vjust = -0.5,
+                # angle = 45,
+                hjust = 1,
+                linewidth = 1,
+                data = . %>% 
+                  filter(comparison == "Human vs. Human")) +
+  scale_x_continuous(breaks = c(1, 3, 7), expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     # limits = c(-0.2, 1)
+                     ) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  scale_fill_manual(values = c("Mouse vs. Human" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  labs(title = paste0("Correlation between organisms\n", gene_set_name, ", ", filename),
+       x = "",
+       y = "Pearson p, mean",
+       color = "Comparison") +
+  theme(legend.position = "none") +
+  guides(fill = "none") 
+
+correlation_long_all_mouse_human_timepoints_summary_plot
+
+
+correlation_long_all_mouse_human_timepoints_summary_plot %>% 
+  ggsave(filename = here("Figures", paste(filename, gene_set_name, "correlation_timepoints_summary_plot_square.png", sep = "_")),
+         width = 3,
+         height = 3)
+
+```
+
+
+
+
+
+
+
+
+
+###### Only mice
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE, paged.print=TRUE}
+#Plot correlation------
+#Log2fc (all samples, MOUSE)
+
+#Filters
+organism_select = "Mouse"
+measure_select = "value_raw"
+timepoints_select = c(1, 3, 7)
+
+#Calculate correlation ------
+correlation_long_all_timepoints <- human_mouse_fluad_raw_qn_log2fc %>%
+  filter(
+    organism == organism_select,
+    measure == measure_select,
+    timepoint %in% timepoints_select
+  ) %>%
+  select(timepoint, symbol, participant_id, log2fc) %>%
+  group_by(timepoint) %>%
+  # Pivot wider and calculate correlation
+  group_modify(~ {
+    .x %>%
+      pivot_wider(names_from = participant_id, values_from = log2fc) %>%
+      select(-symbol) %>%
+      cor(use = "pairwise.complete.obs", method = "pearson") %>%
+      as.data.frame() %>%
+      rownames_to_column("participant1") %>%
+      pivot_longer(-participant1, names_to = "participant2", values_to = "correlation") %>%
+      filter(participant1 != participant2)
+  }) %>%
+  ungroup()
+  #Remove duplicate comparisons
+  # mutate(
+  #   participant_min = pmin(participant1, participant2),
+  #   participant_max = pmax(participant1, participant2)
+  # ) %>%
+  # distinct(timepoint, participant_min, participant_max, .keep_all = TRUE) %>%
+  # select(timepoint, participant1 = participant_min, participant2 = participant_max, correlation) %>% 
+  # group_by(timepoint) %>% 
+  # arrange(-correlation)
+
+
+
+#Summarize data
+correlation_long_all_timepoints %>% 
+  group_by(timepoint) %>% 
+  arrange(timepoint, -correlation) %>% 
+  summarize(mean = mean(correlation, na.rm = T),
+            median = median(correlation, na.rm = T),
+            min = min(correlation, na.rm = T),
+            max = max(correlation, na.rm = T),
+            comparison = "Mouse vs Mouse") %>% 
+  gt::gt()
+```
+
+
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE, paged.print=TRUE}
+#Participants available
+participants_available = human_mouse_fluad_raw_qn_log2fc %>% 
+  filter(organism == organism_select,
+         measure == measure_select) %>% 
+  pull(participant_id) %>% 
+  unique() %>% 
+  janitor::make_clean_names() 
+
+participant_pairs <- combn(participants_available, 2, simplify = FALSE)
+
+#Transform data
+scatter_plot_data =  human_mouse_fluad_raw_qn_log2fc %>% 
+  filter(organism == organism_select,
+         measure == measure_select) %>% 
+  select(symbol, timepoint, measure, log2fc, participant_id) %>% 
+  filter(timepoint %in% timepoints_select) %>% 
+  pivot_wider(names_from = "participant_id",
+              values_from = "log2fc") %>% 
+  clean_names() %>% 
+  rename("value_raw" = measure)
+
+#Plot correlation between animals ------
+#GGPairs
+
+#Change params in geoms
+#Density
+my_dens <- function(data, mapping, ...) {
+  ggplot(data = data, mapping=mapping) +
+    geom_density(alpha = 0.2, color = "black")
+}
+#Points
+my_point <- function(data, mapping, ...) {
+  ggplot(data = data, mapping = mapping) +
+    geom_point(alpha = 0.5, ...)  
+}
+
+#All timepoints
+mouse_correlation_ggpairs_alldays = ggpairs(scatter_plot_data,
+                                    columns = 4:8,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select), 
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point)
+                                    ) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("0" = "black",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0" = "black",
+                               "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc"))
+
+mouse_correlation_ggpairs_alldays
+
+mouse_correlation_ggpairs_alldays %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_mouse_samples_correlation_ggpairs_alldays.png"),
+         height = 10,
+         width = 10)
+
+
+#Day 1
+timepoint_select = 1
+mouse_correlation_ggpairs_day1 = ggpairs(scatter_plot_data %>% 
+                                           filter(timepoint == timepoint_select),
+                                    columns = 4:8,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select)) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("0" = "black",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0" = "black",
+                               "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc"))
+
+mouse_correlation_ggpairs_day1
+
+mouse_correlation_ggpairs_day1 %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_mouse_samples_correlation_ggpairs_day1.png"),
+         height = 10,
+         width = 10)
+
+
+#Day 3
+timepoint_select = 3
+mouse_correlation_ggpairs_day3 = ggpairs(scatter_plot_data %>% 
+                                           filter(timepoint == timepoint_select),
+                                    columns = 4:8,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select)) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("0" = "black",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0" = "black",
+                               "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc"))
+
+mouse_correlation_ggpairs_day3
+mouse_correlation_ggpairs_day3 %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_mouse_samples_correlation_ggpairs_day3.png"),
+         height = 10,
+         width = 10)
+
+
+#Day 7
+timepoint_select = 7
+mouse_correlation_ggpairs_day7 = ggpairs(scatter_plot_data %>% 
+                                           filter(timepoint == timepoint_select),
+                                    columns = 4:8,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select)) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("0" = "black",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0" = "black",
+                               "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc"))
+
+mouse_correlation_ggpairs_day7
+mouse_correlation_ggpairs_day7 %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_mouse_samples_correlation_ggpairs_day7.png"),
+         height = 10,
+         width = 10)
+
+beep()
+
+```
+
+
+###### Only human
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE, paged.print=TRUE}
+#Calculate the correlation between participants
+#Filters
+organism_select = "Human"
+measure_select = "value_raw"
+timepoints_select = c(1, 3, 7)
+
+correlation_long_all_timepoints <- human_mouse_fluad_raw_qn_log2fc %>%
+  filter(
+    organism == organism_select,
+    measure == measure_select,
+    timepoint %in% timepoints_select
+  ) %>%
+  select(timepoint, symbol, participant_id, log2fc) %>%
+  group_by(timepoint) %>%
+  # Pivot wider and calculate correlation
+  group_modify(~ {
+    .x %>%
+      pivot_wider(names_from = participant_id, values_from = log2fc) %>%
+      select(-symbol) %>%
+      cor(use = "pairwise.complete.obs", method = "pearson") %>%
+      as.data.frame() %>%
+      rownames_to_column("participant1") %>%
+      pivot_longer(-participant1, names_to = "participant2", values_to = "correlation") %>%
+      filter(participant1 != participant2)
+  }) %>%
+  ungroup() 
+  #Remove duplicate comparisons
+  # mutate(
+  #   participant_min = pmin(participant1, participant2),
+  #   participant_max = pmax(participant1, participant2)
+  # ) %>%
+  # distinct(timepoint, participant_min, participant_max, .keep_all = TRUE) %>%
+  # select(timepoint, participant1 = participant_min, participant2 = participant_max, correlation) %>% 
+  # group_by(timepoint) %>% 
+  # arrange(-correlation)
+
+#Summarize data
+correlation_long_all_timepoints %>% 
+  group_by(timepoint) %>% 
+  arrange(timepoint, -correlation) %>% 
+  summarize(mean = mean(correlation, na.rm = T),
+            median = median(correlation, na.rm = T),
+            min = min(correlation, na.rm = T),
+            max = max(correlation, na.rm = T),
+            comparison = "Human vs Human") %>% 
+  gt::gt()
+```
+
+
+```{r fig.height=10, fig.width=20, message=FALSE, warning=FALSE, paged.print=TRUE}
+
+#Plot heatmap
+correlation_long_all_timepoints %>%
+  filter(participant1 != participant2) %>%  # opcional: remove autocorrelações
+  mutate(
+    participant1 = factor(participant1, levels = sort(unique(participant1))),
+    participant2 = factor(participant2, levels = sort(unique(participant2)))
+  ) %>%
+  ggplot(aes(x = participant1, y = participant2, fill = correlation)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  facet_grid(~timepoint) +
+  scale_fill_gradient2(
+    low = "#4575b4",     # azul
+    mid = "white", 
+    high = "#d73027",    # vermelho
+    midpoint = 0,
+    oob = scales::squish, 
+    limits = c(-1, 1),
+    name = "Pearson r"
+  ) +
+  coord_fixed() +
+  theme_vaxgo() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 1),
+    axis.text.y = element_text(size = 1),
+    panel.grid = element_blank(),
+    strip.background = element_rect(fill = "gray90", color = NA),
+    legend.position = "right"
+  ) +
+  labs(
+    title = "Correlação entre participantes por timepoint",
+    x = "Participante 1",
+    y = "Participante 2"
+  )
+
+
+```
+
+
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE, paged.print=TRUE}
+#Plot correlation------
+#Log2fc (all samples, MOUSE)
+
+#Participants available
+participants_available = human_mouse_fluad_raw_qn_log2fc %>% 
+  filter(organism == organism_select,
+         measure == measure_select) %>% 
+  select(participant_id) %>% 
+  unique() %>% 
+  slice_sample(n = 5) %>% 
+  pull(participant_id) %>% 
+  unique()
+
+participant_pairs <- combn(participants_available, 2, simplify = FALSE)
+
+#Transform data
+scatter_plot_data = human_mouse_fluad_raw_qn_log2fc %>% 
+  filter(organism == organism_select,
+         measure == measure_select,
+         participant_id %in% participants_available,
+         timepoint %in% timepoints_select) %>% 
+  select(symbol, timepoint, log2fc, participant_id) %>% 
+  group_by(symbol) %>% 
+  pivot_wider(names_from = "participant_id",
+              values_from = "log2fc")
+
+scatter_plot_data
+```
+
+
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE, paged.print=TRUE}
+#Plot correlation between animals ------
+#GGPairs
+
+#Change params in geoms
+#Density
+my_dens <- function(data, mapping, ...) {
+  ggplot(data = data, mapping=mapping) +
+    geom_density(alpha = 0.2, color = "black")
+}
+#Points
+my_point <- function(data, mapping, ...) {
+  ggplot(data = data, mapping = mapping) +
+    geom_point(alpha = 0.5, ...)  
+}
+
+#All timepoints
+human_correlation_ggpairs_alldays = ggpairs(scatter_plot_data,
+                                    columns = 3:7,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select), 
+                                    diag = list(continuous = my_dens),
+                                    lower = list(continuous = my_point)
+                                    ) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("0" = "black",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0" = "black",
+                               "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc"))
+
+human_correlation_ggpairs_alldays %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_samples_correlation_ggpairs_alldays.png"),
+         height = 10,
+         width = 10)
+beep()
+
+
+#Day 1
+timepoint_select = 1
+human_correlation_ggpairs_day1 = ggpairs(scatter_plot_data %>% 
+                                           filter(timepoint == timepoint_select),
+                                    columns = 3:7,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select)) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("0" = "black",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0" = "black",
+                               "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc"))
+
+human_correlation_ggpairs_day1 %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_samples_correlation_ggpairs_day1.png"),
+         height = 10,
+         width = 10)
+
+
+#Day 3
+timepoint_select = 3
+human_correlation_ggpairs_day3 = ggpairs(scatter_plot_data %>% 
+                                           filter(timepoint == timepoint_select),
+                                    columns = 3:7,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select)) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("0" = "black",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0" = "black",
+                               "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc"))
+
+human_correlation_ggpairs_day3 %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_samples_correlation_ggpairs_day3.png"),
+         height = 10,
+         width = 10)
+
+
+#Day 7
+timepoint_select = 7
+human_correlation_ggpairs_day7 = ggpairs(scatter_plot_data %>% 
+                                           filter(timepoint == timepoint_select),
+                                    columns = 3:7,
+                                    mapping = ggplot2::aes(color = timepoint,
+                                                           fill = timepoint),
+                                    title = paste("Day", timepoint_select)) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("0" = "black",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0" = "black",
+                               "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc"))
+
+human_correlation_ggpairs_day7 %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_samples_correlation_ggpairs_day7.png"),
+         height = 10,
+         width = 10)
+
+beep()
+
+```
+
+
+
+
+
+
+
+
+######Boxplot by organism, averaged
+```{r}
+
+#Boxplot by organism, averaged --------
+distribution_check_avg_raw_qn_log2fc_boxplot = human_mouse_fluad_raw_qn_log2fc_avg %>% 
+  filter(timepoint %in% c(1)) %>% 
+  drop_na(avg_log2fc) %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) %>% 
+  ggplot() +
+  aes(y = avg_log2fc,
+      x = organism,
+      label = organism) +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+  facet_grid(~measure~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0,0), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Log2-Fold Change")
+
+distribution_check_avg_raw_qn_log2fc_boxplot
+
+
+
+#Boxplot by organism, averaged, all timepoints --------
+distribution_check_avg_raw_qn_log2fc_boxplot_timepoints = human_mouse_fluad_raw_qn_log2fc_avg %>% 
+  # filter(timepoint %in% c(1)) %>% 
+  drop_na(avg_log2fc) %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure)) %>% 
+  ggplot() +
+  aes(y = avg_log2fc,
+      x = organism,
+      label = organism) +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+  facet_grid(~measure~~timepoint, scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0,0), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Log2-Fold Change")
+
+distribution_check_avg_raw_qn_log2fc_boxplot_timepoints
+```
+
+
+######By subject
+```{r fig.height=7, fig.width=18}
+
+#Log2FC, by subject ------
+distribution_check_subject_raw_qn_log2fc = human_mouse_fluad_raw_qn_log2fc %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure))  %>% 
+  droplevels()
+
+distribution_check_subject_raw_qn_log2fc_plot = distribution_check_subject_raw_qn_log2fc %>% 
+  filter(timepoint == 1) %>%
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+  
+  #Boxplot
+  geom_boxplot(aes(fill = organism), alpha = 1, width = 1, outliers = F) +
+
+  facet_grid(~measure~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+
+distribution_check_subject_raw_qn_log2fc_plot
+```
+
+
+Sanity check
+```{r}
+#Sanity check
+human_mouse_fluad_raw_qn_log2fc %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure))  %>% 
+  filter(organism == "Mouse") %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+  geom_boxplot(aes(fill = organism), outliers = F) +
+  facet_grid(~measure~timepoint, scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0.01, 0.01), limits = c(-1, 1))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+
+
+human_mouse_fluad_raw_qn_log2fc %>% 
+  mutate(measure = case_when(measure == "value_raw" ~ "Not normalized",
+                             measure == "value_qn" ~ "Quantile\nnormalized",
+                             T ~ measure))  %>% 
+  filter(organism == "Mouse") %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+  geom_boxplot(aes(fill = organism), outliers = F) +
+  facet_grid(~measure~timepoint, scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+```
+
+Combine boxplots
+```{r fig.height=10, fig.width=18}
+#Combine boxplots-------
+a = (distribution_check_subject_raw_qn_log2fc_plot + theme(strip.text.y = element_blank()))
+b = (distribution_check_avg_raw_qn_log2fc_boxplot + theme(axis.title.y = element_blank(), legend.position = "none"))
+c = (distribution_check_subject_raw_qn_plot + theme(strip.text.y = element_blank()))
+d = (distribution_check_avg_raw_qn_boxplot + theme(axis.title.y = element_blank(), legend.position = "none"))
+
+distribution_check_subject_raw_qn_log2fc_all = ((c | d) + plot_layout(widths = c(1, 0.1))) /
+((a | b) + plot_layout(widths = c(1, 0.1))) +
+  plot_layout(guides = "collect",
+              axes = "collect",
+              axis_titles = "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+#Save
+distribution_check_subject_raw_qn_log2fc_all %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_mouse_qc_distribution_subject_raw_qn_log2fc_all.png"),
+         width = 18,
+         height = 10)
+
+#Print
+distribution_check_subject_raw_qn_log2fc_all
+```
+
+
+```{r fig.height=5, fig.width=18}
+distribution_check_patch = ((distribution_check_avg_raw_qn_plot + theme(strip.text.y = element_blank())) | (distribution_check_raw_qn_log2fc_plot)) +
+  plot_layout(widths = c(1, 0.5),
+              guides = "collect", axis_titles = "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+distribution_check_patch %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_mouse_qc_distribution_expression_log2fc_densities_all.png"),
+         width = 18,
+         height = 5)
+  
+distribution_check_patch
+beep(sound = 1)
+```
+
+
+##### Plot volcano plot
+```{r fig.height=3, fig.width=16}
+#Volcano plot -------
+volcano_data <- human_mouse_fluad_raw_qn_log2fc_avg %>% 
+  mutate(logp = -log10(pval_adj),
+         sig = case_when(avg_log2fc > 0 & logp > 2 ~ "Up",
+                         avg_log2fc < 0 & logp > 2 ~ "Down",
+                         TRUE ~ "NS"),
+         measure = case_when(measure == "value_qn" ~ "QN",
+                             measure == "value_raw" ~ "Raw",
+                             T~measure))
+volcano_plot_raw_qn = volcano_data %>% 
+ggplot() +
+  aes(x = avg_log2fc, y = logp, fill = sig) +
+  facet_nested(~paste("Day", timepoint)+organism + measure, scales = "free_y",  space = "free_y", nest_line = element_line(linetype = 1, color = "black")) +
+  geom_point(aes(fill = sig,
+                 color = sig),
+             pch = 21, 
+             size = 1, 
+             alpha = 1) +
+  geom_vline(xintercept = 0, color = "black", linetype = 1, size = 0.5) +
+  geom_hline(yintercept = 2, color = "black", linetype = 2, size = 0.5) +
+  scale_x_continuous(limits = c(-1.5, 1.5)) +
+  scale_y_continuous(breaks = c(2, 10, 20, 30, 40, 50, 60),
+                     limits = c(0, 70),
+                     expand = c(0.01, 0.01)) +
+  guides(color = F) +
+  scale_color_manual(
+    values = c(
+      "Up" = "#165289", 
+      "Down" = "#45efc6",
+      "NS" = "gray80")) +
+  scale_fill_manual(
+    values = c(
+      "Up" = "#165289", 
+      "Down" = "#45efc6",
+      "NS" = "gray80")) +
+  labs(x = "Log2-Fold Change",
+       y = "-log(FDR)",
+       fill = "Direction") +
+  theme_vaxgo() +
+  theme(legend.position = "right",
+        legend.direction = "vertical",
+        legend.title = element_blank(),
+        legend.key = element_blank(),
+        strip.text = element_text(size = 10),
+        axis.text = element_text(size = 10),
+        axis.text.x = element_text(angle = 0)) 
+
+volcano_plot_raw_qn
+
+#Save
+volcano_plot_raw_qn %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_mouse_qc_volcano_plot_raw_qn.png"),
+         width = 16,
+         height = 3)
+beep()
+```
+
+##### PCA
+```{r fig.height=4, fig.width=8}
+#Import data
+human_mouse_fluad_raw_qn =
+  readRDS(file = here("tables", "influenza_fluad_human_mouse_qc_raw_qn.rds"))
+human_mouse_fluad_raw_qn_avg = 
+  readRDS(file = here("tables", "influenza_fluad_human_mouse_qc_raw_qn_avg.rds"))
+human_mouse_fluad_raw_qn_log2fc = 
+  readRDS(file = here("tables", "influenza_fluad_human_mouse_qc_raw_qn_log2fc.rds"))
+human_mouse_fluad_raw_qn_log2fc_avg =  
+  readRDS(file = here("tables", "influenza_fluad_human_mouse_qc_raw_qn_log2fc_avg.rds"))
+
+human_mouse_fluad_metadata = readRDS(file = here("tables", "influenza_fluad_human_mouse_metadata.rds.png"))
+
+#Import metadata
+annotation_samples_pca = human_mouse_fluad_raw_qn %>% 
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  select(participant_id, organism, timepoint, sample) %>% 
+  distinct()
+
+#Get DEGs in human
+human_degs =human_mouse_fluad_raw_qn_log2fc_avg %>% #169.800 rows
+  filter(pval_adj <= 0.05) %>%  #24.136 rows
+  pull(symbol) %>% 
+  unique()
+
+beep()
+```
+
+###### All: Raw
+```{r fig.height=4, fig.width=8}
+# PCA -------
+
+# PCA with raw values
+clean_matrix_raw = human_mouse_fluad_raw_qn %>%
+  filter(symbol %in% human_degs) %>% 
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  filter(measure == "value_raw") %>% 
+  select(sample, symbol, value) %>% 
+  pivot_wider(names_from = "sample",
+              values_from = "value") %>% 
+  column_to_rownames("symbol") %>% 
+  as.matrix()
+
+clean_matrix_raw[!is.finite(clean_matrix_raw)] <- 0
+
+pca_raw <- prcomp(t(clean_matrix_raw), scale. = TRUE)
+pca_raw_df <- as_tibble(pca_raw$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_raw$x)) %>%
+  left_join(annotation_samples_pca, by = "sample")
+
+# PCA with quantile normalized ----
+clean_matrix_qn = human_mouse_fluad_raw_qn %>% 
+  filter(symbol %in% human_degs) %>% 
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  filter(measure == "value_qn") %>% 
+  select(sample, symbol, value) %>% 
+  pivot_wider(names_from = "sample",
+              values_from = "value") %>% 
+  column_to_rownames("symbol") %>% 
+  as.matrix()
+
+clean_matrix_qn[!is.finite(clean_matrix_qn)] <- 0
+
+pca_qn <- prcomp(t(clean_matrix_qn), scale. = TRUE)
+pca_qn_df <- as_tibble(pca_qn$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_qn$x)) %>%
+  left_join(annotation_samples_pca, by = "sample")
+
+beep()
+```
+
+Plot PCAs of expression values
+```{r fig.height=6, fig.width=8}
+#Plots ------
+#With outliers
+pca_raw <- pca_raw_df %>% 
+  filter(organism == "Human") %>% 
+  mutate(participant_id = str_remove(participant_id, "CRC305DGENT")) %>%
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      fill = timepoint,
+      shape = organism,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+  # geom_point(size = 3, 
+  #            alpha = 1, 
+  #            pch = 24, 
+  #            color = "black",
+  #            
+  #            data = pca_raw_df %>% 
+  #              filter(organism == "Mouse")) +
+  theme_vaxgo() +
+  guides(fill = "none") +
+  scale_color_manual(values = c("0" = "black",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0" = "black",
+                               "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  labs(title = "Before normalization, Expression",
+       shape = "Organism",
+       color = "Timepoint") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  geom_label_repel(data = pca_raw_df %>% 
+                     mutate(participant_id = str_remove(participant_id, "CRC305DGENT")) %>%
+                     filter(participant_id %in% c("1483036",
+                                                  "0351013",
+                                                  "1471032")),
+                   segment.color = "black",
+                   color = "black",
+             force_pull = 5,
+             fill = "white",
+             size = 2,
+             nudge_x = 2, 
+             min.segment.length = 0, 
+             hjust = "center")
+pca_raw 
+
+#Without outliers
+pca_raw_no_outliers <- pca_raw_df %>% 
+  filter(organism == "Human") %>% 
+  filter(!participant_id %in% c("CRC305DGENT1483036",
+                                "CRC305DGENT0351013",
+                                "CRC305DGENT1471032")) %>% 
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      shape = organism,
+      fill = timepoint,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+  # geom_point(size = 3, 
+  #            alpha = 1, 
+  #            pch = 24, 
+  #            color = "black",
+  #            
+  #            data = pca_raw_df %>% 
+  #              filter(!participant_id %in% c("CRC305DGENT1483036",
+  #                                            "CRC305DGENT0351013",
+  #                                            "CRC305DGENT1471032")) %>% 
+  #              filter(organism == "Mouse")) +
+  guides(fill = "none") +
+  theme_vaxgo() +
+  scale_color_manual(values = c("0" = "black",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0" = "black",
+                               "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  labs(title = "Before normalization, Expression, no outliers",
+       shape = "Organism",
+       color = "Timepoint") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) 
+pca_raw_no_outliers 
+
+
+#Quantile normalized
+#With outliers
+pca_qn <- pca_qn_df %>% 
+  filter(organism == "Human") %>% 
+  mutate(participant_id = str_remove(participant_id, "CRC305DGENT")) %>%
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      shape = organism,
+      fill = timepoint,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+  # geom_point(size = 3, 
+  #            alpha = 1, 
+  #            pch = 24, 
+  #            color = "black",
+  #            data = pca_qn_df %>% 
+  #              filter(organism == "Mouse")) +
+  theme_vaxgo() + 
+  scale_color_manual(values = c("0" = "black",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0" = "black",
+                               "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  guides(fill = "none") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  labs(title = "After quantile normalization, Expression",
+       shape = "Organism",
+       color = "Timepoint")  +
+  geom_label_repel(data = pca_qn_df %>%
+                     mutate(participant_id = str_remove(participant_id, "CRC305DGENT")) %>%
+                     filter(participant_id %in% c("1483036",
+                                                  "0351013",
+                                                  "1471032")), 
+                   segment.color = "black",
+                   color = "black",
+             fill = "white",
+             size = 2,
+             min.segment.length = 0,
+             hjust = "center"
+             )
+
+pca_qn
+
+#Without outliers
+pca_qn_no_outliers <- pca_qn_df %>% 
+  filter(organism == "Human") %>% 
+  filter(!participant_id %in% c("CRC305DGENT1483036", 
+                                                  "CRC305DGENT0351013",
+                                                  "CRC305DGENT1471032")) %>% 
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      shape = organism,
+      fill = timepoint,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+    # geom_point(size = 3, 
+    #          alpha = 1, 
+    #          pch = 24, 
+    #          color = "black",
+    #          
+    #          data = pca_qn_df %>% 
+    #            filter(!participant_id %in% c("CRC305DGENT1483036", 
+    #                                               "CRC305DGENT0351013",
+    #                                               "CRC305DGENT1471032")) %>% 
+    #            filter(organism == "Mouse")) +
+  theme_vaxgo() +
+  guides(fill = "none") +
+  scale_color_manual(values = c("0" = "black",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0" = "black",
+                               "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  labs(title = "After quantile normalization, Expression, no outliers",
+       shape = "Organism",
+       color = "Timepoint") 
+
+pca_qn_no_outliers
+
+#Combine plots
+pca_raw_qn_patch = (pca_raw | pca_qn) / (pca_raw_no_outliers | pca_qn_no_outliers) +
+  plot_layout(guides = "collect")
+
+#Save
+pca_raw_qn_patch %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_mouse_qc_pca_raw_qn_expression.png"),
+         width = 8,
+         height = 6)
+#Print
+pca_raw_qn_patch
+beep()
+```
+
+
+
+###### All: Log2FC values
+```{r fig.height=4, fig.width=8}
+# PCA with raw values
+clean_matrix_raw = human_mouse_fluad_raw_qn_log2fc %>% 
+  filter(timepoint %in% c(1, 3, 7)) %>% 
+  filter(symbol %in% human_degs) %>% #Filter only DEGs in human
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  filter(measure == "value_raw") %>% 
+  select(sample, symbol, log2fc) %>% 
+  pivot_wider(names_from = "sample",
+              values_from = "log2fc") %>% 
+  column_to_rownames("symbol") %>% 
+  as.matrix()
+
+clean_matrix_raw[!is.finite(clean_matrix_raw)] <- 0
+
+pca_raw <- prcomp(t(clean_matrix_raw), scale. = TRUE)
+pca_raw_df <- as_tibble(pca_raw$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_raw$x)) %>%
+  left_join(annotation_samples_pca, by = "sample")
+
+# PCA with quantile normalized ----
+clean_matrix_qn = human_mouse_fluad_raw_qn_log2fc %>% 
+  filter(timepoint %in% c(1, 3, 7)) %>% 
+  filter(symbol %in% human_degs) %>%  #Filter only DEGs in human
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  filter(measure == "value_qn") %>% 
+  select(sample, symbol, log2fc) %>% 
+  pivot_wider(names_from = "sample",
+              values_from = "log2fc") %>% 
+  column_to_rownames("symbol") %>% 
+  as.matrix()
+
+clean_matrix_qn[!is.finite(clean_matrix_qn)] <- 0
+
+pca_qn <- prcomp(t(clean_matrix_qn), scale. = TRUE)
+pca_qn_df <- as_tibble(pca_qn$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_qn$x)) %>%
+  left_join(annotation_samples_pca, by = "sample")
+
+beep()
+```
+
+Plot PCAs of L2FC values
+```{r fig.height=6, fig.width=8}
+#Plots ------
+#With outliers
+pca_raw <- pca_raw_df %>% 
+  filter(timepoint %in% c(1, 3, 7)) %>% 
+  mutate(participant_id = str_remove(participant_id, "CRC305DGENT")) %>%
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      fill = timepoint,
+      shape = organism,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_point(size = 3, 
+             alpha = 1, 
+             pch = 24, 
+             color = "black",
+             
+             data = pca_raw_df %>% 
+               filter(organism == "Mouse")) +
+  theme_vaxgo() +
+  guides(fill = "none") +
+  scale_color_manual(values = c("1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  labs(title = "Before normalization, L2FC",
+       shape = "Organism",
+       color = "Timepoint") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  geom_label_repel(data = pca_raw_df %>% 
+                     mutate(participant_id = str_remove(participant_id, "CRC305DGENT")) %>%
+                     filter(participant_id %in% c("1483036",
+                                                  "0351013",
+                                                  "1471032")),
+                   segment.color = "black",
+                   color = "black",
+             force_pull = 5,
+             fill = NA, 
+             size = 2,
+             nudge_x = 2, 
+             min.segment.length = 0, 
+             hjust = "center")
+pca_raw 
+
+#Without outliers
+pca_raw_no_outliers <- pca_raw_df %>% 
+  filter(timepoint %in% c(1, 3, 7)) %>% 
+  filter(!participant_id %in% c("CRC305DGENT1483036",
+                                "CRC305DGENT0351013",
+                                "CRC305DGENT1471032")) %>% 
+  inner_join(human_mouse_fluad_metadata %>% 
+               select(participant_id, sex, age),
+             by = "participant_id") %>% 
+  # filter(sex == "Female") %>% 
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      shape = organism,
+      fill = timepoint,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_point(size = 3, 
+             alpha = 1, 
+             pch = 24, 
+             color = "black",
+             
+             data = pca_raw_df %>% 
+               filter(!participant_id %in% c("CRC305DGENT1483036",
+                                             "CRC305DGENT0351013",
+                                             "CRC305DGENT1471032")) %>% 
+               filter(organism == "Mouse")) +
+  guides(fill = "none") +
+  theme_vaxgo() +
+  scale_color_manual(values = c("0.2" = "black",
+                                "0.3" = "gray40",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0.2" = "black",
+                                "0.3" = "gray40",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  labs(title = "Before normalization, L2FC, no outliers",
+       shape = "Organism",
+       color = "Timepoint") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) 
+pca_raw_no_outliers
+
+#Quantile normalized
+#With outliers
+pca_qn <- pca_qn_df %>% 
+  filter(timepoint %in% c(1, 3, 7)) %>% 
+  mutate(participant_id = str_remove(participant_id, "CRC305DGENT")) %>%
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      shape = organism,
+      fill = timepoint,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_point(size = 3, 
+             alpha = 1, 
+             pch = 24, 
+             color = "black",
+             data = pca_qn_df %>% 
+               filter(organism == "Mouse")) +
+  theme_vaxgo() + 
+  scale_color_manual(values = c("0.2" = "black",
+                                "0.3" = "gray40",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0.2" = "black",
+                                "0.3" = "gray40",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  guides(fill = "none") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  labs(title = "After quantile normalization, L2FC",
+       shape = "Organism",
+       color = "Timepoint")  +
+  geom_label_repel(data = pca_qn_df %>%
+                     mutate(participant_id = str_remove(participant_id, "CRC305DGENT")) %>%
+                     filter(participant_id %in% c("1483036",
+                                                  "0351013",
+                                                  "1471032")), 
+                   segment.color = "black",
+                   color = "black",
+             fill = NA,
+             size = 2,
+             min.segment.length = 0,
+             hjust = "center"
+             )
+
+pca_qn
+
+#Without outliers
+pca_qn_no_outliers <- pca_qn_df %>% 
+  filter(timepoint %in% c(1, 3, 7)) %>% 
+  filter(!participant_id %in% c("CRC305DGENT1483036", 
+                                                  "CRC305DGENT0351013",
+                                                  "CRC305DGENT1471032")) %>% 
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      shape = organism,
+      fill = timepoint,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+    geom_point(size = 3, 
+             alpha = 1, 
+             pch = 24, 
+             color = "black",
+             
+             data = pca_qn_df %>% 
+               filter(!participant_id %in% c("CRC305DGENT1483036", 
+                                                  "CRC305DGENT0351013",
+                                                  "CRC305DGENT1471032")) %>% 
+               filter(organism == "Mouse")) +
+  theme_vaxgo() +
+  guides(fill = "none") +
+  scale_color_manual(values = c("0.2" = "black",
+                                "0.3" = "gray40",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0.2" = "black",
+                                "0.3" = "gray40",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  labs(title = "After quantile normalization, L2FC, no outliers",
+       shape = "Organism",
+       color = "Timepoint") 
+
+pca_qn_no_outliers
+
+#Combine plots
+pca_raw_qn_patch = (pca_raw | pca_qn) / (pca_raw_no_outliers | pca_qn_no_outliers) +
+  plot_layout(guides = "collect")
+
+#Save
+pca_raw_qn_patch %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_mouse_qc_pca_raw_qn_log2fc.png"),
+         width = 8,
+         height = 6)
+#Print
+pca_raw_qn_patch
+beep()
+```
+
+
+
+###### Zoom on mice data. Are the mice resembling the same pattern in PCA?
+Identify the subjects = Shape by participant ID
+```{r fig.height=3, fig.width=4}
+#Zoom on mice data
+
+pca_raw_mouse_zoom_data = pca_raw_df %>% 
+  filter(organism == "Mouse") %>% 
+  filter(timepoint %in% c(1, 3, 7)) %>% 
+  mutate(participant_id = str_remove(participant_id, "TriFLU-MF59_BL_") %>% 
+           paste0("Mouse_",.))
+
+
+pca_raw_mouse_zoom =  pca_raw_mouse_zoom_data%>% 
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      label = participant_id) +
+  
+  
+  geom_point(aes(shape = participant_id,
+                 fill = timepoint,
+                 color = timepoint),
+             size = 3, 
+             alpha = 0.5,
+             # color = "black"
+             ) +
+  geom_point(aes(shape = participant_id,
+                 fill = timepoint,
+                 color = timepoint),
+             size = 3, 
+             alpha = 1,
+             # color = "black",
+             data = pca_raw_mouse_zoom_data %>%
+               filter(participant_id %in% c("Mouse_4", "Mouse_5"))) +
+
+  theme_vaxgo() +
+  guides(fill = "none") +
+  scale_shape_manual(values = c(21:25)) +
+  scale_color_manual(values = c("1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  labs(title = "No QN, L2FC, Mice only, Zoom, PCs from human PCA",
+       shape = "Subject",
+       color = "Timepoint",
+       fill = "Day") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank())
+pca_raw_mouse_zoom
+```
+
+
+###### Where are the outliers in the boxplot?
+
+```{r fig.height=8, fig.width=12}
+#Where are the outliers in the boxplot?
+
+## Log2FC
+outliers_l2fc_qn = distribution_check_subject_raw_qn_log2fc %>% 
+  mutate(timepoint = as.numeric(timepoint),
+         participant_id = str_remove(participant_id, "CRC305DGENT")) %>% 
+    droplevels() %>% 
+    filter(measure == "Quantile\nnormalized",
+           organism == "Human") %>%
+    ggplot() +
+    aes(y = log2fc,
+        x = participant_id,
+        label = participant_id) +
+    
+    #Boxplot
+  
+  
+    geom_boxplot(aes(fill = organism),
+               alpha = 0.2, width = 1) +
+    geom_boxplot(fill = "red", outlier.colour = "red",
+                 alpha = 1, width = 1,
+                 data = distribution_check_subject_raw_qn_log2fc %>% 
+                   mutate(participant_id = str_remove(participant_id, "CRC305DGENT")) %>% 
+                   filter(participant_id %in% c("1483036",
+                               "0351013",
+                               "1471032"))) +
+    
+    facet_grid(vars(timepoint),
+               scales = "free_x",
+               space = "free", drop = TRUE) +
+    scale_fill_manual(values = c(
+        "Human"  = "#90A4AEFF",
+        "Mouse" = "#4DBBD5FF"
+    )) +
+    scale_color_manual(values = c(
+        "Human"  = "#90A4AEFF",
+        "Mouse" = "#4DBBD5FF"
+    )) +
+    guides(color=guide_legend(nrow=1,byrow=TRUE)) +
+    theme_vaxgo() +
+    theme(legend.position = "top",
+          legend.key = element_blank(),
+          axis.text.x = element_text(angle = 90, size = 8, hjust = 1, vjust = 0.5),
+          strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+          strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+          panel.spacing.y = unit(0.8, "lines"),
+          strip.background.x = element_rect(fill = "black"),
+    ) +
+    labs(fill = "",
+         color = "",
+         x = "Participant",
+         y = "Log2FC")
+
+outliers_l2fc_qn
+
+beep()
+
+
+
+#RAW
+outliers_raw_qn = distribution_check_subject_raw_qn %>% 
+  mutate(timepoint = as.numeric(timepoint),
+         participant_id = str_remove(participant_id, "CRC305DGENT")) %>% 
+    droplevels() %>% 
+    filter(measure == "Quantile\nnormalized",
+           organism == "Human") %>%
+    ggplot() +
+    aes(y = value,
+        x = participant_id,
+        label = participant_id) +
+    
+    #Boxplot
+    geom_boxplot(aes(fill = organism),
+               alpha = 0.2, width = 1) +
+    geom_boxplot(fill = "red", outlier.colour = "red",
+                 alpha = 1, width = 1,
+                 data = distribution_check_subject_raw_qn %>% 
+                   mutate(participant_id = str_remove(participant_id, "CRC305DGENT")) %>% 
+                   filter(participant_id %in% c("1483036",
+                               "0351013",
+                               "1471032"))) +
+    
+    facet_grid(vars(timepoint),
+               scales = "free_x",
+               space = "free", drop = TRUE) +
+    scale_fill_manual(values = c(
+        "Human"  = "#90A4AEFF",
+        "Mouse" = "#4DBBD5FF"
+    )) +
+    scale_color_manual(values = c(
+        "Human"  = "#90A4AEFF",
+        "Mouse" = "#4DBBD5FF"
+    )) +
+    guides(color=guide_legend(nrow=1,byrow=TRUE)) +
+    theme_vaxgo() +
+    theme(legend.position = "top",
+          legend.key = element_blank(),
+          axis.text.x = element_text(angle = 90, size = 8, hjust = 1, vjust = 0.5),
+          strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+          strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+          panel.spacing.y = unit(0.8, "lines"),
+          strip.background.x = element_rect(fill = "black"),
+    ) +
+    labs(fill = "",
+         color = "",
+         x = "Participant",
+         y = "Normalized Expression")
+
+outliers_raw_qn
+
+beep()
+```
+
+
+###### By organism: Log2FC values
+```{r fig.height=4, fig.width=8}
+# PCA -------
+
+#Mouse only --------
+annotation_samples_mouse_pca = human_mouse_fluad_raw_qn_log2fc %>% 
+  filter(organism == "Mouse") %>% 
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  select(participant_id, organism, timepoint, sample) %>% 
+  distinct()
+
+# PCA with quantile normalized ----
+clean_matrix_raw = human_mouse_fluad_raw_qn_log2fc %>% 
+  filter(organism == "Mouse") %>% 
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  filter(measure == "value_raw") %>% 
+  select(sample, symbol, log2fc) %>% 
+  pivot_wider(names_from = "sample",
+              values_from = "log2fc") %>% 
+  column_to_rownames("symbol") %>% 
+  as.matrix()
+
+clean_matrix_raw[!is.finite(clean_matrix_raw)] <- 0
+
+pca_raw_mouse <- prcomp(t(clean_matrix_raw), scale. = TRUE)
+pca_raw_mouse_df <- as_tibble(pca_raw_mouse$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_raw_mouse$x)) %>%
+  inner_join(annotation_samples_mouse_pca, by = "sample")
+
+
+
+#Mouse with DEGs in human-------
+annotation_samples_mouse_pca = human_mouse_fluad_raw_qn_log2fc %>% 
+  filter(organism == "Mouse") %>% 
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  select(participant_id, organism, timepoint, sample) %>% 
+  distinct()
+
+#Get DEGs from human
+pairwise_human_fit_measures = readRDS(here("tables", "influenza_fluad_human_mouse_fit_dge_pairwise2human.rds"))
+human_degs_vector = pairwise_human_fit_measures %>% 
+  filter(pval_adj_human <= 0.05) %>% 
+  select(symbol) %>% 
+  distinct() %>% 
+  pull(symbol)
+
+#Use only DEGs in human
+clean_matrix_raw_mouse_human_degs = human_mouse_fluad_raw_qn_log2fc %>% 
+  filter(organism == "Mouse",
+         symbol %in% c(human_degs_vector),
+         measure == "value_raw") %>% 
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  select(sample, symbol, log2fc) %>% 
+  pivot_wider(names_from = "sample",
+              values_from = "log2fc") %>% 
+  column_to_rownames("symbol") %>% 
+  as.matrix()
+
+#Fill NAs with 0
+clean_matrix_raw_mouse_human_degs[!is.finite(clean_matrix_raw_mouse_human_degs)] <- 0
+
+#Normalize data
+pca_raw_mouse_human_degs <- prcomp(t(clean_matrix_raw_mouse_human_degs), scale. = TRUE)
+pca_raw_mouse_human_degs_df <- as_tibble(pca_raw_mouse_human_degs$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_raw_mouse_human_degs$x)) %>%
+  inner_join(annotation_samples_mouse_pca, by = "sample")
+```
+
+Plots
+```{r fig.height=4, fig.width=8}
+#Plots ------
+
+### Mouse
+pca_raw_mouse <- pca_raw_mouse_df %>% 
+  mutate(participant_id = str_remove(participant_id, "TriFLU-MF59_")) %>%
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      shape = organism,
+      fill = timepoint,
+      label = participant_id) +
+  geom_point(size = 3, 
+             alpha = 1, 
+             pch = 24, 
+             color = "black") +
+  theme_vaxgo() + 
+  scale_color_manual(values = c("0.2" = "black",
+                                "0.3" = "gray40",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0.2" = "black",
+                                "0.3" = "gray40",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  guides(fill = "none") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  labs(title = "No QN, L2FC",
+       shape = "Organism",
+       color = "Timepoint") 
+
+pca_raw_mouse
+
+#Save
+pca_raw_mouse %>%
+  ggsave(filename = here("Figures", "pca_raw_log2fc_MOUSE.png"),
+         width = 5,
+         height =4)
+#Print
+pca_raw_mouse
+beep()
+```
+
+
+```{r fig.height=4, fig.width=5}
+### Mouse with human DEGs
+pca_raw_mouse_human_degs <- pca_raw_mouse_human_degs_df %>% 
+  mutate(participant_id = str_remove(participant_id, "TriFLU-MF59_")) %>%
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      shape = organism,
+      fill = timepoint,
+      label = participant_id) +
+  geom_point(size = 3, 
+             alpha = 1, 
+             pch = 24, 
+             color = "black") +
+  theme_vaxgo() + 
+  scale_color_manual(values = c("0.2" = "black",
+                                "0.3" = "gray40",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  scale_fill_manual(values = c("0.2" = "black",
+                                "0.3" = "gray40",
+                                "1" = "#caf0f8",
+                                "3" = "#219ebc",
+                                "7" = "#669bbc")) +
+  # guides(fill = "none") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  labs(title = "With human DEGs, L2FC",
+       shape = "Organism",
+       color = "Timepoint") 
+
+pca_raw_mouse_human_degs
+
+#Save
+pca_raw_mouse_human_degs %>%
+  ggsave(filename = here("Figures", "pca_raw_mouse_human_degs.png"),
+         width = 5,
+         height =4)
+#Print
+pca_raw_mouse_human_degs
+beep()
+
+
+```
+
+
+```{r fig.height=6, fig.width = 4}
+patch_human_mouse_separated = pca_raw_mouse / pca_raw_mouse_human_degs +
+  plot_layout(guides = "collect")
+
+patch_human_mouse_separated %>%
+  ggsave(filename = here("Figures", "influenza_fluad_human_mouse_qc_pca_raw_qn_log2fc_HumanOnly_MouseOnly.png"),
+         width = 5,
+         height =6)
+patch_human_mouse_separated
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ## FIT
 Ref: Normand, R., Du, W., Briller, M. et al. Found In Translation: a machine learning model for mouse-to-human inference. Nat Methods 15, 1067–1073 (2018). https://doi.org/10.1038/s41592-018-0214-9
 Github: https://github.com/shenorrLabTRDF/FIT.mouse2man 

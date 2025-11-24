@@ -12,7 +12,7 @@ library(here)
 source(here("scripts_notebooks", "required.R"))
 ```
 
-#Data curation 
+# 1. Data curation 
 
 ## BioProject
 
@@ -991,3 +991,212 @@ mice_vaccination_annotated %>%
 #Print
 mice_vaccination_annotated
 ```
+
+
+
+
+# 2. Demographics
+## Fluad and Engerix B
+
+```{r}
+#Import datasets
+GSE124689_expression_not_normalized_log2_raw_symbol = read_rds(file = here("tables", "influenza_GSE124689_exprs_not_normalized.rds"))
+GSE124689_metadata_clean = readRDS(file = here("tables", "influenza_fluad_human_metadata_clean.rds"))
+GSE120661_counts_not_normalized_log2_annotations = read_rds(here("tables", "GSE120661_counts_not_normalized_log2_annotations_not_normalized_log2.rds"))
+GSE120661_samples_pbmc = read_rds(here("tables", "GSE120661_samples_pbmc.rds"))
+
+#Bind mouse metadata to human data
+human_mouse_fluad_metadata = GSE120661_samples_pbmc %>% 
+  filter(treatment == "Fluad") %>% 
+  select(sample_id = geo_sample, 
+         participant_id = subject_id, 
+         vaccine = treatment,
+         sex,
+         strain,
+         sample_type = tissue,
+         timepoint,
+         condition) %>% 
+  mutate(organism = "Mouse",
+         type = "Inactivated",
+         adjuvant = "MF59",
+         age = 7, #6–8 weeks
+         timepoint = as.character(timepoint) %>% as.numeric(.) / 24,
+         timepoint = if_else(timepoint < 1 & timepoint != 0,
+                             as.character(round(timepoint, 1)),
+                             as.character(as.integer(round(timepoint, 0)))),
+         race = strain, 
+         array = "Agilent-028005 SurePrint G3 Mouse GE 8x60K Microarray") %>% 
+  
+  #Bind human data
+  bind_rows(GSE124689_metadata_clean %>% 
+               select(sample_id,
+                      participant_id,
+                      condition, timepoint,
+                      sex, age, race, vaccine, 
+                      sample_type, array, 
+                      type, adjuvant) %>% 
+              mutate(organism = "Human",
+                     vaccine = "Fluad",
+                     timepoint = as.character(timepoint)))
+
+human_mouse_fluad_metadata
+
+human_mouse_fluad_metadata %>% 
+  saveRDS(file = here("tables", "influenza_fluad_human_mouse_metadata.rds"))
+```
+
+##### By organism
+```{r fig.height=5, fig.width=5}
+#Visualize samples ------
+demography_samples = human_mouse_fluad_metadata %>% 
+  group_by(organism, timepoint, race) %>% 
+  summarize(n = n()) %>% 
+  mutate(timepoint = as.character(timepoint)) 
+
+demography_samples_plot = demography_samples %>% 
+  ggplot() +
+  aes(x = timepoint, 
+      y = organism) +
+  geom_point(aes(size = n,
+                 fill = organism),
+             pch = 22) +
+  scale_size_binned(breaks = c(1, 10, 50),
+                    range = c(2, 10)) +
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF",
+    "FIT"   = "#4361ee"
+  )) +
+    scale_color_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF",
+    "FIT"   = "#4361ee"
+  )) +
+  theme_vaxgo() +
+  theme(legend.position = "right",
+        axis.title.x = element_text(size = 10),
+        legend.title = element_text(size = 10),
+        axis.text.x = element_text(angle = 0),
+    panel.grid.major.y = element_line(size = 1,
+                                    linetype = 1,
+                                    color = "black"),
+    panel.grid.major.x = element_line(size = 0.5,
+                                    linetype = 2,
+                                    color = "gray75"),
+    axis.line.x = element_line(size = 0.5,
+                               colour = "black",
+                               linetype = 1),
+    axis.line.y = element_line(size = 0,
+                               colour = "black",
+                               linetype = 1),
+    axis.ticks.x = element_line(size = 1, color = "black"),
+    axis.ticks.y = element_line(size = 0, color = "black"),
+    plot.margin = margin(0, 0, 0, 0, unit = "cm")) +
+  labs(x = "Days",
+       y = "",
+       size = "Samples",
+       fill = "Organism")  +
+  geom_label(aes(label = n),
+             fill = "white",
+             label.size = NA,
+            size = 3,
+            nudge_x = 0,
+            nudge_y = 0.1,
+            data = demography_samples %>% 
+              filter(organism == "Human")) +
+  geom_label(aes(label = n),
+             fill = "white",
+             label.size = NA,
+            size = 3,
+            nudge_x = 0,
+            nudge_y = 0.1,
+            data = demography_samples %>% 
+              filter(organism == "Mouse")) +
+  theme(legend.position = "none")
+
+#Print
+demography_samples_plot
+
+#Save
+demography_samples_plot %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_mouse_demography.png"),
+         width = 5,
+         height = 5)
+
+```
+
+
+
+### By sex
+```{r fig.height=5, fig.width=2}
+#Visualize samples by sex ------
+demography_samples_sex = human_mouse_fluad_metadata %>% 
+  select(participant_id, sex, organism) %>% 
+  distinct() %>% 
+  group_by(organism, sex) %>%
+  summarize(n = n())
+
+demography_samples_sex %>% 
+ggplot() +
+  aes(
+    x = organism,
+    y = n,
+    fill = sex,
+    weight = n,
+    label = n
+  ) +
+  geom_col(color = "black") +
+  coord_polar(theta = "y") +
+  theme_void() +
+  labs(fill = "Sex") +
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        plot.title = element_text(size = 15, hjust = 0.5),
+        strip.text = element_text(size = 12),
+        legend.text = element_text(size = 10),
+        legend.title = element_text(size = 10),
+        plot.margin = margin(1, 0, 0, 0,unit = "cm"),
+        legend.position = "top") +
+  facet_wrap(vars(fct_rev(organism)), scales = "free", ncol = 1) +
+  scale_fill_manual(values = c("Male" = "#4DBBD5FF",
+          "Female" = "#4361ee"))
+```
+
+By age
+```{r fig.height=5, fig.width=2}
+#Visualize samples by age ------
+demography_samples_age = human_mouse_fluad_metadata %>% 
+  select(participant_id, age, organism) %>% 
+  distinct() %>% 
+  filter(organism == "Human")
+
+demography_samples_age %>% 
+  ggplot() +
+  aes(x = organism,
+      y = age) +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+  geom_quasirandom(color = "black", 
+              fill = NA, 
+              position = position_dodge2(width = 0.2),
+              pch = 21,
+              alpha = 0.5) +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 50))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "none",
+        legend.key = element_blank(),
+        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        )  +
+  labs(y = "Age",
+       x = "Human")
+```
+
+
