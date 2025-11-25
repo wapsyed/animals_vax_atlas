@@ -32,16 +32,16 @@ lapply(bioc_pkgs, library, character.only = TRUE)
 #   install.packages(cran_missing)
 # }
 # 
-# # # Install packages from Bioconductor
-# # # Install BiocManager if necessary
-# # if (!requireNamespace("BiocManager", quietly = TRUE)) {
-# #   install.packages("BiocManager")
-# # }
-# # 
-# # bioc_missing <- setdiff(bioc_pkgs, rownames(installed.packages()))
-# # if (length(bioc_missing) > 0) {
-# #   BiocManager::install(bioc_missing)
-# # }
+# # Install packages from Bioconductor
+# # Install BiocManager if necessary
+# if (!requireNamespace("BiocManager", quietly = TRUE)) {
+#   install.packages("BiocManager")
+# }
+# 
+# bioc_missing <- setdiff(bioc_pkgs, rownames(installed.packages()))
+# if (length(bioc_missing) > 0) {
+#   BiocManager::install(bioc_missing)
+# }
 # 
 # # Load packages (CRAN + Bioconductor)
 # invisible(lapply(c(required_packages, bioc_pkgs), function(pkg) {
