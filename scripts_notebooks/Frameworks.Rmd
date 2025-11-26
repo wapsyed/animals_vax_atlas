@@ -1441,7 +1441,8 @@ degs_human_mouse_overlap_common_plot %>%
 
 
 # 3. Correlation analysis
-## Genes correlation, intra- and inter-species
+
+## Genes correlation, intra- and inter-species, samples
 
 #### Genes
 
@@ -1464,7 +1465,7 @@ human_mouse_saureus_log2fc_samples$organism %>% unique()
 ```
 
 
-
+##### 1 vs 1
 ```{r}
 # #Input
 filename = "saureus_infection_human_mouse"
@@ -1495,11 +1496,6 @@ human_mouse_log2fc_samples = human_mouse_saureus_log2fc_samples
 #   filter(human_symbol %in% c(human_degs$human_symbol)  %>%
 #   filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
 ```
-
-
-
-#### log2fc for every sample
-
 
 ```{r fig.height=3, fig.width=3}
 # --- 1) Mouse vs Human no mesmo timepoint ---
@@ -1711,143 +1707,129 @@ correlation_long_all_mouse_human_timepoints_summary_plot
 ```
 
 
-## Bootstrap
 
-```{r}
+#### 5 to 5 bootstrap
+```{r message=FALSE, warning=FALSE}
 # This script performs cross-species correlation (Human vs. Mouse)
-# using the bootstrap method (1000 iterations), sampling 5 female participants
-# from each organism in each iteration, as requested.
-
+# using the bootstrap method (1000 iterations), sampling 5 participants
+# from each organism in each iteration.
 
 # --- 1. BOOTSTRAP CONFIGURATION ---
-N_BOOTSTRAPS = 1000   # Number of bootstrap iterations
-SAMPLE_SIZE = 5       # 5 humans vs 5 mice in each iteration
-TIMEPOINTS = c(1, 3, 7)
+timepoints_mouse = unique(human_mouse_log2fc_samples %>% filter(organism == "Mouse")  %>% pull(timepoint)) %>% as.numeric()
+timepoints_human = unique(human_mouse_log2fc_samples %>% filter(organism == "Human")  %>% pull(timepoint)) %>% as.numeric()
 
-# --- 2. DATA PREPARATION AND FILTERING (Female vs. Female) ---
-
-#Get DEGs from either organisms
-
-
+# --- 2. DATA PREPARATION AND FILTERING ---
 # Filters raw log2fc data only for the relevant timepoints
-# and joins metadata to filter only 'Female' participants.
-data_filtered <- results_log2fc %>%
-  filter(timepoint %in% TIMEPOINTS) %>%
-  inner_join(human_or_mouse_degs, 
-             by = join_by("symbol", "timepoint")) %>% 
-  inner_join(results_metadata %>%
-               select(participant_id), # Need to keep 'organism' for filtering in the next steps
-             by = "participant_id")
+data_filtered <- human_mouse_log2fc_samples %>%
+  filter(timepoint %in% c(timepoints_mouse, timepoints_human)) 
 
-human_data <- data_filtered %>% filter(organism == "Human")
 mouse_data <- data_filtered %>% filter(organism == "Mouse")
+human_data <- data_filtered %>% filter(organism == "Human")
 
 # --- 3. FUNCTION FOR A SINGLE BOOTSTRAP ITERATION ---
 
 # This function performs a single bootstrap iteration for a timepoint.
 # 1. Samples 5 Human and 5 Mouse IDs (with replacement).
 # 2. Filters data for sampled IDs and common symbols (genes).
-# 3. Calculates the cross-correlation matrix (5x5).
-# 4. Returns all 25 correlation values.
-get_bootstrap_cors <- function(timepoint_val, all_human_data, all_mouse_data, n_sample) {
+# 3. Calculates the cross-correlation matrix (5x5)
 
-  # Filters data for the timepoint and identifies common symbols (genes)
-  h_tp_data <- all_human_data %>% filter(timepoint == timepoint_val)
-  m_tp_data <- all_mouse_data %>% filter(timepoint == timepoint_val)
-  common_symbols <- intersect(h_tp_data$symbol, m_tp_data$symbol)
+get_bootstrap_cors <- function(timepoint_mouse, timepoint_human, all_human_data, all_mouse_data, n_sample) {
 
-  # If there is no data or common symbols, returns an empty tibble
-  if (length(unique(h_tp_data$participant_id)) < n_sample || 
+  h_tp_data <- all_human_data %>% filter(timepoint == timepoint_human)
+  m_tp_data <- all_mouse_data %>% filter(timepoint == timepoint_mouse)
+
+  common_symbols <- intersect(h_tp_data$human_symbol, m_tp_data$human_symbol)
+
+  if (length(unique(h_tp_data$participant_id)) < n_sample ||
       length(unique(m_tp_data$participant_id)) < n_sample ||
       length(common_symbols) == 0) {
-    message(paste("Insufficient data for Timepoint:", timepoint_val))
-    return(tibble(timepoint = timepoint_val, correlation = NA_real_))
+
+    message(paste("No sufficient data for mouse timepoint:", timepoint_mouse))
+
+    return(tibble(
+      timepoint_human = timepoint_human,
+      timepoint_mouse = timepoint_mouse,
+      correlation = NA_real_
+    ))
   }
 
-  # Samples N participant IDs (with replacement - bootstrap)
-  sampled_human_pids <- sample(unique(h_tp_data$participant_id), n_sample, replace = TRUE)
-  sampled_mouse_pids <- sample(unique(m_tp_data$participant_id), n_sample, replace = TRUE)
+  sampled_human <- sample(unique(h_tp_data$participant_id), n_sample, replace = TRUE)
+  sampled_mouse <- sample(unique(m_tp_data$participant_id), n_sample, replace = TRUE)
 
-  # Prepares Human matrix (rows=symbols, columns=participants)
   h_matrix <- h_tp_data %>%
-    filter(participant_id %in% sampled_human_pids, symbol %in% common_symbols) %>%
-    # FIX: Ensure uniqueness of symbol/participant_id before pivoting to prevent 'duplicate row names' error
-    distinct(symbol, participant_id, log2fc) %>%
+    filter(participant_id %in% sampled_human, human_symbol %in% common_symbols) %>%
+    distinct(human_symbol, participant_id, log2fc) %>%
     pivot_wider(names_from = participant_id, values_from = log2fc) %>%
-    column_to_rownames("symbol")
+    column_to_rownames("human_symbol")
 
-  # Prepares Mouse matrix (rows=symbols, columns=participants)
   m_matrix <- m_tp_data %>%
-    filter(participant_id %in% sampled_mouse_pids, symbol %in% common_symbols) %>%
-    # FIX: Ensure uniqueness of symbol/participant_id before pivoting to prevent 'duplicate row names' error
-    distinct(symbol, participant_id, log2fc) %>%
+    filter(participant_id %in% sampled_mouse, human_symbol %in% common_symbols) %>%
+    distinct(human_symbol, participant_id, log2fc) %>%
     pivot_wider(names_from = participant_id, values_from = log2fc) %>%
-    column_to_rownames("symbol")
+    column_to_rownames("human_symbol")
 
-  # Ensures columns have unique names for correlation (necessary due to replace=TRUE)
   colnames(h_matrix) <- paste0("Human_", 1:ncol(h_matrix))
   colnames(m_matrix) <- paste0("Mouse_", 1:ncol(m_matrix))
 
-  # Calculates the cross-correlation matrix (Spearman)
   cross_cors <- cor(h_matrix, m_matrix, use = "pairwise.complete.obs", method = "pearson")
 
-  # Extracts the N*N correlation values and adds the timepoint
   tibble(
-    timepoint = timepoint_val,
+    timepoint_human = timepoint_human,
+    timepoint_mouse = timepoint_mouse,
     correlation = as.vector(cross_cors)
   )
 }
 
+
 # --- 4. BOOTSTRAP EXECUTION ---
+N_BOOTSTRAPS = 10    # Number of bootstrap iterations
+SAMPLE_SIZE = 5       # 5 humans vs 5 mice in each iteration
 
 # Creates a dataframe of bootstrap IDs and applies the function for all timepoints
-bootstrapped_human_mouse_cors <- tibble(
-    bootstrap_id = 1:N_BOOTSTRAPS
+bootstrapped_human_mouse_cors <- expand_grid(
+  bootstrap_id = 1:N_BOOTSTRAPS,
+  human_tp = timepoints_human,
+  mouse_tp = timepoints_mouse
 ) %>%
-rowwise() %>%
-mutate(
-    # Executes the bootstrap function for each timepoint (1, 3, 7)
-    cors_data = list(
-        bind_rows(
-            get_bootstrap_cors(1, human_data, mouse_data, SAMPLE_SIZE),
-            get_bootstrap_cors(3, human_data, mouse_data, SAMPLE_SIZE),
-            get_bootstrap_cors(7, human_data, mouse_data, SAMPLE_SIZE)
-        ))) %>%
-ungroup() %>%
-unnest(cors_data)
+  rowwise() %>%
+  mutate(
+    cors = list(
+      get_bootstrap_cors(mouse_tp, 24, human_data, mouse_data, SAMPLE_SIZE)
+    )
+  ) %>%
+  unnest(cors)
 
 # --- 5. BOOTSTRAP RESULTS SUMMARIZATION ---
 
 # Calculates descriptive statistics on the distribution of correlations
 # obtained by the 1000 bootstrap iterations (N_total = 1000 * 25 = 25000 observations)
 correlation_bootstrap_summary <- bootstrapped_human_mouse_cors %>%
- group_by(timepoint) %>%
+ group_by(timepoint_human, timepoint_mouse) %>%
   summarize(
     comparison = "Bootstrap Mouse vs. Human",
     mean = mean(correlation, na.rm = T) %>% round(4),
-    median = median(correlation, na.rm = T) %>% round(4),
-    min = min(correlation, na.rm = T) %>% round(4),
-    max = max(correlation, na.rm = T) %>% round(4),
     sd = sd(correlation, na.rm = T) %>% round(4),
     se = sd,
-    ci_lower = quantile(correlation, 0.025, na.rm = TRUE) %>% round(4),
-    ci_upper = quantile(correlation, 0.975, na.rm = TRUE) %>% round(4),
+    ci_low = quantile(correlation, 0.025, na.rm = TRUE) %>% round(4),
+    ci_high = quantile(correlation, 0.975, na.rm = TRUE) %>% round(4),
     .groups = "drop") %>% 
-  mutate(timepoint = as.character(timepoint),
-         unit = "Day")
+  mutate(timepoint_human = as.character(timepoint_human),
+         timepoint_mouse = as.character(timepoint_mouse),
+         time_unit = "h")
+
+correlation_bootstrap_summary
 ```
 
-```{r fig.height=5, fig.width=3}
+
+```{r fig.height=5, fig.width=6}
 #Unite results
 correlation_long_all_mouse_human_timepoints_summary_df = correlation_long_all_mouse_human_timepoints_summary %>% 
-  separate(timepoint, into = c("unit", "timepoint"), remove = T) %>% 
-  filter(timepoint %in% c("1", "3", "7")) %>% 
   bind_rows(correlation_bootstrap_summary %>% 
-              mutate(comparison = "Bootstrap"))
+              mutate(timepoint = timepoint_mouse))
 
 # Prints the summarized result
 correlation_bootstrap_summary_plot = correlation_long_all_mouse_human_timepoints_summary_df %>% 
-  filter(comparison %in% c("Bootstrap", "Mouse vs. Human")) %>% 
+  filter(comparison %in% c("Bootstrap Mouse vs. Human", "Human vs. Mouse")) %>% 
   ggplot() +
   aes(x = as.numeric(timepoint),
       y = mean,
@@ -1855,26 +1837,26 @@ correlation_bootstrap_summary_plot = correlation_long_all_mouse_human_timepoints
       color = comparison,
       fill = comparison) +
   geom_textline(aes(label = comparison), 
-                data = . %>% filter(comparison == "Bootstrap"),
+                data = . %>% filter(comparison == "Bootstrap Mouse vs. Human"),
                 size = 3, 
                 vjust = -0.5,
                 hjust = 0,
                 linewidth = 1) +
   
   geom_textline(aes(label = comparison), 
-                data = . %>% filter(comparison == "Mouse vs. Human"),
+                data = . %>% filter(comparison == "Human vs. Mouse"),
                 size = 3, 
                 vjust = 1.3,
                 hjust = 0.8,
                 linewidth = 1) +
   
-    scale_color_manual(values = c("Mouse vs. Human" = "#4361ee",
+    scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
                                 "Bootstrap" = "#06d6a0",
                                 "Mouse vs. Mouse" = "#4DBBD5FF",
                                 "Human vs. Human" = "#90A4AEFF")) +
   
-  geom_errorbar(aes(ymin = ci_lower, 
-                  ymax = ci_upper), width = 0.2,
+  geom_errorbar(aes(ymin = ci_low, 
+                  ymax = ci_high), width = 0.2,
                  size = 0.5) +
   geom_point(pch = 21, color = "black", size = 2) +
   scale_x_continuous(breaks = c(0, 1, 3, 7), expand = c(0.01, 0.01)) +
@@ -1882,15 +1864,15 @@ correlation_bootstrap_summary_plot = correlation_long_all_mouse_human_timepoints
   theme_vaxgo() +
   labs(title = "Correlation between organisms,\ngenes, Fluad vaccine",
        x = "",
-       y = " rho, mean",
+       y = "p, mean",
        color = "Comparison") +
   theme(legend.position = "none") +
   guides(fill = "none") 
-
-correlation_bootstrap_summary_plot %>% 
-  ggsave(filename = here("Figures", "correlation_bootstrap_summary_plot.png"),
-         width = 3,
-         height = 5)
+# 
+# correlation_bootstrap_summary_plot %>% 
+#   ggsave(filename = here("Figures", "correlation_bootstrap_summary_plot.png"),
+#          width = 3,
+#          height = 5)
 
 correlation_bootstrap_summary_plot
 
@@ -1899,13 +1881,8 @@ correlation_bootstrap_summary_plot
 Line plot of correlation
 
 ```{r fig.height=5, fig.width=3}
-#Import
-correlation_long_all_mouse_human_timepoints_summary = 
-  readRDS(file = here("tables", "example_correlation_genes_long_all_mouse_human_timepoints_summary.rds"))
-
 
 correlation_long_all_mouse_human_timepoints_summary_df = correlation_long_all_mouse_human_timepoints_summary %>% 
-  separate(timepoint, into = c("unit", "timepoint"), remove = T) %>% 
   filter(timepoint %in% c("1", "3", "7"))
   # bind_rows(correlation_bootstrap_summary %>% 
   #             mutate(comparison = "Bootstrap"))
