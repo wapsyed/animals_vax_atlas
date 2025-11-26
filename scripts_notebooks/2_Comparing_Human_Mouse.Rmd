@@ -6851,49 +6851,53 @@ dge_btm_mean_process_sample_wide = dge_btm_mean_process_sample_long %>%
 ##### Sample mice and humans, plot a scatterplot
 
 Scatterplot
-```{r fig.height=5, fig.width=7}
-
+```{r fig.height=10, fig.width=10}
 # Annotate genes by BTM and reshape to wide (participants as columns)
 dge_btm_mean_process <- dge_btm_mean_process_sample_long %>%
   mutate(
     participant_id = str_remove(participant_id, "PAXGENEENR.CEL") %>% str_remove("rep"),
-    condition = paste0(organism, "_", participant_id)
-  ) %>%
-  select(-participant_id, -organism) %>%
-  group_by(timepoint, group, process) %>%  
-  pivot_wider(names_from = "condition", values_from = "mean_log2fc")
+    participant_id = paste0(organism, "_", participant_id)
+  ) 
 
 # ---- Sampling 5 Human + 5 Mouse ----
 set.seed(31415)
 
-human_cols <- grep("^Human", colnames(dge_btm_mean_process), value = TRUE)
-mouse_cols <- grep("^Mouse", colnames(dge_btm_mean_process), value = TRUE)
-
-sample_cols <- c(
-  sample(human_cols, 5),
-  sample(mouse_cols, 5)
-)
+sample_participants = dge_btm_mean_process %>%
+  select(organism, participant_id) %>% 
+  distinct() %>% 
+  group_by(organism) %>% 
+  slice_sample(n = 5) %>% 
+  ungroup() %>% 
+  pull(participant_id)
+  
 
 # ---- Build pairwise dataset ----
-plot_data <- dge_btm_mean_process %>%
-  select(timepoint, group, process, all_of(sample_cols)) %>%
-  pivot_longer(cols = sample_cols, names_to = "condition", values_to = "value") %>%
-  separate(condition, into = c("organism", "id"), sep = "_", extra = "merge") %>%
-  pivot_wider(names_from = organism, values_from = value) %>%
-  drop_na(Human, Mouse)
+plot_data = dge_btm_mean_process %>%
+  filter(organism == "Human", 
+         participant_id %in% sample_participants,
+         timepoint == 12) %>%
+  inner_join(dge_btm_mean_process %>%
+              filter(organism == "Mouse", 
+                     participant_id %in% sample_participants),
+             by = join_by("process", "group"), suffix = c("_human", "_mouse")) %>% 
+  select(process, group, participant_id_human, participant_id_mouse, timepoint_human, timepoint_mouse,  mean_log2fc_human, mean_log2fc_mouse) 
 
 # ---- Compute correlations per participant pair ----
 cor_labels <- plot_data %>%
-  group_by(id) %>%
+  group_by(participant_id_mouse, participant_id_human, timepoint_human, timepoint_mouse) %>%
   summarise(
-    cor_value = cor(Human, Mouse, use = "pairwise.complete.obs"),
+    cor_value = cor(mean_log2fc_human, mean_log2fc_mouse, use = "pairwise.complete.obs"),
     r_squared = cor_value^2,
     cor_label = paste0("r = ", round(cor_value, 2), ", R² = ", round(r_squared, 2))
-  )
+  ) %>% 
+  ungroup()
+
+cor_labels
 
 # ---- Plot ----
 plot_data %>%
-  ggplot(aes(x = Mouse, y = Human)) +
+  filter(timepoint_mouse == 2) %>% 
+  ggplot(aes(x = mean_log2fc_mouse, y = mean_log2fc_human)) +
   geom_point(aes(fill = group), alpha = 1, size = 2, color = "black", pch = 21) +
   stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = FALSE) +
   geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
@@ -6903,7 +6907,7 @@ plot_data %>%
     aes(x = 0, y = Inf, label = cor_label),
     hjust = 0.5, vjust = 1, inherit.aes = FALSE, size = 3
   ) +
-  facet_wrap(~id, scales = "free") +
+  facet_grid(~participant_id_human~participant_id_mouse, scales = "free") +
   theme_vaxgo() +
   xlim(-3, 3) +
   ylim(-3, 3) +
@@ -6912,7 +6916,8 @@ plot_data %>%
     x = "Mouse Log2FC",
     y = "Human Log2FC",
     title = "Mouse vs. Human"
-  )
+  ) +
+  theme(legend.position = "top")
 
 
 ```
