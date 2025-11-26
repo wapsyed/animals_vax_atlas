@@ -3721,7 +3721,7 @@ mouse_correlation_ggpairs_btms_gsea_day1 %>%
 
 ## MSigDB Hallmarks
 
-### MSigDB Hallmarks
+### Mean Log2FC and GSEA
 ```{r fig.width=10, fig.height= 8}
 #Import datasets ------
 #Import DGE output
@@ -3743,7 +3743,8 @@ msigdbr_raw <- msigdbr(species = "human", category = "H")
 #Clean
 msigdbr_df = msigdbr_raw %>% 
   select(process = gs_name, symbol = gene_symbol) %>% 
-  mutate(process = str_remove(process, "HALLMARK_"))
+  mutate(process = str_remove(process, "HALLMARK_")) %>% 
+  distinct()
 
 # Gene set enrichment analysis (GSEA) --------
 #Get calculate means -----
@@ -3757,15 +3758,14 @@ dge_hallmarks_process_genes = all_degs_human_mouse %>%
 dge_hallmarks_process_genes %>% 
   saveRDS(file = here("tables", paste0(filename, "_dge_hallmarks_process_genes.rds")))
 
-dge_hallmarks_mean_process = dge_btm_process_genes %>% 
+dge_hallmarks_mean_process = dge_hallmarks_process_genes %>% 
   group_by(organism, timepoint, process) %>% 
   summarize(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc),
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
             n_genes = n(),
-            organism, pathogen,
-            group, subgroup) %>%
+            organism, pathogen) %>%
   distinct() %>% 
   ungroup() %>% 
   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
@@ -3791,12 +3791,12 @@ df_genes2GSEA <- all_degs_human_mouse %>%
   select(condition, genes, log2fold_change)
 
 #Run multiple GSEA and unite means
-gsea_btm_output = autoGSEA(df = df_genes2GSEA,
+gsea_hallmarks_output = autoGSEA(df = df_genes2GSEA,
          TERM2GENE = term2gene,
          geneset_name = "MSigDB Hallmarks")
 
 
-gsea_btm_results = gsea_btm_output$gsea %>% 
+gsea_hallmarks_results = gsea_hallmarks_output$gsea %>% 
   as.data.frame() %>% 
   clean_names() %>% 
   rename(process = id) %>%
@@ -3805,9 +3805,171 @@ gsea_btm_results = gsea_btm_output$gsea %>%
   
   
 #Save
-gsea_btm_results %>% 
+gsea_hallmarks_results %>% 
     saveRDS(here("tables", paste0(filename, "_gsea_hallmarks_results.rds")))
 ```
+
+
+
+
+
+#### Plot distributions
+
+```{r fig.height=12, fig.width=10}
+#Import ========================
+gsea_hallmarks_results = readRDS(here("tables", paste0(filename, "_gsea_hallmarks_results.rds")))
+dge_hallmarks_mean_process = readRDS(file = here("tables", paste0(filename, "dge_hallmarks_mean_process.rds")))
+dge_hallmarks_process_genes = readRDS(file = here("tables", paste0(filename, "_dge_hallmarks_process_genes.rds")))
+
+
+#If timepoints match between ref and target, use this
+dge_hallmarks_process_genes_matched = dge_hallmarks_process_genes
+
+#Duplicate reference, if timepoints do not match =================
+
+human_data_reference <- dge_hallmarks_process_genes %>% filter(organism == "Human")
+new_timepoints <- c(dge_hallmarks_process_genes %>% filter(organism != "Human") %>% pull(timepoint) %>% unique() %>% as.character())
+duplicated_human_data <- map_dfr(new_timepoints, ~ {
+  df_copy <- human_data_reference
+  df_copy <- df_copy %>%
+    mutate(timepoint = .x)
+
+  return(df_copy)
+})
+
+dge_hallmarks_process_genes_matched = dge_hallmarks_process_genes %>% 
+  filter(organism != "Human") %>% 
+  bind_rows(duplicated_human_data) 
+
+#For GSEA results
+human_data_reference <- gsea_hallmarks_results %>% filter(organism == "Human")
+new_timepoints <- c(gsea_hallmarks_results %>% filter(organism != "Human") %>% pull(timepoint) %>% unique() %>% as.character())
+duplicated_human_data <- map_dfr(new_timepoints, ~ {
+  df_copy <- human_data_reference
+  df_copy <- df_copy %>%
+    mutate(timepoint = .x)
+
+  return(df_copy)
+})
+
+gsea_hallmarks_results_matched = gsea_hallmarks_results %>% 
+  filter(organism != "Human") %>% 
+  bind_rows(duplicated_human_data) 
+
+# ================================
+
+#Pivot to wide GSEA + mean
+dge_hallmarks_gsea_mean_wide = gsea_hallmarks_results_matched %>% 
+  mutate(organism = case_when(str_detect(condition, "Mouse") ~ "Mouse",
+                              str_detect(condition, "Human") ~ "Human",
+                              T~condition)) %>% 
+  select(organism, timepoint, process, set_size, nes, mean_log2fc, p_adjust, qvalue) %>% 
+  group_by(timepoint, process,  set_size) %>%
+  pivot_wider(names_from = organism,
+    values_from = c(mean_log2fc, nes, p_adjust, qvalue, set_size),
+    names_sep = "_")
+```
+
+
+```{r fig.height=12, fig.width=10}
+#Arrange process by log2fc
+process_order_log2fc = dge_hallmarks_mean_process %>% 
+  select(process, timepoint, organism, mean_log2fc) %>%
+  filter(timepoint == 24,
+         organism == "Human") %>% 
+  group_by(organism, timepoint) %>% 
+  arrange(-mean_log2fc) %>%
+  pull(process) %>% 
+  unique() 
+
+dge_hallmarks_process_ordered = dge_hallmarks_mean_process %>% 
+  ungroup() %>% 
+    mutate(group = fct_relevel(as.factor(group), c(immune_order)),
+           process = fct_relevel(as.factor(process), c(process_order_log2fc)) %>% fct_rev()) 
+
+labels_process <- dge_hallmarks_gsea_mean_wide %>%
+  ungroup() %>% 
+  distinct(process, p_adjust_Human, p_adjust_Mouse) %>%
+  mutate(label = ifelse(p_adjust_Human <= 0.10 & p_adjust_Mouse <= 0.10, 
+                         "bold", "plain"),
+         label_color = ifelse(p_adjust_Human <= 0.10 & p_adjust_Mouse <= 0.10, 
+                         "#4DBBD5FF", "gray50"))  %>% 
+  ungroup() %>% 
+  distinct() %>% 
+  mutate(process = fct_relevel(process, process_order_log2fc)) %>% 
+  filter(!is.na(p_adjust_Human))
+  
+
+#Plot
+dge_hallmarks_process_distribution = dge_hallmarks_process_genes_matched %>% 
+    mutate(timepoint_num = as.numeric(timepoint),
+      timepoint = paste0(timepoint, "h"),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) %>% 
+  ggplot() +
+  aes(y = process,
+      x = mean_l2fc,
+      color = organism) +
+  facet_grid(~timepoint, scales = "free", space = "free") +
+  geom_vline(xintercept = 0, color = "black") +
+  geom_point(pch = "|", alpha = 1, 
+             show.legend = F,
+             size = 3) +
+  stat_summary(
+  aes(color = organism),
+  fun.data = mean_se,
+  geom = "errorbar",
+  width = 0.5,
+  size = 1) +
+  
+  stat_summary(
+    aes(fill = organism), 
+    fun = mean,             
+    color = "black",
+    geom = "point",             
+    size = 2,    
+    pch = 21,  
+    alpha = 1,
+    show.legend = T 
+  ) +
+  
+  # xlim(-2, 2) +
+  theme_vaxgo() +
+  theme(strip.text.y = element_text(angle = 0, hjust = 0), 
+        axis.ticks.y = element_line(color = "gray", alpha = 0.5),
+        legend.position = "top",
+        axis.text.x = element_text(size = 8),
+        axis.text.y = element_text(size = 8, face = c(labels_process$label), 
+                                   color = c(labels_process$label_color)),
+        axis.line.y = element_blank(),
+        panel.spacing.y = unit(0.3, "lines"),
+        panel.grid.major.y = element_line(alpha = 0.5),
+        panel.grid.major.x = element_line(alpha = 0.5)) +
+  scale_fill_manual(values = c("Mouse" = "#4DBBD5FF",
+                               "Human" = "#90A4AEFF")) +
+  scale_color_manual(values = c("Mouse" = "#4DBBD5FF",
+                               "Human" = "#90A4AEFF")) +
+    labs(color = "Organism",
+       y = "",
+       x = "Log2FC",
+       fill = "Organism",
+       title = "Mouse vs Human, MSigDB genes, mean Log2FC") 
+
+dge_hallmarks_process_distribution 
+
+dge_hallmarks_process_distribution %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_dge_hallmarks_process_distribution.png")),
+         height = 12, 
+         width = 10)
+
+```
+
+
+
+
+
+
+
+
 
 # 6. Performance tests 
 
