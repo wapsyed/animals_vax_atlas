@@ -1440,11 +1440,9 @@ degs_human_mouse_overlap_common_plot %>%
 
 
 
-# 3. Correlation analysis
+
 
 ## Genes correlation, intra- and inter-species, samples
-
-#### Genes
 
 ```{r}
 #Import
@@ -2643,7 +2641,7 @@ dge_btm_process_ordered %>% filter(organism == "Human") %>% distinct()
 ```
 
 
-#### Correlation plot (Gene-level, BTMs, immune)
+#### Gene-level, BTMs
 
 ##### Plot genes by btm group
 ```{r fig.height=16, fig.width=8}
@@ -2729,7 +2727,7 @@ dge_btm_process_genes_correlation_plot
 ```
 
 
-#### Correlation plot (Module-level, BTMs, immune)
+#### Module-level, BTMs
 Import
 ```{r}
 #Import results -------
@@ -3195,6 +3193,10 @@ results_genes_btm_df = samples_log2fc %>%
   select(symbol = human_symbol, participant_id = subject_id, geo_sample, timepoint, log2fc, organism) %>% 
   inner_join(btm_annotation_genes, by = "symbol")
 
+#Save
+results_genes_btm_df %>% saveRDS(file = here("Tables", paste0(filename, "_dge_btm_samples_log2fc_long.rds")))
+
+
 #Pivot wider
 dge_btm_mean_process = results_genes_btm_df %>%
   mutate(condition = paste0(participant_id, "_Day", timepoint)) %>% 
@@ -3219,7 +3221,7 @@ Import data from different organisms
 
 ```{r}
 #Genes L2FC table annotated with BTMs
-dge_btm_mean_process_samples = readRDS(file = here("tables", "ecoli_infection_human_mouse_dge_btm_samples_log2fc.rds")) 
+dge_btm_mean_process_samples = readRDS(file = here("tables", "ecoli_infection_human_mouse_dge_btm_samples_log2fc_long.rds")) 
 
 #Import metadata
 mouse_human_metadata = readRDS(file = here("tables", "ecoli_infection_human_mouse_metadata.rds"))
@@ -3241,6 +3243,92 @@ dge_btm_mean_process_sample_wide = dge_btm_mean_process_sample_long %>%
               values_from = "mean_log2fc")
   
 ```
+
+##### Sample mice and humans, plot a scatterplot
+
+Scatterplot
+```{r fig.height=10, fig.width=10}
+# Annotate genes by BTM and reshape to wide (participants as columns)
+dge_btm_mean_process <- dge_btm_mean_process_sample_long %>%
+  mutate(
+    # participant_id = str_remove(participant_id, "PAXGENEENR.CEL") %>% str_remove("rep"),
+    participant_id = paste0(organism, "_", participant_id)
+  ) 
+
+# ---- Sampling 5 Human + 5 Mouse ----
+set.seed(31415)
+
+sample_participants = dge_btm_mean_process %>%
+  select(organism, participant_id) %>% 
+  distinct() %>% 
+  group_by(organism) %>% 
+  slice_sample(n = 5) %>% 
+  ungroup() %>% 
+  pull(participant_id)
+  
+
+# ---- Build pairwise dataset ----
+plot_data = dge_btm_mean_process %>%
+  filter(organism == "Human", 
+         participant_id %in% sample_participants,
+         timepoint == 12) %>%
+  inner_join(dge_btm_mean_process %>%
+              filter(organism == "Mouse", 
+                     participant_id %in% sample_participants),
+             by = join_by("process", "group"), suffix = c("_human", "_mouse")) %>% 
+  select(process, group, participant_id_human, participant_id_mouse, timepoint_human, timepoint_mouse,  mean_log2fc_human, mean_log2fc_mouse) 
+
+# ---- Compute correlations per participant pair ----
+cor_labels <- plot_data %>%
+  group_by(participant_id_mouse, participant_id_human, timepoint_human, timepoint_mouse) %>%
+  summarise(
+    cor_value = cor(mean_log2fc_human, mean_log2fc_mouse, use = "pairwise.complete.obs"),
+    r_squared = cor_value^2,
+    cor_label = paste0("r = ", round(cor_value, 2), ", R² = ", round(r_squared, 2))
+  ) %>% 
+  ungroup()
+
+cor_labels
+
+# ---- Plot ----
+timepoint_selected = 2
+samples_btm_scatterplot = plot_data %>%
+  filter(timepoint_mouse == timepoint_selected) %>% 
+  ggplot(aes(x = mean_log2fc_mouse, y = mean_log2fc_human)) +
+  geom_point(aes(fill = group), alpha = 0.2, size = 2, color = "black", pch = 21) +
+  stat_smooth(method = "lm", geom = "line", color = "black", alpha = 1, se = F, size = 1) +
+
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_label(
+    data = cor_labels %>% 
+      filter(timepoint_mouse == timepoint_selected),
+    aes(x = 0, y = Inf, label = cor_label),
+    hjust = 0.5, vjust = 1, inherit.aes = FALSE, size = 3
+  ) +
+  facet_grid(~participant_id_human~participant_id_mouse, scales = "free") +
+  theme_vaxgo() +
+  xlim(-3, 3) +
+  ylim(-3, 3) +
+  scale_fill_manual(values = immune_colors) +
+  scale_color_manual(values = immune_colors) +
+  labs(
+    x = "Mouse Log2FC",
+    y = "Human Log2FC",
+    title = paste0(filename, ", Mouse vs. Human, samples")
+  ) +
+  theme(legend.position = "top")
+
+samples_btm_scatterplot
+
+samples_btm_scatterplot %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_dge_btm_samples_group_scatterplot.png")),
+         width = 10,
+         height = 10)
+
+```
+
+
 
 #### Summarize inter-individual correlation
 
