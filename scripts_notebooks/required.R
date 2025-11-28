@@ -6,7 +6,7 @@ required_packages <- c(
   "janitor", "readr", "paletteer", "beepr", "preprocessCore", "maditr", 
   "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
-  "pracma", "ggnewscale", "ggprism", "ggtext", "devtools",
+  "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp",
   "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath"
 )
 
@@ -429,6 +429,14 @@ immune_order = c("SIGNAL TRANSDUCTION",
                  "PLATELETS",
                  "B CELLS",
                  "T CELLS")
+
+
+hallmarks_colors = c("Immune Response" = "#f72585",
+                     "Apoptosis and Hormonal Response" = "#7209b7",
+                     "Differentiation and Cell Structure" = "#4cc9f0",
+                     "Metabolism"  = "#184e77", 
+                     "Proliferation and Repair" = "#4361ee",
+                     "Signaling and Stress Response"   = "#06d6a0")
 
 
 
