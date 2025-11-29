@@ -323,7 +323,22 @@ colors_all <- c(
   "#4cc9f0",
   "#669bbc",
   "purple",
-  "gray80"
+  "gray80",
+  #Neutral harmony bliss
+  "#F4F1DE",
+  "#E07A5F",
+  "#3D405B",
+  "#81B29A",
+  "#F2CC8F",
+  
+  #Ocean sunset
+  "#001219",
+  "#005F73",
+  "#0A9396",
+  "#94D2BD",
+  "#CA6702",
+  "#AE2012",
+  "#9B2226"
 )
 
 colors_vaccines = c("Agrippal" = "#669bbc",
@@ -417,6 +432,7 @@ immune_colors = c("SIGNAL TRANSDUCTION" = "#708d81",
                   "PLATELETS" = "#7209b7",
                   "B CELLS" = "#e5383b",
                   "T CELLS" = "#f72585")
+
 immune_order = c("SIGNAL TRANSDUCTION",
                  "CELL CYCLE",
                  "ECM AND MIGRATION",
@@ -433,7 +449,7 @@ immune_order = c("SIGNAL TRANSDUCTION",
 
 hallmarks_colors = c("Immune Response" = "#f72585",
                      "Apoptosis and Hormonal Response" = "#7209b7",
-                     "Differentiation and Cell Structure" = "#4cc9f0",
+                     "Differentiation and Cell Structure" = "#E07A5F",
                      "Metabolism"  = "#184e77", 
                      "Proliferation and Repair" = "#4361ee",
                      "Signaling and Stress Response"   = "#06d6a0")
