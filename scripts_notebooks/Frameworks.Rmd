@@ -5171,75 +5171,96 @@ Import data
 ```{r}
 #Import data ---------
 samples_log2fc = readRDS(file = here("tables", "ecoli_infection_human_mouse_samples_log2fc.rds"))
+#Get annotated processes
+msigdbr_grouped = read_csv(file = here("tables", "msigdb_hallmarks_grouped_genes.csv"))
+
+filename = "ecoli_infection_human_mouse"
 
 #Raw data
 ssgsea_pre_data = samples_log2fc %>% 
   rename(participant_id = subject_id) %>% 
-  mutate(condition = paste0(participant_id, "_Day", timepoint))
+  mutate(condition = paste0(participant_id, "_Day", timepoint)) 
 
 #Get metadata
 ssgsea_metadata = ssgsea_pre_data %>% 
   select(condition, participant_id, organism, timepoint) %>% distinct()
 
-#Get annotated processes
-msigdbr_grouped = read_csv(file = here("tables", "msigdb_hallmarks_grouped_genes.csv"))
-```
+library(corto)
 
-
-Run ssGSEA 
-```{r message=FALSE, warning=FALSE}
 #ssGSEA-----
 #Clean table for GSEA standard
 term2gene = msigdbr_grouped %>% 
-  select(process, genes = symbol)
+  select(process, genes = symbol) %>% 
+  group_by(process) %>%
+  summarise(genes = list(genes), .groups = "drop") %>%
+  deframe()
 
-#Run GSEA for samples
-df_genes2ssGSEA_human_mice = ssgsea_pre_data %>%
-  select(condition, genes = human_symbol, log2fold_change = log2fc) %>%
-  autoGSEA(df = .,
-         TERM2GENE = term2gene,
-         geneset_name = "Hallmarks")
+ssgsea_log2fc_matrix = ssgsea_pre_data %>% 
+  select(condition, genes = human_symbol, log2fold_change = log2fc) %>% 
+  pivot_wider(names_from = "condition",
+              values_from = "log2fold_change") %>% 
+  column_to_rownames("genes") %>% 
+  as.matrix()
+
+
+# Run ssGSEA
+df_genes2ssGSEA_human_mice = ssgsea(ssgsea_log2fc_matrix, term2gene, scale = T, minsize = 1) %>% 
+  as.data.frame() %>% 
+  setNames(ssgsea_metadata$condition) %>% 
+  rownames_to_column("process") %>% 
+  pivot_longer(cols = -process,
+               names_to = "condition",
+               values_to = "nes") %>% 
+  mutate(pvalue = z2p(nes), #Convert NES into pvalue
+         p_adjust = p.adjust(pvalue, method = "BH"),
+         geneset_name = "Hallmarks") %>%
+  inner_join(ssgsea_metadata, by= "condition") 
+  
 
 df_genes2ssGSEA_human_mice %>% 
-  saveRDS(file = here("tables", paste0(filename, "_gsea_ssGSEA_hallmarks_results.rds"))
+  saveRDS(file = here("tables", paste0(filename, "_gsea_ssGSEA_hallmarks_results.rds")))
 
 beep()
 ```
 
 
-Import and annotate results
-```{r}
-#Import results
-df_genes2ssGSEA_human_mice = readRDS(file = here("table", "ecoli_infection_human_mouse_gsea_ssGSEA_hallmarks_results.rds"))
-df_genes2ssGSEA_human_mice = df_genes2ssGSEA_human_mice$gsea %>% 
-  clean_names() %>% 
-  rownames_to_column("del") %>% 
-  select(-del) %>% 
-  rename(process = id)
-
-#Annotate results
-ssgsea_results_BTM_annotated = df_genes2ssGSEA_human_mice %>% 
-  inner_join(btm_annotation %>% rename(process = id), by = "process") %>% 
-  select(process, nes, p_adjust, group, condition) %>% 
-  inner_join(ssgsea_metadata, by = "condition") %>% 
-  distinct() %>% 
-  arrange(process)
-```
-
 Plot ssGSEA correlations for mice
 ```{r fig.height=8, fig.width=8, message=FALSE, warning=FALSE}
+#Import results
+df_genes2ssGSEA_human_mice = readRDS(file = here("tables", "ecoli_infection_human_mouse_gsea_ssGSEA_hallmarks_results.rds"))
+
+#Annotate results
+ssgsea_results_annotated = df_genes2ssGSEA_human_mice
+
+
 #Plot inputs ----------
 #Plot correlations for mice
-ssgsea_results_BTM_annotated_wide = ssgsea_results_BTM_annotated %>% 
+
+process_filter_labels = ssgsea_results_annotated %>% 
+  group_by(process, timepoint) %>%
+  filter(
+    any(p_adjust[organism == "Human"] < 0.25) &
+    any(p_adjust[organism == "Mouse"] < 0.25)
+  ) %>%
+  ungroup() 
+
+
+ssgsea_results_annotated_wide = ssgsea_results_annotated %>% 
   filter(organism == "Mouse") %>% 
+  select(organism, timepoint, process, nes, participant_id) %>% 
   pivot_wider(names_from = "participant_id",
               values_from = "nes") %>%
-  group_by(process, timepoint) %>% 
-  fill(`TriFLU-MF59_BL_1`:`TriFLU-MF59_BL_5`, .direction = "updown") %>% 
-  filter(process %in% c(labels_process %>% 
-                          filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25) %>% 
-                          pull(process)))
+  inner_join(process_filter_labels %>% select(process, timepoint),
+             by = join_by("process", "timepoint")) %>% 
+  distinct()
 
+
+
+
+```
+
+
+```{r fig.height=8, fig.width=8, message=FALSE, warning=FALSE}
 #Change params in geoms
 #Density
 my_dens <- function(data, mapping, ...) {
@@ -5254,12 +5275,12 @@ my_point <- function(data, mapping, ...) {
 
 #Plot ------------
 #All days
-mouse_correlation_ggpairs_btms_gsea_alldays = ggpairs(ssgsea_results_BTM_annotated_wide ,
-                                    columns = 7:11,
+mouse_correlation_ggpairs_gsea_alldays = ggpairs(ssgsea_results_annotated_wide ,
+                                    columns = 3:8,
                                     mapping = ggplot2::aes(color = timepoint,
                                                            fill = timepoint),
                                     title = paste("All days"), 
-                                    upper = list(continuous = wrap(ggally_cor, method = "spearman")),
+                                    # upper = list(continuous = wrap(ggally_cor, method = "spearman")),
                                     diag = list(continuous = my_dens),
                                     lower = list(continuous = my_point)
                                     ) +
@@ -5275,41 +5296,13 @@ mouse_correlation_ggpairs_btms_gsea_alldays = ggpairs(ssgsea_results_BTM_annotat
                                 "3" = "#219ebc",
                                 "7" = "#669bbc"))
 
-mouse_correlation_ggpairs_btms_gsea_alldays
+mouse_correlation_ggpairs_gsea_alldays
 
 mouse_correlation_ggpairs_btms_gsea_alldays %>%
   ggsave(filename = here("Figures", "Example_mouse_correlation_ggpairs_btms_gsea_alldays.png"),
          height = 10,
          width = 10)
 
-
-
-
-#Day 1
-timepoint_selected = 1
-
-mouse_correlation_ggpairs_btms_gsea_day1 = ggpairs(ssgsea_results_BTM_annotated_wide %>% 
-                                              filter(timepoint == timepoint_selected),
-                                    columns = 7:11,
-                                    mapping = ggplot2::aes(color = group,
-                                                           fill = group),
-                                    title = paste("Day", timepoint_selected), 
-                                    upper = list(continuous = wrap(ggally_cor, method = "spearman", size = 2)),
-                                    diag = list(continuous = my_dens),
-                                    lower = list(continuous = my_point)
-                                    ) +
-  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
-  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2)+
-  theme_vaxgo() +
-  scale_color_manual(values = immune_colors) +
-  scale_fill_manual(values = immune_colors)
-
-mouse_correlation_ggpairs_btms_gsea_day1
-
-mouse_correlation_ggpairs_btms_gsea_day1 %>%
-  ggsave(filename = here("Figures", "Example_mouse_correlation_ggpairs_btms_gsea_day1.png"),
-         height = 10,
-         width = 10)
 
 
 ```
