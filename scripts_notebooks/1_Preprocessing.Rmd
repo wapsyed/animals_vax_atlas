@@ -541,19 +541,7 @@ flu_metadata %>% filter(exposure_material_reported == "FLUADD")
 #Filter samples by vaccine
 human_samples_pbmc_fluad = flu_metadata %>% 
   filter(exposure_material_reported == "FLUADD")
-
-#Check distribution
-GSE124689_exprs %>% 
-  as.data.frame() %>% 
-  select(value = GSM3542845) %>% 
-  rownames_to_column("probe") %>% 
-  ggplot() +
-  aes(x = value) +
-  geom_histogram()
 ```
-
-
-
 
 ### Annotate features
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
@@ -640,6 +628,14 @@ human_fluadd_symbol_entrez = GSE124689_counts_raw_symbol %>%
 
 #Save
 human_fluadd_not_normalized_symbol %>% saveRDS(file = here("tables", "influenza_GSE124689_exprs_not_normalized.rds"))
+
+
+human_fluadd_not_normalized_symbol %>% 
+  rownames_to_column("human_symbol") %>% 
+  pivot_longer(columns_to = "geo_sample",
+               values_to = "log2fc")
+
+human_fluadd_not_normalized_symbol
 ```
 
 
@@ -881,7 +877,11 @@ human_fluad_log2fc_filtered_sample_long = human_mouse_fluad_matrix_human %>%
   mutate(day0 = value[timepoint == "0"]) %>%
   ungroup() %>%
   mutate(log2fc = value - day0) %>%
-  filter(timepoint != "0")
+  filter(timepoint != "0") %>% 
+  inner_join(human_mouse_fluad_metadata_pData %>% 
+               rownames_to_column("geo_sample") %>% 
+               select(participant_id, timepoint, geo_sample),
+             by = join_by("participant_id", "timepoint"))
 
 #Save
 human_fluad_log2fc_filtered_sample_long %>% 
@@ -7731,17 +7731,57 @@ all_human_mouse_metadata %>%
   saveRDS(here("tables", "all_human_mouse_metadata.rds"))
 
 
-#Sample log2fc
-human_mouse_ecoli_log2fc_samples_ecoli = readRDS(here("tables", "ecoli_infection_human_mouse_samples_log2fc.rds"))
-human_mouse_log2fc_samples_saureus = readRDS(here("tables", "saureus_infection_human_mouse_samples_log2fc.rds"))
-human_mouse_log2fc_samples_engerixb = readRDS(file = here("tables", "hepatitisb_engerixb_human_mouse_exprs_samples_log2fc.rds"))
-human_mouse_log2fc_samples_fluad = readRDS(file = here("tables", "influenza_fluad_human_mouse_log2fc_samples.rds"))
+# Sample log2fc
+#Import
+human_mouse_log2fc_samples_ecoli = readRDS(here("tables", "ecoli_infection_human_mouse_samples_log2fc.rds"))  %>% 
+  select(human_symbol, participant_id = subject_id, geo_sample, log2fc, value_raw, day0_value_raw) 
+human_mouse_log2fc_samples_saureus = readRDS(here("tables", "saureus_infection_human_mouse_samples_log2fc.rds"))  %>% 
+  select(human_symbol, participant_id, geo_sample, log2fc, value_raw, day0_value_raw)
+human_mouse_log2fc_samples_engerixb = readRDS(file = here("tables", "hepatitisb_engerixb_human_mouse_exprs_samples_log2fc.rds"))  %>% 
+   mutate(timepoint = as.numeric(timepoint)) %>% 
+  inner_join(human_mouse_engerix_metadata %>% select(participant_id, timepoint, geo_sample),
+             by = join_by("participant_id", "timepoint")) %>% 
+  select(human_symbol, participant_id, geo_sample, log2fc, value_raw = value, day0_value_raw = day0)
+human_mouse_log2fc_samples_fluad = readRDS(file = here("tables", "influenza_fluad_human_mouse_log2fc_samples.rds")) %>% 
+  mutate(timepoint = as.numeric(timepoint)) %>% 
+  inner_join(fluad_human_mouse_metadata %>% select(participant_id, timepoint, geo_sample),
+             by = join_by("participant_id", "timepoint")) %>% 
+  select(human_symbol, participant_id, geo_sample, log2fc, value_raw = value, day0_value_raw = day0)
 
+#Unite
+all_human_mouse_samples_log2fc = bind_rows(
+  human_mouse_log2fc_samples_saureus,
+  human_mouse_log2fc_samples_ecoli,
+  human_mouse_log2fc_samples_engerixb,
+  human_mouse_log2fc_samples_fluad
+)
+#Save
+all_human_mouse_samples_log2fc %>% 
+  saveRDS(here("tables", "all_human_mouse_samples_log2fc.rds"))
 
-all_degs_human_mouse_engerixb = readRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds"))
-all_degs_human_mouse_saureus = readRDS(here("tables", "saureus_infection_human_mouse_dge_limma_degs.rds"))
-all_degs_human_mouse_ecoli = readRDS(here("tables", "ecoli_infection_human_mouse_dge_limma_degs.rds"))
-all_degs_human_mouse_fluad = readRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds"))
+# DGE results
+#Import
+all_degs_human_mouse_engerixb = readRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Hepatitis B", treatment = "Engerix B")
+all_degs_human_mouse_saureus = readRDS(here("tables", "saureus_infection_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Staphyloccus aureus", treatment = "Infection")
+all_degs_human_mouse_ecoli = readRDS(here("tables", "ecoli_infection_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Escherichia coli", treatment = "Infection")
+all_degs_human_mouse_fluad = readRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Influenza", treatment = "Fluad") %>% 
+  rename(mean_l2fc = mean, ci_lower = lower, ci_upper = upper)
+
+#Unite
+all_degs_human_mouse = bind_rows(all_degs_human_mouse_saureus, 
+                                 all_degs_human_mouse_ecoli, 
+                                 all_degs_human_mouse_fluad, 
+                                 all_degs_human_mouse_engerixb
+                                 ) %>% 
+  select(organism, pathogen, treatment, timepoint, condition, human_symbol, everything())
+#Save
+all_degs_human_mouse %>% 
+  saveRDS(here("tables", "all_human_mouse_dge_limma_degs.rds"))
+
 ```
 
 
