@@ -314,32 +314,7 @@ cluster_by_day <- function(df, day_column = "day", condition_column = "condition
 
 #Colors --------
 
-colors_all <- c(
-  "#4361ee",
-  "#4DBBD5FF",
-  "#90A4AEFF",
-  "#06d6a0",
-  "#caf0f8",
-  "#4cc9f0",
-  "#669bbc",
-  "purple",
-  "gray80",
-  #Neutral harmony bliss
-  "#F4F1DE",
-  "#E07A5F",
-  "#3D405B",
-  "#81B29A",
-  "#F2CC8F",
-  
-  #Ocean sunset
-  "#001219",
-  "#005F73",
-  "#0A9396",
-  "#94D2BD",
-  "#CA6702",
-  "#AE2012",
-  "#9B2226"
-)
+
 
 colors_vaccines = c("Agrippal" = "#669bbc",
                     "Fluad" = "#219ebc",
@@ -447,13 +422,38 @@ immune_order = c("SIGNAL TRANSDUCTION",
                  "T CELLS")
 
 
-hallmarks_colors = c("Immune Response" = "#f72585",
-                     "Apoptosis and Hormonal Response" = "#7209b7",
-                     "Differentiation and Cell Structure" = "#E07A5F",
-                     "Metabolism"  = "#184e77", 
+hallmarks_colors = c("Immune Response" = "#0A9396",
+                     "Apoptosis and Hormonal Response" = "#CA6702",
+                     "Differentiation and Cell Structure" = "#9B2226",
+                     "Metabolism"  = "#3D405B", 
                      "Proliferation and Repair" = "#4361ee",
-                     "Signaling and Stress Response"   = "#06d6a0")
+                     "Signaling and Stress Response"   = "#81B29A")
 
-
+colors_all <- c(
+  "#4361ee",
+  "#4DBBD5FF",
+  "#90A4AEFF",
+  "#06d6a0",
+  "#caf0f8",
+  "#4cc9f0",
+  "#669bbc",
+  "purple",
+  "gray80",
+  #Neutral harmony bliss
+  "#F4F1DE",
+  "#E07A5F",
+  "#3D405B",
+  "#81B29A",
+  "#F2CC8F",
+  
+  #Ocean sunset
+  "#001219",
+  "#005F73",
+  "#0A9396",
+  "#94D2BD",
+  "#CA6702",
+  "#AE2012",
+  "#9B2226"
+)
 
 
