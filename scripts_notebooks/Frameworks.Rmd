@@ -4296,165 +4296,98 @@ samples_btm_scatterplot %>%
 ###### 1 individual vs 1 individual
 
 ```{r}
-# --- 1) Mouse vs Human no mesmo timepoint ---
-#Get timepoints
-timepoints_human <- unique(dge_btm_mean_process_sample_long %>% filter(organism == "Human") %>% pull(timepoint))
-timepoints_mouse <- unique(dge_btm_mean_process_sample_long %>% filter(organism == "Mouse") %>% pull(timepoint))
+# Prepare long-format table of mean log2FC per sample and process
+btm_samples_long = dge_btm_mean_process_sample_long %>% 
+  select(organism, process, participant_id, timepoint, mean_log2fc) %>% 
+  distinct() %>% 
+  mutate(condition = paste0(participant_id, "_", timepoint)) 
 
-#Get combinations
-timepoint_combinations <- expand.grid(timepoint_human = timepoints_human,
-                                      timepoint_mouse = timepoints_mouse,
-                                      stringsAsFactors = FALSE)
+# Annotation table
+btm_samples_annotation = btm_samples_long %>% 
+  select(organism, participant_id, timepoint, condition) %>% 
+  distinct()
 
-# Loop
-cor_human_mouse_timepoint <- timepoint_combinations %>%
-  pmap_dfr(function(timepoint_human, timepoint_mouse) {
-    
-    # pegar os participantes do timepoint específico
-    human_df <- dge_btm_mean_process_sample_long %>%
-      filter(organism == "Human", timepoint == timepoint_human) %>%
-      select(participant_id, process, mean_log2fc)
-    
-    mouse_df <- dge_btm_mean_process_sample_long %>%
-      filter(organism == "Mouse", timepoint == timepoint_mouse) %>%
-      select(participant_id, process, mean_log2fc)
-    
-    # manter apenas genes em comum
-    common_process <- intersect(human_df$process, mouse_df$process)
-    human_df <- human_df %>% filter(process %in% common_process)
-    mouse_df <- mouse_df %>% filter(process %in% common_process)
-    
-    # pivot para wide
-    human_wide <- human_df %>% pivot_wider(names_from = participant_id, values_from = mean_log2fc)
-    mouse_wide <- mouse_df %>% pivot_wider(names_from = participant_id, values_from = mean_log2fc)
-    
-    # IDs de participantes
-    human_ids <- setdiff(colnames(human_wide), "process")
-    mouse_ids <- setdiff(colnames(mouse_wide), "process")
-    
-    # calcular correlação para todos pares humano x mouse
-    expand.grid(human = human_ids, mouse = mouse_ids, stringsAsFactors = FALSE) %>%
-      mutate(
-        cor_test = map2(human, mouse, ~{
-          x <- human_wide[[.x]]
-          y <- mouse_wide[[.y]]
-          # remover NAs correspondentes
-          keep <- complete.cases(x, y)
-          cor.test(x[keep], y[keep], method = "pearson")
-        }),
-        r       = map_dbl(cor_test, ~.x$estimate),
-        p_value = map_dbl(cor_test, ~.x$p.value),
-        ci_low  = map_dbl(cor_test, ~.x$conf.int[1]),
-        ci_high = map_dbl(cor_test, ~.x$conf.int[2])
-      ) %>%
-      select(-cor_test) %>%
-      mutate(timepoint_human = timepoint_human %>% as.numeric(),
-             timepoint_mouse = timepoint_mouse %>% as.numeric())
-  }) %>% 
-  group_by(timepoint_human, timepoint_mouse) %>%
-  summarize(
-    comparison = "Human vs. Mouse",
-    mean = mean(r, na.rm = TRUE),
-    sd   = sd(r, na.rm = TRUE),
-    n      = sum(!is.na(r)),
-    se     = sd / sqrt(n),
-    tval   = qt(0.975, df = n - 1),
-    ci_low = mean - tval * se,
-    ci_high = mean + tval * se,
-    .groups = "drop"
-  )
+# Pivot to wide format
+btm_samples_wide_all = btm_samples_long %>% 
+  select(-timepoint, -organism, -participant_id) %>% 
+  pivot_wider(names_from = "condition",
+              values_from = "mean_log2fc") %>% 
+  column_to_rownames("process")
 
-cor_human_mouse_timepoint
+# Compute Correlations and p-values between all conditions
+cor_btm_samples_wide_all = btm_samples_wide_all %>% 
+  as.matrix() %>% 
+  rcorr(type = "spearman")
 
-# --- 2) Human vs Human (entre timepoints) ---
-cor_human_human <- dge_btm_mean_process_sample_long %>%
-  mutate(timepoint = as.numeric(timepoint)) %>% 
-  filter(organism == "Human") %>%
-  select(participant_id, process, timepoint, mean_log2fc) %>%
-  group_by(timepoint) %>% 
-  pivot_wider(
-    names_from = participant_id,
-    values_from = mean_log2fc
-  ) %>%
-  select(-process, -timepoint) %>%   # só colunas de participantes
-  cor(use = "pairwise.complete.obs", method = "pearson") %>% 
-  as.data.frame() %>%
-  rownames_to_column("participant_1") %>%
-  melt(id.vars = "participant_1", variable.name = "participant_2", value.name = "correlation") %>% 
-  filter(participant_1 != participant_2) %>%   # tira a diagonal (=1)
-  # garantir combinações únicas
-  rowwise() %>%
-  mutate(pair = paste(sort(c(participant_1, participant_2)), collapse = "_")) %>%
-  ungroup() %>%
-  distinct(pair, .keep_all = TRUE) %>%
-  #Summarize
-  summarize(
-    comparison = "Human vs. Human",
-    mean = mean(correlation, na.rm = TRUE),
+# Convert correlation matrix to long format
+cor_btm_samples_wide_all_r = cor_btm_samples_wide_all$r %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "correlation")
+
+# Convert p-value matrix to long format
+cor_btm_samples_wide_all_p = cor_btm_samples_wide_all$P %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "p_value")
+
+# Join correlations, p-values, and sample annotations
+correlation_long_all_btm_mouse_human_timepoints_summary = cor_btm_samples_wide_all_r %>% 
+  inner_join(cor_btm_samples_wide_all_p, 
+             by = join_by("condition1", "condition2")) %>% 
+  inner_join(btm_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition1")) %>% 
+               rename(condition1 = condition_condition1),
+             by = "condition1") %>% 
+  inner_join(btm_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition2")) %>% 
+               rename(condition2 = condition_condition2),
+             by = "condition2") %>% 
+
+  # Remove symmetric duplicates 
+  filter(condition1 < condition2) %>% 
+
+  # Keep Human as reference when comparing human and mouse
+  filter(!(organism_condition1 == "Mouse" & organism_condition2 == "Human")) %>% 
+
+  # Annotate comparison type and timepoints
+  mutate(comparison = paste0(organism_condition1, " vs. ", organism_condition2),
+         timepoint_comparison = paste0(timepoint_condition1, "-", timepoint_condition2)) %>% 
+
+  # Compute summary statistics per comparison and timepoint
+  group_by(comparison, timepoint_comparison) %>% 
+  mutate(
+    mean = mean(correlation),
     sd   = sd(correlation, na.rm = TRUE),
-    n    = sum(!is.na(correlation)),
+    n = n(),
     se   = sd / sqrt(n),
     tval = qt(0.975, df = n - 1),
     ci_low  = mean - tval * se,
     ci_high = mean + tval * se
   ) %>% 
-  mutate(timepoint = 24,
-         timepoint_human = timepoint)
-  
-
-# --- 3) Mouse vs Mouse ---
-cor_mouse_mouse <- dge_btm_mean_process_sample_long %>%
-  filter(organism == "Mouse") %>%
-  group_by(timepoint) %>%
-  group_modify(~{
-    df <- .x %>%
-      select(participant_id, process, mean_log2fc) %>%
-      pivot_wider(names_from = participant_id, values_from = mean_log2fc) %>%
-      select(-process)
-    
-    # Calculate correlation
-    cor_mat <- cor(df, use = "pairwise.complete.obs", method = "pearson")
-    
-    # Long format
-    cor_long <- as.data.frame(cor_mat) %>%
-      rownames_to_column("participant_1") %>%
-      melt(id.vars = "participant_1", variable.name = "participant_2", value.name = "correlation") %>%
-      filter(participant_1 != participant_2) %>%
-      rowwise() %>%
-      mutate(pair = paste(sort(c(participant_1, participant_2)), collapse = "_")) %>%
-      ungroup() %>%
-      distinct(pair, .keep_all = TRUE)
-    
-    # Summary
-    tibble(
-      comparison = "Mouse vs. Mouse",
-      mean = mean(cor_long$correlation, na.rm = TRUE),
-      sd   = sd(cor_long$correlation, na.rm = TRUE),
-      n    = nrow(cor_long),
-      se   = sd / sqrt(n),
-      tval = qt(0.975, df = n - 1),
-      ci_low  = mean - tval * se,
-      ci_high = mean + tval * se
-    )
-  }) %>%
   ungroup() %>% 
-  mutate(timepoint = as.numeric(timepoint), 
-         timepoint_mouse = timepoint)
+  select(comparison, timepoint_condition1, timepoint_condition2, mean:ci_high) %>% 
+  distinct() %>% 
+  arrange(comparison) %>% 
 
+  # For same-organism comparisons, keep only matching timepoints
+  filter(!(comparison == "Mouse vs. Mouse" & timepoint_condition1 != timepoint_condition2),
+         !(comparison == "Human vs. Human" & timepoint_condition1 != timepoint_condition2)) %>% 
 
-#Unite
-correlation_long_all_btm_mouse_human_timepoints_summary = cor_human_mouse_timepoint %>% 
-  mutate(timepoint = timepoint_mouse) %>% 
-  bind_rows(
-    cor_human_human,
-    cor_mouse_mouse)
+  # Numeric representation of timepoint for plotting
+  mutate(timepoint = timepoint_condition2 %>% as.numeric())
 
-#Print
-correlation_long_all_btm_mouse_human_timepoints_summary
-
+# Save output
 correlation_long_all_btm_mouse_human_timepoints_summary %>% 
   saveRDS(file = here("tables", paste0(filename, "_samples_btm_correlation_all_timepoints_summary.rds")))
+
+
 ```
+
 
 Plot scatterplot
 
@@ -4476,7 +4409,7 @@ correlation_long_all_btm_mouse_human_timepoints_summary_plot = correlation_long_
   geom_errorbar(aes(ymin = ci_low, 
                   ymax = ci_high), width = 0.2,
                  size = 0.5) +
-  geom_point(pch = 21, color = "black", size = 2) +
+  geom_point(pch = 21, fill = "white", size = 2, stroke = 1.5) +
   scale_x_discrete(expand = c(0.01, 0.01)) +
   scale_y_continuous(expand = c(0.01, 0.01),
                      limits = c(0, 1)) +
@@ -4489,7 +4422,7 @@ correlation_long_all_btm_mouse_human_timepoints_summary_plot = correlation_long_
                                 "Human vs. Human" = "#90A4AEFF")) +
   labs(title = "Correlation between organisms,\nBTMs, Means",
        x = "Hour",
-       y = "Pearson r, mean",
+       y = "Correlation",
        color = "Comparison") +
   theme(legend.position = "right") +
   guides(fill = "none") 
@@ -4530,7 +4463,7 @@ results_genes_hallmarks_df %>% saveRDS(file = here("Tables", paste0(filename, "_
 dge_hallmarks_mean_process = results_genes_hallmarks_df %>%
   mutate(condition = paste0(participant_id, "_Day", timepoint)) %>% 
   group_by(participant_id, timepoint, process) %>% 
-  summarize(mean_log2fc = mean(log2fc)) %>%
+  summarise(mean_log2fc = mean(log2fc, na.rm = T)) %>%
   pivot_wider(names_from = "participant_id", values_from = "mean_log2fc") %>% 
   inner_join(msigdbr_grouped %>% 
                select(process, group) %>% 
@@ -4559,7 +4492,7 @@ mouse_human_metadata = readRDS(file = here("tables", "ecoli_infection_human_mous
 dge_hallmarks_mean_process_sample_long = results_genes_hallmarks_df %>% 
   mutate(timepoint = if_else(organism == "Human", "24", timepoint)) %>% 
   group_by(organism, participant_id, timepoint, process) %>% 
-  summarize(group,
+  summarise(group,
             mean_log2fc = mean(log2fc, na.rm = T)) %>% 
   distinct() %>% 
   ungroup()
@@ -4662,164 +4595,97 @@ samples_hallmarks_scatterplot %>%
 ###### 1 individual vs 1 individual
 
 ```{r}
-# --- 1) Mouse vs Human no mesmo timepoint ---
-#Get timepoints
-timepoints_human <- unique(dge_hallmarks_mean_process_sample_long %>% filter(organism == "Human") %>% pull(timepoint))
-timepoints_mouse <- unique(dge_hallmarks_mean_process_sample_long %>% filter(organism == "Mouse") %>% pull(timepoint))
+# Prepare long-format table of mean log2FC per sample and process
+hallmarks_samples_long = dge_hallmarks_mean_process_sample_long %>% 
+  select(organism, process, participant_id, timepoint, mean_log2fc) %>% 
+  distinct() %>% 
+  mutate(condition = paste0(participant_id, "_", timepoint)) 
 
-#Get combinations
-timepoint_combinations <- expand.grid(timepoint_human = timepoints_human,
-                                      timepoint_mouse = timepoints_mouse,
-                                      stringsAsFactors = FALSE)
+# Annotation table
+hallmarks_samples_annotation = hallmarks_samples_long %>% 
+  select(organism, participant_id, timepoint, condition) %>% 
+  distinct()
 
-# Loop
-cor_human_mouse_timepoint <- timepoint_combinations %>%
-  pmap_dfr(function(timepoint_human, timepoint_mouse) {
-    
-    # pegar os participantes do timepoint específico
-    human_df <- dge_hallmarks_mean_process_sample_long %>%
-      filter(organism == "Human", timepoint == timepoint_human) %>%
-      select(participant_id, process, mean_log2fc)
-    
-    mouse_df <- dge_hallmarks_mean_process_sample_long %>%
-      filter(organism == "Mouse", timepoint == timepoint_mouse) %>%
-      select(participant_id, process, mean_log2fc)
-    
-    # manter apenas genes em comum
-    common_process <- intersect(human_df$process, mouse_df$process)
-    human_df <- human_df %>% filter(process %in% common_process)
-    mouse_df <- mouse_df %>% filter(process %in% common_process)
-    
-    # pivot para wide
-    human_wide <- human_df %>% pivot_wider(names_from = participant_id, values_from = mean_log2fc)
-    mouse_wide <- mouse_df %>% pivot_wider(names_from = participant_id, values_from = mean_log2fc)
-    
-    # IDs de participantes
-    human_ids <- setdiff(colnames(human_wide), "process")
-    mouse_ids <- setdiff(colnames(mouse_wide), "process")
-    
-    # calcular correlação para todos pares humano x mouse
-    expand.grid(human = human_ids, mouse = mouse_ids, stringsAsFactors = FALSE) %>%
-      mutate(
-        cor_test = map2(human, mouse, ~{
-          x <- human_wide[[.x]]
-          y <- mouse_wide[[.y]]
-          # remover NAs correspondentes
-          keep <- complete.cases(x, y)
-          cor.test(x[keep], y[keep], method = "pearson")
-        }),
-        r       = map_dbl(cor_test, ~.x$estimate),
-        p_value = map_dbl(cor_test, ~.x$p.value),
-        ci_low  = map_dbl(cor_test, ~.x$conf.int[1]),
-        ci_high = map_dbl(cor_test, ~.x$conf.int[2])
-      ) %>%
-      select(-cor_test) %>%
-      mutate(timepoint_human = timepoint_human %>% as.numeric(),
-             timepoint_mouse = timepoint_mouse %>% as.numeric())
-  }) %>% 
-  group_by(timepoint_human, timepoint_mouse) %>%
-  summarize(
-    comparison = "Human vs. Mouse",
-    mean = mean(r, na.rm = TRUE),
-    sd   = sd(r, na.rm = TRUE),
-    n      = sum(!is.na(r)),
-    se     = sd / sqrt(n),
-    tval   = qt(0.975, df = n - 1),
-    ci_low = mean - tval * se,
-    ci_high = mean + tval * se,
-    .groups = "drop"
-  )
+# Pivot to wide format
+hallmarks_samples_wide_all = hallmarks_samples_long %>% 
+  select(-timepoint, -organism, -participant_id) %>% 
+  pivot_wider(names_from = "condition",
+              values_from = "mean_log2fc") %>% 
+  column_to_rownames("process")
 
-cor_human_mouse_timepoint
+# Compute Correlations and p-values between all conditions
+cor_hallmarks_samples_wide_all = hallmarks_samples_wide_all %>% 
+  as.matrix() %>% 
+  rcorr(type = "spearman")
 
-# --- 2) Human vs Human (entre timepoints) ---
-cor_human_human <- dge_hallmarks_mean_process_sample_long %>%
-  mutate(timepoint = as.numeric(timepoint)) %>% 
-  filter(organism == "Human") %>%
-  select(participant_id, process, timepoint, mean_log2fc) %>%
-  group_by(timepoint) %>% 
-  pivot_wider(
-    names_from = participant_id,
-    values_from = mean_log2fc
-  ) %>%
-  select(-process, -timepoint) %>%   # só colunas de participantes
-  cor(use = "pairwise.complete.obs", method = "pearson") %>% 
-  as.data.frame() %>%
-  rownames_to_column("participant_1") %>%
-  melt(id.vars = "participant_1", variable.name = "participant_2", value.name = "correlation") %>% 
-  filter(participant_1 != participant_2) %>%   # tira a diagonal (=1)
-  # garantir combinações únicas
-  rowwise() %>%
-  mutate(pair = paste(sort(c(participant_1, participant_2)), collapse = "_")) %>%
-  ungroup() %>%
-  distinct(pair, .keep_all = TRUE) %>%
-  #Summarize
-  summarize(
-    comparison = "Human vs. Human",
-    mean = mean(correlation, na.rm = TRUE),
+# Convert correlation matrix to long format
+cor_hallmarks_samples_wide_all_r = cor_hallmarks_samples_wide_all$r %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "correlation")
+
+# Convert p-value matrix to long format
+cor_hallmarks_samples_wide_all_p = cor_hallmarks_samples_wide_all$P %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "p_value")
+
+# Join correlations, p-values, and sample annotations
+correlation_long_all_hallmarks_mouse_human_timepoints_summary = cor_hallmarks_samples_wide_all_r %>% 
+  inner_join(cor_hallmarks_samples_wide_all_p, 
+             by = join_by("condition1", "condition2")) %>% 
+  inner_join(hallmarks_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition1")) %>% 
+               rename(condition1 = condition_condition1),
+             by = "condition1") %>% 
+  inner_join(hallmarks_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition2")) %>% 
+               rename(condition2 = condition_condition2),
+             by = "condition2") %>% 
+
+  # Remove symmetric duplicates 
+  filter(condition1 < condition2) %>% 
+
+  # Keep Human as reference when comparing human and mouse
+  filter(!(organism_condition1 == "Mouse" & organism_condition2 == "Human")) %>% 
+
+  # Annotate comparison type and timepoints
+  mutate(comparison = paste0(organism_condition1, " vs. ", organism_condition2),
+         timepoint_comparison = paste0(timepoint_condition1, "-", timepoint_condition2)) %>% 
+
+  # Compute summary statistics per comparison and timepoint
+  group_by(comparison, timepoint_comparison) %>% 
+  mutate(
+    mean = mean(correlation),
     sd   = sd(correlation, na.rm = TRUE),
-    n    = sum(!is.na(correlation)),
+    n = n(),
     se   = sd / sqrt(n),
     tval = qt(0.975, df = n - 1),
     ci_low  = mean - tval * se,
     ci_high = mean + tval * se
   ) %>% 
-  mutate(timepoint = 24,
-         timepoint_human = timepoint)
-  
-
-# --- 3) Mouse vs Mouse ---
-cor_mouse_mouse <- dge_hallmarks_mean_process_sample_long %>%
-  filter(organism == "Mouse") %>%
-  group_by(timepoint) %>%
-  group_modify(~{
-    df <- .x %>%
-      select(participant_id, process, mean_log2fc) %>%
-      pivot_wider(names_from = participant_id, values_from = mean_log2fc) %>%
-      select(-process)
-    
-    # Calculate correlation
-    cor_mat <- cor(df, use = "pairwise.complete.obs", method = "pearson")
-    
-    # Long format
-    cor_long <- as.data.frame(cor_mat) %>%
-      rownames_to_column("participant_1") %>%
-      melt(id.vars = "participant_1", variable.name = "participant_2", value.name = "correlation") %>%
-      filter(participant_1 != participant_2) %>%
-      rowwise() %>%
-      mutate(pair = paste(sort(c(participant_1, participant_2)), collapse = "_")) %>%
-      ungroup() %>%
-      distinct(pair, .keep_all = TRUE)
-    
-    # Summary
-    tibble(
-      comparison = "Mouse vs. Mouse",
-      mean = mean(cor_long$correlation, na.rm = TRUE),
-      sd   = sd(cor_long$correlation, na.rm = TRUE),
-      n    = nrow(cor_long),
-      se   = sd / sqrt(n),
-      tval = qt(0.975, df = n - 1),
-      ci_low  = mean - tval * se,
-      ci_high = mean + tval * se
-    )
-  }) %>%
   ungroup() %>% 
-  mutate(timepoint = as.numeric(timepoint), 
-         timepoint_mouse = timepoint)
+  select(comparison, timepoint_condition1, timepoint_condition2, mean:ci_high) %>% 
+  distinct() %>% 
+  arrange(comparison) %>% 
 
+  # For same-organism comparisons, keep only matching timepoints
+  filter(!(comparison == "Mouse vs. Mouse" & timepoint_condition1 != timepoint_condition2),
+         !(comparison == "Human vs. Human" & timepoint_condition1 != timepoint_condition2)) %>% 
 
-#Unite
-correlation_long_all_hallmarks_mouse_human_timepoints_summary = cor_human_mouse_timepoint %>% 
-  mutate(timepoint = timepoint_mouse) %>% 
-  bind_rows(
-    cor_human_human,
-    cor_mouse_mouse)
+  # Numeric representation of timepoint for plotting
+  mutate(timepoint = timepoint_condition2 %>% as.numeric())
 
-#Print
-correlation_long_all_hallmarks_mouse_human_timepoints_summary
+# Save output
 
 correlation_long_all_hallmarks_mouse_human_timepoints_summary %>% 
   saveRDS(file = here("tables", paste0(filename, "_samples_hallmarks_correlation_all_timepoints_summary.rds")))
+
+
 ```
 
 Plot scatterplot
@@ -4842,10 +4708,10 @@ correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot = correlation
                   ymax = ci_high), 
                 width = 0.2,
                  size = 0.5) +
-  geom_point(pch = 21, color = "black", size = 2) +
+  geom_point(pch = 21, fill = "white", size = 2, stroke = 1.5) +
   scale_x_discrete(expand = c(0.01, 0.01)) +
   scale_y_continuous(expand = c(0.01, 0.01),
-                     limits = c(0, 1)) +
+                     limits = c(-0.2, 1)) +
   theme_vaxgo() +
   scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
                                 "Mouse vs. Mouse" = "#4DBBD5FF",
@@ -4855,7 +4721,7 @@ correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot = correlation
                                 "Human vs. Human" = "#90A4AEFF")) +
   labs(title = "Correlation between organisms,\nMSigDB Hallmarks, Means",
        x = "Hour",
-       y = "Pearson r, mean",
+       y = "Correlation",
        color = "Comparison") +
   theme(legend.position = "right") +
   guides(fill = "none") 
@@ -4968,7 +4834,7 @@ cor_labels <- plot_data %>%
       x = nes_human,
       y = nes_mouse,
       use = "pairwise.complete.obs",
-      method = "pearson"
+      method = "spearman"
     )),
     .groups = "drop"
   ) %>%
@@ -5105,164 +4971,95 @@ mouse_correlation_ggpairs_gsea_alldays %>%
 ##### 1 individual vs 1 individual
 
 ```{r}
-# --- 1) Mouse vs Human no mesmo timepoint ---
-#Get timepoints
-timepoints_human <- unique(df_genes2ssGSEA_human_mice %>% filter(organism == "Human") %>% pull(timepoint))
-timepoints_mouse <- unique(df_genes2ssGSEA_human_mice %>% filter(organism == "Mouse") %>% pull(timepoint))
+# Prepare long-format table of mean log2FC per sample and process
+btm_samples_long = df_genes2ssGSEA_human_mice %>% 
+  select(organism, process, participant_id, timepoint, nes) %>% 
+  distinct() %>% 
+  mutate(condition = paste0(participant_id, "_", timepoint)) 
 
-#Get combinations
-timepoint_combinations <- expand.grid(timepoint_human = timepoints_human,
-                                      timepoint_mouse = timepoints_mouse,
-                                      stringsAsFactors = FALSE)
+# Annotation table
+btm_samples_annotation = btm_samples_long %>% 
+  select(organism, participant_id, timepoint, condition) %>% 
+  distinct()
 
-# Loop
-cor_human_mouse_timepoint <- timepoint_combinations %>%
-  pmap_dfr(function(timepoint_human, timepoint_mouse) {
-    
-    # pegar os participantes do timepoint específico
-    human_df <- df_genes2ssGSEA_human_mice %>%
-      filter(organism == "Human", timepoint == timepoint_human) %>%
-      select(participant_id, process, nes)
-    
-    mouse_df <- df_genes2ssGSEA_human_mice %>%
-      filter(organism == "Mouse", timepoint == timepoint_mouse) %>%
-      select(participant_id, process, nes)
-    
-    # manter apenas genes em comum
-    common_process <- intersect(human_df$process, mouse_df$process)
-    human_df <- human_df %>% filter(process %in% common_process)
-    mouse_df <- mouse_df %>% filter(process %in% common_process)
-    
-    # pivot para wide
-    human_wide <- human_df %>% pivot_wider(names_from = participant_id, values_from = nes)
-    mouse_wide <- mouse_df %>% pivot_wider(names_from = participant_id, values_from = nes)
-    
-    # IDs de participantes
-    human_ids <- setdiff(colnames(human_wide), "process")
-    mouse_ids <- setdiff(colnames(mouse_wide), "process")
-    
-    # calcular correlação para todos pares humano x mouse
-    expand.grid(human = human_ids, mouse = mouse_ids, stringsAsFactors = FALSE) %>%
-      mutate(
-        cor_test = map2(human, mouse, ~{
-          x <- human_wide[[.x]]
-          y <- mouse_wide[[.y]]
-          # remover NAs correspondentes
-          keep <- complete.cases(x, y)
-          cor.test(x[keep], y[keep], method = "pearson")
-        }),
-        r       = map_dbl(cor_test, ~.x$estimate),
-        p_value = map_dbl(cor_test, ~.x$p.value),
-        ci_low  = map_dbl(cor_test, ~.x$conf.int[1]),
-        ci_high = map_dbl(cor_test, ~.x$conf.int[2])
-      ) %>%
-      select(-cor_test) %>%
-      mutate(timepoint_human = timepoint_human %>% as.numeric(),
-             timepoint_mouse = timepoint_mouse %>% as.numeric())
-  }) %>% 
-  group_by(timepoint_human, timepoint_mouse) %>%
-  summarize(
-    comparison = "Human vs. Mouse",
-    mean = mean(r, na.rm = TRUE),
-    sd   = sd(r, na.rm = TRUE),
-    n      = sum(!is.na(r)),
-    se     = sd / sqrt(n),
-    tval   = qt(0.975, df = n - 1),
-    ci_low = mean - tval * se,
-    ci_high = mean + tval * se,
-    .groups = "drop"
-  )
+# Pivot to wide format
+btm_samples_wide_all = btm_samples_long %>% 
+  select(-timepoint, -organism, -participant_id) %>% 
+  pivot_wider(names_from = "condition",
+              values_from = "nes") %>% 
+  column_to_rownames("process")
 
-cor_human_mouse_timepoint
+# Compute Correlations and p-values between all conditions
+cor_btm_samples_wide_all = btm_samples_wide_all %>% 
+  as.matrix() %>% 
+  rcorr(type = "spearman")
 
-# --- 2) Human vs Human (entre timepoints) ---
-cor_human_human <- df_genes2ssGSEA_human_mice %>%
-  mutate(timepoint = as.numeric(timepoint)) %>% 
-  filter(organism == "Human") %>%
-  select(participant_id, process, timepoint, nes) %>%
-  group_by(timepoint) %>% 
-  pivot_wider(
-    names_from = participant_id,
-    values_from = nes
-  ) %>%
-  select(-process, -timepoint) %>%   # só colunas de participantes
-  cor(use = "pairwise.complete.obs", method = "pearson") %>% 
-  as.data.frame() %>%
-  rownames_to_column("participant_1") %>%
-  melt(id.vars = "participant_1", variable.name = "participant_2", value.name = "correlation") %>% 
-  filter(participant_1 != participant_2) %>%   # tira a diagonal (=1)
-  # garantir combinações únicas
-  rowwise() %>%
-  mutate(pair = paste(sort(c(participant_1, participant_2)), collapse = "_")) %>%
-  ungroup() %>%
-  distinct(pair, .keep_all = TRUE) %>%
-  #Summarize
-  summarize(
-    comparison = "Human vs. Human",
-    mean = mean(correlation, na.rm = TRUE),
+# Convert correlation matrix to long format
+cor_btm_samples_wide_all_r = cor_btm_samples_wide_all$r %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "correlation")
+
+# Convert p-value matrix to long format
+cor_btm_samples_wide_all_p = cor_btm_samples_wide_all$P %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "p_value")
+
+# Join correlations, p-values, and sample annotations
+correlation_long_all_btm_mouse_human_timepoints_summary = cor_btm_samples_wide_all_r %>% 
+  inner_join(cor_btm_samples_wide_all_p, 
+             by = join_by("condition1", "condition2")) %>% 
+  inner_join(btm_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition1")) %>% 
+               rename(condition1 = condition_condition1),
+             by = "condition1") %>% 
+  inner_join(btm_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition2")) %>% 
+               rename(condition2 = condition_condition2),
+             by = "condition2") %>% 
+
+  # Remove symmetric duplicates 
+  filter(condition1 < condition2) %>% 
+
+  # Keep Human as reference when comparing human and mouse
+  filter(!(organism_condition1 == "Mouse" & organism_condition2 == "Human")) %>% 
+
+  # Annotate comparison type and timepoints
+  mutate(comparison = paste0(organism_condition1, " vs. ", organism_condition2),
+         timepoint_comparison = paste0(timepoint_condition1, "-", timepoint_condition2)) %>% 
+
+  # Compute summary statistics per comparison and timepoint
+  group_by(comparison, timepoint_comparison) %>% 
+  mutate(
+    mean = mean(correlation),
     sd   = sd(correlation, na.rm = TRUE),
-    n    = sum(!is.na(correlation)),
+    n = n(),
     se   = sd / sqrt(n),
     tval = qt(0.975, df = n - 1),
     ci_low  = mean - tval * se,
     ci_high = mean + tval * se
   ) %>% 
-  mutate(timepoint = 24,
-         timepoint_human = timepoint)
-  
-
-# --- 3) Mouse vs Mouse ---
-cor_mouse_mouse <- df_genes2ssGSEA_human_mice %>%
-  filter(organism == "Mouse") %>%
-  group_by(timepoint) %>%
-  group_modify(~{
-    df <- .x %>%
-      select(participant_id, process, nes) %>%
-      pivot_wider(names_from = participant_id, values_from = nes) %>%
-      select(-process)
-    
-    # Calculate correlation
-    cor_mat <- cor(df, use = "pairwise.complete.obs", method = "pearson")
-    
-    # Long format
-    cor_long <- as.data.frame(cor_mat) %>%
-      rownames_to_column("participant_1") %>%
-      melt(id.vars = "participant_1", variable.name = "participant_2", value.name = "correlation") %>%
-      filter(participant_1 != participant_2) %>%
-      rowwise() %>%
-      mutate(pair = paste(sort(c(participant_1, participant_2)), collapse = "_")) %>%
-      ungroup() %>%
-      distinct(pair, .keep_all = TRUE)
-    
-    # Summary
-    tibble(
-      comparison = "Mouse vs. Mouse",
-      mean = mean(cor_long$correlation, na.rm = TRUE),
-      sd   = sd(cor_long$correlation, na.rm = TRUE),
-      n    = nrow(cor_long),
-      se   = sd / sqrt(n),
-      tval = qt(0.975, df = n - 1),
-      ci_low  = mean - tval * se,
-      ci_high = mean + tval * se
-    )
-  }) %>%
   ungroup() %>% 
-  mutate(timepoint = as.numeric(timepoint), 
-         timepoint_mouse = timepoint)
+  select(comparison, timepoint_condition1, timepoint_condition2, mean:ci_high) %>% 
+  distinct() %>% 
+  arrange(comparison) %>% 
 
+  # For same-organism comparisons, keep only matching timepoints
+  filter(!(comparison == "Mouse vs. Mouse" & timepoint_condition1 != timepoint_condition2),
+         !(comparison == "Human vs. Human" & timepoint_condition1 != timepoint_condition2)) %>% 
 
-#Unite
-correlation_long_all_hallmarks_mouse_human_timepoints_summary = cor_human_mouse_timepoint %>% 
-  mutate(timepoint = timepoint_mouse) %>% 
-  bind_rows(
-    cor_human_human,
-    cor_mouse_mouse)
+  # Numeric representation of timepoint for plotting
+  mutate(timepoint = timepoint_condition2 %>% as.numeric())
 
-#Print
-correlation_long_all_hallmarks_mouse_human_timepoints_summary
+# Save output
 
-correlation_long_all_hallmarks_mouse_human_timepoints_summary %>% 
-  saveRDS(file = here("tables", paste0(filename, "_samples_ssgsea_btms_correlation_all_timepoints_summary.rds")))
+correlation_long_all_btm_mouse_human_timepoints_summary %>% 
+  saveRDS(file = here("tables", paste0(filename, "_samples_ssgsea_btm_correlation_all_timepoints_summary.rds")))
 ```
 
 Plot scatterplot
@@ -5271,7 +5068,7 @@ Plot scatterplot
 #Import
 
 #Scatterplot
-correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot = correlation_long_all_hallmarks_mouse_human_timepoints_summary %>% 
+correlation_long_all_btm_mouse_human_timepoints_summary_plot = correlation_long_all_btm_mouse_human_timepoints_summary %>% 
   mutate(timepoint_num = timepoint,
     timepoint = factor(as.character(timepoint), levels = unique(timepoint[order(timepoint_num)]))) %>% 
   ggplot() +
@@ -5285,7 +5082,7 @@ correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot = correlation
                   ymax = ci_high), 
                 width = 0.2,
                  size = 0.5) +
-  geom_point(pch = 21, color = "black", size = 2) +
+  geom_point(pch = 21, fill = "white", size = 2, stroke = 1.5) +
   scale_x_discrete(expand = c(0.01, 0.01)) +
   scale_y_continuous(expand = c(0.01, 0.01),
                      limits = c(0, 1)) +
@@ -5296,16 +5093,16 @@ correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot = correlation
   scale_fill_manual(values = c("Human vs. Mouse" = "#4361ee",
                                 "Mouse vs. Mouse" = "#4DBBD5FF",
                                 "Human vs. Human" = "#90A4AEFF")) +
-  labs(title = "Correlation between organisms,\n BTMs",
+  labs(title = "Correlation between organisms,\nBTMs, NES",
        x = "Hour",
-       y = "Pearson r, mean",
+       y = "Correlation",
        color = "Comparison") +
   theme(legend.position = "right") +
   guides(fill = "none") 
 
-correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot
+correlation_long_all_btm_mouse_human_timepoints_summary_plot
 
-correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot %>% 
+correlation_long_all_btm_mouse_human_timepoints_summary_plot %>% 
   ggsave(filename = here("Figures", paste0(filename, "_samples_ssgsea_btms_correlation_all_timepoints_summary_plot.png")),
          width = 5,
          height = 3)
@@ -5412,7 +5209,7 @@ cor_labels <- plot_data %>%
       x = nes_human,
       y = nes_mouse,
       use = "pairwise.complete.obs",
-      method = "pearson"
+      method = "spearman"
     )),
     .groups = "drop"
   ) %>%
@@ -5549,160 +5346,91 @@ mouse_correlation_ggpairs_gsea_alldays %>%
 ##### 1 individual vs 1 individual
 
 ```{r}
-# --- 1) Mouse vs Human no mesmo timepoint ---
-#Get timepoints
-timepoints_human <- unique(df_genes2ssGSEA_human_mice %>% filter(organism == "Human") %>% pull(timepoint))
-timepoints_mouse <- unique(df_genes2ssGSEA_human_mice %>% filter(organism == "Mouse") %>% pull(timepoint))
+# Prepare long-format table of mean log2FC per sample and process
+hallmarks_samples_long = df_genes2ssGSEA_human_mice %>% 
+  select(organism, process, participant_id, timepoint, nes) %>% 
+  distinct() %>% 
+  mutate(condition = paste0(participant_id, "_", timepoint)) 
 
-#Get combinations
-timepoint_combinations <- expand.grid(timepoint_human = timepoints_human,
-                                      timepoint_mouse = timepoints_mouse,
-                                      stringsAsFactors = FALSE)
+# Annotation table
+hallmarks_samples_annotation = hallmarks_samples_long %>% 
+  select(organism, participant_id, timepoint, condition) %>% 
+  distinct()
 
-# Loop
-cor_human_mouse_timepoint <- timepoint_combinations %>%
-  pmap_dfr(function(timepoint_human, timepoint_mouse) {
-    
-    # pegar os participantes do timepoint específico
-    human_df <- df_genes2ssGSEA_human_mice %>%
-      filter(organism == "Human", timepoint == timepoint_human) %>%
-      select(participant_id, process, nes)
-    
-    mouse_df <- df_genes2ssGSEA_human_mice %>%
-      filter(organism == "Mouse", timepoint == timepoint_mouse) %>%
-      select(participant_id, process, nes)
-    
-    # manter apenas genes em comum
-    common_process <- intersect(human_df$process, mouse_df$process)
-    human_df <- human_df %>% filter(process %in% common_process)
-    mouse_df <- mouse_df %>% filter(process %in% common_process)
-    
-    # pivot para wide
-    human_wide <- human_df %>% pivot_wider(names_from = participant_id, values_from = nes)
-    mouse_wide <- mouse_df %>% pivot_wider(names_from = participant_id, values_from = nes)
-    
-    # IDs de participantes
-    human_ids <- setdiff(colnames(human_wide), "process")
-    mouse_ids <- setdiff(colnames(mouse_wide), "process")
-    
-    # calcular correlação para todos pares humano x mouse
-    expand.grid(human = human_ids, mouse = mouse_ids, stringsAsFactors = FALSE) %>%
-      mutate(
-        cor_test = map2(human, mouse, ~{
-          x <- human_wide[[.x]]
-          y <- mouse_wide[[.y]]
-          # remover NAs correspondentes
-          keep <- complete.cases(x, y)
-          cor.test(x[keep], y[keep], method = "pearson")
-        }),
-        r       = map_dbl(cor_test, ~.x$estimate),
-        p_value = map_dbl(cor_test, ~.x$p.value),
-        ci_low  = map_dbl(cor_test, ~.x$conf.int[1]),
-        ci_high = map_dbl(cor_test, ~.x$conf.int[2])
-      ) %>%
-      select(-cor_test) %>%
-      mutate(timepoint_human = timepoint_human %>% as.numeric(),
-             timepoint_mouse = timepoint_mouse %>% as.numeric())
-  }) %>% 
-  group_by(timepoint_human, timepoint_mouse) %>%
-  summarize(
-    comparison = "Human vs. Mouse",
-    mean = mean(r, na.rm = TRUE),
-    sd   = sd(r, na.rm = TRUE),
-    n      = sum(!is.na(r)),
-    se     = sd / sqrt(n),
-    tval   = qt(0.975, df = n - 1),
-    ci_low = mean - tval * se,
-    ci_high = mean + tval * se,
-    .groups = "drop"
-  )
+# Pivot to wide format
+hallmarks_samples_wide_all = hallmarks_samples_long %>% 
+  select(-timepoint, -organism, -participant_id) %>% 
+  pivot_wider(names_from = "condition",
+              values_from = "nes") %>% 
+  column_to_rownames("process")
 
-cor_human_mouse_timepoint
+# Compute Correlations and p-values between all conditions
+cor_hallmarks_samples_wide_all = hallmarks_samples_wide_all %>% 
+  as.matrix() %>% 
+  rcorr(type = "spearman")
 
-# --- 2) Human vs Human (entre timepoints) ---
-cor_human_human <- df_genes2ssGSEA_human_mice %>%
-  mutate(timepoint = as.numeric(timepoint)) %>% 
-  filter(organism == "Human") %>%
-  select(participant_id, process, timepoint, nes) %>%
-  group_by(timepoint) %>% 
-  pivot_wider(
-    names_from = participant_id,
-    values_from = nes
-  ) %>%
-  select(-process, -timepoint) %>%   # só colunas de participantes
-  cor(use = "pairwise.complete.obs", method = "pearson") %>% 
-  as.data.frame() %>%
-  rownames_to_column("participant_1") %>%
-  melt(id.vars = "participant_1", variable.name = "participant_2", value.name = "correlation") %>% 
-  filter(participant_1 != participant_2) %>%   # tira a diagonal (=1)
-  # garantir combinações únicas
-  rowwise() %>%
-  mutate(pair = paste(sort(c(participant_1, participant_2)), collapse = "_")) %>%
-  ungroup() %>%
-  distinct(pair, .keep_all = TRUE) %>%
-  #Summarize
-  summarize(
-    comparison = "Human vs. Human",
-    mean = mean(correlation, na.rm = TRUE),
+# Convert correlation matrix to long format
+cor_hallmarks_samples_wide_all_r = cor_hallmarks_samples_wide_all$r %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "correlation")
+
+# Convert p-value matrix to long format
+cor_hallmarks_samples_wide_all_p = cor_hallmarks_samples_wide_all$P %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "p_value")
+
+# Join correlations, p-values, and sample annotations
+correlation_long_all_hallmarks_mouse_human_timepoints_summary = cor_hallmarks_samples_wide_all_r %>% 
+  inner_join(cor_hallmarks_samples_wide_all_p, 
+             by = join_by("condition1", "condition2")) %>% 
+  inner_join(hallmarks_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition1")) %>% 
+               rename(condition1 = condition_condition1),
+             by = "condition1") %>% 
+  inner_join(hallmarks_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition2")) %>% 
+               rename(condition2 = condition_condition2),
+             by = "condition2") %>% 
+
+  # Remove symmetric duplicates 
+  filter(condition1 < condition2) %>% 
+
+  # Keep Human as reference when comparing human and mouse
+  filter(!(organism_condition1 == "Mouse" & organism_condition2 == "Human")) %>% 
+
+  # Annotate comparison type and timepoints
+  mutate(comparison = paste0(organism_condition1, " vs. ", organism_condition2),
+         timepoint_comparison = paste0(timepoint_condition1, "-", timepoint_condition2)) %>% 
+
+  # Compute summary statistics per comparison and timepoint
+  group_by(comparison, timepoint_comparison) %>% 
+  mutate(
+    mean = mean(correlation),
     sd   = sd(correlation, na.rm = TRUE),
-    n    = sum(!is.na(correlation)),
+    n = n(),
     se   = sd / sqrt(n),
     tval = qt(0.975, df = n - 1),
     ci_low  = mean - tval * se,
     ci_high = mean + tval * se
   ) %>% 
-  mutate(timepoint = 24,
-         timepoint_human = timepoint)
-  
-
-# --- 3) Mouse vs Mouse ---
-cor_mouse_mouse <- df_genes2ssGSEA_human_mice %>%
-  filter(organism == "Mouse") %>%
-  group_by(timepoint) %>%
-  group_modify(~{
-    df <- .x %>%
-      select(participant_id, process, nes) %>%
-      pivot_wider(names_from = participant_id, values_from = nes) %>%
-      select(-process)
-    
-    # Calculate correlation
-    cor_mat <- cor(df, use = "pairwise.complete.obs", method = "pearson")
-    
-    # Long format
-    cor_long <- as.data.frame(cor_mat) %>%
-      rownames_to_column("participant_1") %>%
-      melt(id.vars = "participant_1", variable.name = "participant_2", value.name = "correlation") %>%
-      filter(participant_1 != participant_2) %>%
-      rowwise() %>%
-      mutate(pair = paste(sort(c(participant_1, participant_2)), collapse = "_")) %>%
-      ungroup() %>%
-      distinct(pair, .keep_all = TRUE)
-    
-    # Summary
-    tibble(
-      comparison = "Mouse vs. Mouse",
-      mean = mean(cor_long$correlation, na.rm = TRUE),
-      sd   = sd(cor_long$correlation, na.rm = TRUE),
-      n    = nrow(cor_long),
-      se   = sd / sqrt(n),
-      tval = qt(0.975, df = n - 1),
-      ci_low  = mean - tval * se,
-      ci_high = mean + tval * se
-    )
-  }) %>%
   ungroup() %>% 
-  mutate(timepoint = as.numeric(timepoint), 
-         timepoint_mouse = timepoint)
+  select(comparison, timepoint_condition1, timepoint_condition2, mean:ci_high) %>% 
+  distinct() %>% 
+  arrange(comparison) %>% 
 
+  # For same-organism comparisons, keep only matching timepoints
+  filter(!(comparison == "Mouse vs. Mouse" & timepoint_condition1 != timepoint_condition2),
+         !(comparison == "Human vs. Human" & timepoint_condition1 != timepoint_condition2)) %>% 
 
-#Unite
-correlation_long_all_hallmarks_mouse_human_timepoints_summary = cor_human_mouse_timepoint %>% 
-  mutate(timepoint = timepoint_mouse) %>% 
-  bind_rows(
-    cor_human_human,
-    cor_mouse_mouse)
+  # Numeric representation of timepoint for plotting
+  mutate(timepoint = timepoint_condition2 %>% as.numeric())
 
-#Print
 correlation_long_all_hallmarks_mouse_human_timepoints_summary
 
 correlation_long_all_hallmarks_mouse_human_timepoints_summary %>% 
@@ -5729,10 +5457,10 @@ correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot = correlation
                   ymax = ci_high), 
                 width = 0.2,
                  size = 0.5) +
-  geom_point(pch = 21, color = "black", size = 2) +
+  geom_point(pch = 21, fill = "white", size = 2, stroke = 1.5) +
   scale_x_discrete(expand = c(0.01, 0.01)) +
   scale_y_continuous(expand = c(0.01, 0.01),
-                     limits = c(-0.1, 1)
+                     limits = c(-0.3, 1)
                      ) +
   theme_vaxgo() +
   scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
@@ -5743,7 +5471,7 @@ correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot = correlation
                                 "Human vs. Human" = "#90A4AEFF")) +
   labs(title = "Correlation between organisms,\nMSigDB Hallmarks, NES",
        x = "Hour",
-       y = "Pearson r, mean",
+       y = "Correlation",
        color = "Comparison") +
   theme(legend.position = "right") +
   guides(fill = "none") 
