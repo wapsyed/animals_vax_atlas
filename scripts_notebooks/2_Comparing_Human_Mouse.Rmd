@@ -2668,11 +2668,7 @@ human_mouse_fluad_metadata =
 all_degs_human_mouse = readRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds")) %>% 
   mutate(pathogen = "Influenza", treatment = "Fluad") %>% 
   rename(mean_l2fc = mean, ci_lower = lower, ci_upper = upper)
-
-  
 ```
-
-
 
 ```{r}
 # #Input
@@ -3484,9 +3480,9 @@ dge_btm_nes_group_correlation_plot =  dge_btm_nes_group_correlation_df %>%
   scale_color_manual(values = immune_colors) +
   guides(color = F) +
   labs(fill = "Group",
-       y = "Human (Mean Log2FC)",
-       x = "Model (Mean Log2FC)",
-       title = paste0("BTM immune, GSEA, Log2FC mean, ", filename),
+       y = "Human (NES)",
+       x = "Model (NES)",
+       title = paste0("BTM immune, GSEA, NES, ", filename),
        subtitle = "Processes that have padj <0.25 in both human and model have alpha = 1.") +
   ylim(-4, 4) +
   xlim(-4, 4) +
@@ -3505,7 +3501,7 @@ dge_btm_nes_group_correlation_plot
 dge_btm_nes_group_correlation_plot_corlabels =  dge_btm_nes_group_correlation_plot +
     #Plot correlation labels
   geom_label(data = cor_labels_nes,
-             aes(x = -1, y = Inf, label = cor_label),
+             aes(x = -4, y = Inf, label = cor_label),
              fill= "white",
              color = "black", 
                    label.padding = unit(0.3, "lines"),
@@ -3891,8 +3887,6 @@ dge_hallmarks_process_genes_correlation_plot = dge_hallmarks_process_genes_wide 
           ) +
   guides(fill = guide_legend(ncol = 1))
 
-dge_hallmarks_process_genes_correlation_plot
-
 #Save results
 dge_hallmarks_process_genes_correlation_plot %>%
   ggsave(filename = here("Figures", paste0(filename, "_dge_hallmarks_process_genes_correlation_plot_facetted.png")),
@@ -3940,7 +3934,8 @@ dge_hallmarks_process_genes_wide = dge_hallmarks_process_genes_matched  %>%
   pivot_wider(names_from = organism,
               values_from = c(mean_l2fc, adj_p_val)) %>% 
   ungroup() %>% 
-  drop_na(mean_l2fc_Human)
+  drop_na(mean_l2fc_Human) %>%
+  mutate(timepoint = as.numeric(timepoint))
 
 
 
@@ -3974,13 +3969,17 @@ cor_labels <- dge_hallmarks_process_genes_wide %>%
     timepoint = paste0("Day ", timepoint),
     timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
 
+safe_cor_test <- purrr::possibly(
+  ~cor.test(.x, .y,  method = "spearman"),
+  otherwise = NULL
+)
 cor_labels_sig <- dge_hallmarks_process_genes_wide %>%
     inner_join(dge_hallmarks_gsea_mean_wide %>% select(process, timepoint, p_adjust_Mouse, p_adjust_Human) %>% 
                filter(p_adjust_Mouse <= 0.25, p_adjust_Human <= 0.25),
              by = join_by("process", "timepoint")) %>% 
   select(process, timepoint, Mouse = mean_l2fc_Mouse, Human = mean_l2fc_Human) %>% 
   group_by(timepoint) %>% 
-  summarise(test_result = list(cor.test(x = Human, 
+  summarise(test_result = list(safe_cor_test(x = Human, 
                                         y = Mouse, 
                                         method = "spearman")), 
             .groups = "drop") %>%
@@ -4012,7 +4011,7 @@ cor_labels_nes <- dge_hallmarks_gsea_mean_wide %>%
   ungroup() %>% 
   select(process, timepoint,  Mouse = nes_Mouse, Human = nes_Human) %>% 
   group_by(timepoint) %>% 
-  summarise(test_result = list(cor.test(x = Human, 
+  summarise(test_result = list(safe_cor_test(x = Human, 
                                         y = Mouse, 
                                         method = "spearman")), 
             .groups = "drop") %>%
@@ -4052,7 +4051,7 @@ cor_labels_nes_sig <- dge_hallmarks_gsea_mean_wide %>%
   select(process, timepoint, Mouse = nes_Mouse, Human = nes_Human) %>% 
   group_by(timepoint) %>% 
   summarise(
-    test_result = list(cor.test(x = Human, 
+    test_result = list(safe_cor_test(x = Human, 
                                         y = Mouse, 
                                         method = "spearman")),
     .groups = "drop"
@@ -4080,10 +4079,6 @@ cor_labels_nes_sig <- dge_hallmarks_gsea_mean_wide %>%
     timepoint = paste0("Day ", timepoint),
     timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))
   )
-
-
-cor_labels_nes_all_filtered = cor_labels_nes %>% 
-  inner_join(cor_labels_nes_sig, by = join_by("timepoint"), suffix = c("_all", "_filtered"))
 
 
 ```
@@ -4134,8 +4129,8 @@ dge_hallmarks_mean_group_correlation_plot =  dge_hallmarks_mean_group_correlatio
        x = "Model (Mean Log2FC)",
        title = paste0("MSigDB Hallmarks, GSEA, Log2FC mean, ", filename),
        subtitle = "Processes that have padj <0.25 in both human and model have alpha = 1.") +
-  # ylim(-0.3, 0.3) +
-  # xlim(-0.3, 0.3) +
+  ylim(-1, 1) +
+  xlim(-1, 1) +
   #Theme
     theme_vaxgo() +
     theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
@@ -9306,7 +9301,7 @@ degs_human_mouse_overlap_common_plot %>%
 
 
 
-## Correlation analysis (TERMINAR)
+## Correlation analysis 
 ```{r}
 all_degs_human_mouse = readRDS(here("tables", "saureus_infection_human_mouse_dge_limma_degs.rds"))  
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
@@ -9534,19 +9529,24 @@ human_mouse_saureus_log2fc_samples$organism %>% unique()
 # human_degs = all_degs_human_mouse %>%
 #   group_by(timepoint) %>%
 #   filter(adj_p_val <= 0.05, organism == "Human") %>%
-#   select(human_symbol, timepoint)
+#   ungroup() %>% 
+#   select(human_symbol)
+# 
 # human_mouse = mouse_degs %>%
-#   inner_join(human_degs, by = join_by("human_symbol", "timepoint"))
+#   inner_join(human_degs, by = join_by("human_symbol")) %>% 
+#   ungroup() %>% 
+#   select(-timepoint) %>% 
+#   distinct()
 # 
 # human_mouse_log2fc_samples = human_mouse_saureus_log2fc_samples  %>%
-#   inner_join(human_mouse, by = join_by(timepoint, human_symbol))
+#   inner_join(human_mouse, by = join_by("human_symbol"))
 
 #Input
-# filename = "saureus_infection_human_mouse"
-# gene_set_name = "DEGs_Immune"
-# human_mouse_log2fc_samples = human_mouse_saureus_log2fc_samples  %>%
-#   inner_join(human_mouse, by = join_by("human_symbol", "timepoint")) %>%
-#   filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
+filename = "saureus_infection_human_mouse"
+gene_set_name = "DEGs_Immune"
+human_mouse_log2fc_samples = human_mouse_saureus_log2fc_samples  %>%
+  inner_join(human_mouse, by = join_by("human_symbol")) %>%
+  filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
 
 ```
 
@@ -13682,7 +13682,7 @@ btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"
 #   filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
 
 
-# #Input
+#Input
 # filename = "ecoli_infection_human_mouse"
 # gene_set_name = "DEGs"
 # mouse_degs = all_degs_human_mouse %>%
@@ -13692,20 +13692,23 @@ btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"
 # human_degs = all_degs_human_mouse %>%
 #   group_by(timepoint) %>%
 #   filter(adj_p_val <= 0.05, organism == "Human") %>%
-#   ungroup() %>% 
+#   ungroup() %>%
 #   select(human_symbol)
 # 
 # human_mouse = mouse_degs %>%
-#   inner_join(human_degs, by = join_by("human_symbol"))
+#   inner_join(human_degs, by = join_by("human_symbol")) %>%
+#   ungroup() %>%
+#   select(-timepoint) %>%
+#   distinct()
 # 
 # human_mouse_log2fc_samples = human_mouse_ecoli_log2fc_samples  %>%
-#   inner_join(human_mouse, by = join_by("human_symbol", "timepoint"))
+#   inner_join(human_mouse, by = join_by("human_symbol"))
 
-#Input
+# #Input
 filename = "ecoli_infection_human_mouse"
 gene_set_name = "DEGs_Immune"
 human_mouse_log2fc_samples = human_mouse_ecoli_log2fc_samples  %>%
-  inner_join(human_mouse, by = join_by("human_symbol", "timepoint")) %>%
+  inner_join(human_mouse, by = join_by("human_symbol")) %>%
   filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
 
 ```
@@ -13799,7 +13802,7 @@ correlation_long_all_mouse_human_timepoints_summary = cor_genes_samples_wide_all
   ungroup() %>% 
   select(comparison, timepoint_condition1, timepoint_condition2, mean:ci_high, n_genes) %>% 
   distinct() %>% 
-  arrange(comparison)   %>% 
+  arrange(comparison)  %>% 
   # For same-organism comparisons, keep only matching timepoints
   filter(!(comparison == "Mouse vs. Mouse" & timepoint_condition1 != timepoint_condition2),
          !(comparison == "Human vs. Human" & timepoint_condition1 != timepoint_condition2)) %>% 
@@ -13840,6 +13843,8 @@ correlation_long_all_mouse_human_timepoints_summary_plot = correlation_long_all_
        color = "Comparison") +
   theme(legend.position = "right") +
   guides(fill = "none") 
+
+correlation_long_all_mouse_human_timepoints_summary_plot
 
 
 correlation_long_all_mouse_human_timepoints_summary_plot %>% 
@@ -14254,7 +14259,8 @@ dge_btm_process_genes_wide = dge_btm_process_genes_matched  %>%
               values_from = c(mean_l2fc, adj_p_val)) %>% 
   ungroup() %>% 
   mutate(group = fct_relevel(group, c(immune_order))) %>% 
-  drop_na(mean_l2fc_Human)
+  drop_na(mean_l2fc_Human) %>% 
+  mutate(timepoint = as.numeric(timepoint))
 
 
 ```
@@ -14269,8 +14275,7 @@ cor_labels <- dge_btm_process_genes_wide %>%
   group_by(timepoint) %>% 
   summarise(test_result = list(cor.test(x = Human, 
                                         y = Mouse, 
-                                        use = "pairwise.complete.obs", 
-                                        method = "pearson")), 
+                                        method = "spearman")), 
             .groups = "drop") %>%
   mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
          p_value = purrr::map_dbl(test_result, "p.value")) %>%
@@ -14288,21 +14293,20 @@ cor_labels <- dge_btm_process_genes_wide %>%
     cor_label = paste0("r=", round(cor_value, 2),
       ", R²=", round(r_squared, 2),
       ", ", p_label)) %>% 
-  mutate(timepoint_num = readr::parse_number(timepoint),
+  mutate(timepoint_num = timepoint,
     timepoint = paste0(timepoint, "h"),
     timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
 
 
 cor_labels_sig <- dge_btm_process_genes_wide %>%
-  inner_join(dge_hallmarks_gsea_mean_wide %>% select(process, timepoint, p_adjust_Mouse, p_adjust_Human) %>% 
+  inner_join(dge_btm_gsea_mean_wide %>% select(process, timepoint, p_adjust_Mouse, p_adjust_Human) %>% 
                filter(p_adjust_Mouse <= 0.25, p_adjust_Human <= 0.25),
              by = join_by("process", "timepoint")) %>% 
   select(process, timepoint, group, Mouse = mean_l2fc_Mouse, Human = mean_l2fc_Human) %>% 
   group_by(timepoint) %>% 
   summarise(test_result = list(cor.test(x = Human, 
                                         y = Mouse, 
-                                        use = "pairwise.complete.obs", 
-                                        method = "pearson")), 
+                                        method = "spearman")), 
             .groups = "drop") %>%
   mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
          p_value = purrr::map_dbl(test_result, "p.value")) %>%
@@ -14320,7 +14324,7 @@ cor_labels_sig <- dge_btm_process_genes_wide %>%
     cor_label = paste0("r=", round(cor_value, 2),
       ", R²=", round(r_squared, 2),
       ", ", p_label)) %>% 
-  mutate(timepoint_num = readr::parse_number(timepoint),
+  mutate(timepoint_num = timepoint,
     timepoint = paste0(timepoint, "h"),
     timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
 
@@ -14331,8 +14335,7 @@ cor_labels_nes <- dge_btm_gsea_mean_wide %>%
   group_by(timepoint) %>% 
   summarise(test_result = list(cor.test(x = Human, 
                                         y = Mouse, 
-                                        use = "pairwise.complete.obs", 
-                                        method = "pearson")), 
+                                        method = "spearman")), 
             .groups = "drop") %>%
   mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
          p_value = purrr::map_dbl(test_result, "p.value")) %>%
@@ -14350,20 +14353,21 @@ cor_labels_nes <- dge_btm_gsea_mean_wide %>%
     cor_label = paste0("r=", round(cor_value, 2),
       ", R²=", round(r_squared, 2),
       ", ", p_label)) %>% 
-  mutate(timepoint_num = readr::parse_number(timepoint),
+  mutate(timepoint_num = timepoint,
     timepoint = paste0(timepoint, "h"),
     timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
 
 
-cor_labels_nes_sig <- dge_btm_gsea_mean_wide %>%
-  filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25) %>%
+cor_labels_nes_sig <- dge_btm_process_genes_wide %>%
+  inner_join(dge_btm_gsea_mean_wide %>% select(process, timepoint, p_adjust_Mouse, p_adjust_Human) %>% 
+               filter(p_adjust_Mouse <= 0.25, p_adjust_Human <= 0.25),
+             by = join_by("process", "timepoint")) %>% 
   ungroup() %>% 
   select(process, timepoint, group, subgroup, Mouse = nes_Mouse, Human = nes_Human) %>% 
   group_by(timepoint) %>% 
   summarise(test_result = list(cor.test(x = Human, 
                                         y = Mouse, 
-                                        use = "pairwise.complete.obs", 
-                                        method = "pearson")), 
+                                        method = "spearman")), 
             .groups = "drop") %>%
   mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
          p_value = purrr::map_dbl(test_result, "p.value")) %>%
@@ -14381,9 +14385,9 @@ cor_labels_nes_sig <- dge_btm_gsea_mean_wide %>%
     cor_label = paste0("r=", round(cor_value, 2),
       ", R²=", round(r_squared, 2),
       ", ", p_label)) %>% 
-  mutate(timepoint_num = readr::parse_number(timepoint),
+  mutate(timepoint_num = timepoint,
     timepoint = paste0(timepoint, "h"),
-    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)])))  
 
 ```
 

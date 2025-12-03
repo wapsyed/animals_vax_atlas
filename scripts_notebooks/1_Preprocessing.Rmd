@@ -5620,6 +5620,222 @@ all_degs %>%
 
 
 
+
+###### T test (TERMINAR)
+```{r}
+#Import
+mouse_exprs = readRDS(file = here("tables", "saureus_infection_mouse_exprs_hgnc_symbol_long.rds"))
+mouse_metadata = readRDS(file = here("tables", "saureus_infection_mouse_metadata.rds"))
+log2fc_sample = readRDS(here("tables", "saureus_infection_mouse_log2fc_sample_clean_long.rds"))
+log2fc_sample_symbol = log2fc_sample %>% 
+  inner_join(mouse_exprs %>% 
+               select(human_symbol, probe_id = probe),
+             by = "probe_id")
+
+```
+
+
+```{r}
+#Compute summary statistics
+log2fc_summary = log2fc_sample_symbol %>% 
+  group_by(human_symbol, timepoint) %>%
+  summarize(
+    avg_log2fc = mean(log2fc, na.rm = TRUE),  # mean log2 fold change
+    n_subjects = n(),                         # number of samples
+    sd = sd(log2fc, na.rm = TRUE),             # standard deviation
+    se = sd / sqrt(n_subjects),               # standard error
+    effect_size = avg_log2fc / sd)            # Cohen’s d-like effect size
+
+log2_hgnc_symbol_wide = mouse_exprs %>%
+  select(-probe) %>% 
+  pivot_longer(cols = -human_symbol,
+               names_to = "geo_sample",
+               values_to = "log2") %>% 
+  inner_join(mouse_metadata %>% 
+               select(geo_sample, subject_id, timepoint),
+             by = "geo_sample") %>% 
+  select(human_symbol, subject_id, timepoint, log2) %>% 
+  distinct() %>% 
+  select(subject_id, human_symbol, timepoint, value = log2) %>%
+  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "hour_") 
+
+# Paired t-test
+log2fc_paired_ttest <- log2_hgnc_symbol_wide %>%
+  group_by(human_symbol) %>%
+  
+  summarise(
+    pval_hour2 = tryCatch(t.test(hour_2, hour_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_hour6 = tryCatch(t.test(hour_6, hour_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_hour12 = tryCatch(t.test(hour_12, hour_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_hour24 = tryCatch(t.test(hour_24, hour_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    .groups = 'drop'
+  ) %>%
+  
+  mutate(
+    padj_hour2 = p.adjust(pval_hour2, method = "fdr"),
+    padj_hour6 = p.adjust(pval_hour6, method = "fdr"),
+    padj_hour12 = p.adjust(pval_hour12, method = "fdr"),
+    padj_hour24 = p.adjust(pval_hour24, method = "fdr"),
+  ) %>% 
+  pivot_longer(
+    cols = starts_with(c("pval_", "padj_")),
+    names_to = c(".value", "timepoint"),
+    names_pattern = "(pval|padj)_(hour\\d+)"
+  ) %>% 
+  mutate(timepoint = str_remove(timepoint, "hour"),
+         test = "t-Test",
+         paired = "Paired")
+
+#Unpaired
+log2fc_unpaired_ttest = log2_hgnc_symbol_wide %>%
+  group_by(human_symbol) %>%
+  
+  summarise(
+    pval_hour2 = tryCatch(t.test(hour_2, hour_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_hour6 = tryCatch(t.test(hour_6, hour_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_hour12 = tryCatch(t.test(hour_12, hour_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_hour24 = tryCatch(t.test(hour_24, hour_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    .groups = 'drop'
+  ) %>%
+  
+  mutate(
+    padj_hour2 = p.adjust(pval_hour2, method = "fdr"),
+    padj_hour6 = p.adjust(pval_hour6, method = "fdr"),
+    padj_hour12 = p.adjust(pval_hour12, method = "fdr"),
+    padj_hour24 = p.adjust(pval_hour24, method = "fdr"),
+  ) %>% 
+  pivot_longer(
+    cols = starts_with(c("pval_", "padj_")),
+    names_to = c(".value", "timepoint"),
+    names_pattern = "(pval|padj)_(hour\\d+)"
+  ) %>% 
+  mutate(timepoint = str_remove(timepoint, "hour"),
+         test = "t-Test",
+         paired = "Unpaired") 
+
+log2fc_paired_unpaired_ttest = log2fc_unpaired_ttest %>% 
+  bind_rows(log2fc_paired_ttest) 
+
+log2fc_paired_unpaired_ttest %>% 
+  saveRDS(file = here("tables", "ecoli_infection_mouse_log2fc_paired_unpaired_ttest.rds"))
+
+```
+
+
+###### Compare DGE methods
+
+```{r}
+#Import ------
+#t-Test
+mouse_log2fc_paired_unpaired_ttest =
+  readRDS(file = here("tables", "ecoli_infection_mouse_log2fc_paired_unpaired_ttest.rds")) %>% 
+  mutate(organism = "Mouse")
+
+#Limma
+mouse_degs = readRDS(file = here("tables", "ecoli_infection_mouse_dge_limma_degs.rds")) %>% 
+  clean_names() %>% 
+  rename(padj = adj_p_val) %>% 
+  mutate(organism = "Mouse",
+         test = "Limma",
+         paired = "Paired") 
+
+
+#Merge datasets
+degs_ttest_limma =
+  bind_rows(
+    mouse_log2fc_paired_unpaired_ttest,
+    mouse_degs
+    )
+
+#Summarize  
+degs_ttest_limma_summary = degs_ttest_limma %>% 
+  group_by(organism, timepoint, test, paired) %>% 
+  summarise(
+    n_degs = sum(padj <= 0.05, na.rm = TRUE),
+    .groups = "drop"
+  ) %>% 
+  mutate(timepoint_num = readr::parse_number(timepoint),
+    timepoint = paste0(timepoint, "h"),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+
+degs_ttest_limma_summary
+
+```
+
+
+```{r fig.height=5, fig.width=5}
+# Plot number of DEGs per test and significance level
+degs_ttest_limma_summary_plot_gg <- degs_ttest_limma_summary %>%
+  ggplot(aes(
+    x = timepoint,
+    y = n_degs,
+    fill = test,
+    alpha = paired
+  )) +
+  geom_col(width = 0.8, position = position_dodge2()) +
+  
+  # Manual colors per test
+  scale_fill_manual(values = c(
+    "t-Test" = "gray25",
+    "Limma" = "#4DBBD5FF"
+  )) +
+  
+  # Alpha: paired = 1, unpaired = 0.5
+  scale_alpha_manual(values = c("Paired" = 1, "Unpaired" = 0.2)) +
+  
+  # Continuous x-axis for numeric timepoints
+  scale_x_discrete(
+    breaks = sort(unique(degs_ttest_limma_summary$timepoint)),
+    expand = c(0.01, 0.01)
+  ) +
+  scale_y_continuous(expand = c(0, 0)) +
+  
+  theme_vaxgo() +
+  labs(
+    title = "Total DEGs by test and timepoint",
+    subtitle = "Comparison across tests (FDR ≤ 0.05)",
+    x = "Day",
+    y = "Number of DEGs",
+    fill = "Test",
+    alpha = "Pairing"
+  ) +
+  facet_wrap(~organism, scales = "free_y") +
+  theme(
+    legend.position = "top",
+    axis.line.y = element_blank(),
+    panel.grid.major.y = element_line(color = "gray75", linetype = 3),
+    axis.ticks.y = element_line(color = "gray75")
+  )
+
+# Render plot
+degs_ttest_limma_summary_plot_gg
+
+degs_ttest_limma_summary_plot_gg %>% 
+  ggsave(filename = here("Figures", "ecoli_infection_mouse_dge_ttest_limma_summary.png"),
+         width = 5,
+         height = 5)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
 ##Import
 
 
