@@ -1434,7 +1434,10 @@ degs_human_mouse_overlap_common_plot %>%
          height = 5)
 ```
 
-## Genes correlation, intra- and inter-species, samples
+
+## Correlation
+
+### Correlation: Genes, samples
 
 ```{r}
 #Import
@@ -1903,6 +1906,204 @@ correlation_long_all_mouse_human_timepoints_summary_plot %>%
                          height = 3)
   
 ```
+
+
+
+### Correlation: Genes, means
+```{r}
+#Import
+all_degs_human_mouse = readRDS(file = here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds"))
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+
+filename = "influenza_fluad_human_mouse"
+#Pivot wider
+human_mouse_log2fc_avg_wide = all_degs_human_mouse %>% 
+  select(organism, human_symbol, timepoint, mean_log2fc = mean, p_adj = adj_p_val) %>% 
+  pivot_wider(names_from = "organism",
+              values_from = c(mean_log2fc, p_adj),
+              names_sep = "_") %>% 
+  clean_names() %>% 
+  #Drop genes that are absent in one of the organisms 
+  drop_na() %>% 
+  mutate(timepoint = paste0("Day ", timepoint))
+
+# Calculate the correlation
+#Get immune and non immune genes
+human_mouse_log2fc_avg_wide_degs_immune_nonimmune = 
+  
+  human_mouse_log2fc_avg_wide %>%
+  mutate(gene_type = "all") %>% 
+  
+  #Filter DEGs in both organisms, same sign
+  filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05) %>% 
+  
+  bind_rows(
+  #Classify as immune or non_immune 
+    human_mouse_log2fc_avg_wide %>% 
+  mutate(gene_type = if_else(human_symbol %in% btm_annotation_genes$symbol,
+                             "immune",
+                             "non_immune")) %>% 
+    #Filter DEGs in both organisms, same sign
+  filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05 
+         # & sign(mean_log2fc_human) == sign(mean_log2fc_mouse))
+  ))
+  
+   
+
+#Summary
+degs_immune_nonimmune_summary = human_mouse_log2fc_avg_wide_degs_immune_nonimmune %>% 
+  group_by(timepoint, gene_type) %>% 
+  summarise(n_genes = n(), .groups = "drop")
+
+# Calculate the correlation
+safe_cor_test <- purrr::possibly(
+  ~cor.test(.x, .y,  method = "spearman"),
+  otherwise = NULL
+)
+cor_data <- human_mouse_log2fc_avg_wide_degs_immune_nonimmune %>%
+  group_by(timepoint, gene_type) %>%
+  summarise(
+    cor_test = list(safe_cor_test(mean_log2fc_mouse, mean_log2fc_human)),
+    .groups = "drop"
+  ) %>%
+  inner_join(degs_immune_nonimmune_summary, by = join_by("timepoint", "gene_type")) %>% 
+  mutate(
+    cor_value = map_dbl(cor_test, ~ if (is.null(.x)) NA_real_ else .x$estimate),
+    p_value   = map_dbl(cor_test, ~ if (is.null(.x)) NA_real_ else .x$p.value),
+    p_label = case_when(
+      is.na(p_value)      ~ "ns",
+      p_value <= 0.01     ~ "***",
+      p_value <= 0.05     ~ "**",
+      p_value <= 0.10     ~ "*",
+      TRUE                ~ "ns"
+    ),
+    label = paste0("r=", round(cor_value, 2), ", n=", n_genes, ", ", p_label)
+  ) %>% 
+  drop_na(cor_value)
+
+  cor_data
+```
+
+```{r fig.height=3, fig.width=6}
+
+human_mouse_log2fc_log2fc_avg_wide_scatterplot = human_mouse_log2fc_avg_wide %>% 
+  
+  #Filter DEGs only
+  filter(p_adj_human <= 0.05 | p_adj_mouse <= 0.05) %>%
+  
+  #Plot
+  ggplot() +
+  aes(x = mean_log2fc_mouse,
+      y = mean_log2fc_human) +
+  
+  #All DEGs
+  geom_point(color = "gray90") +
+  
+  #Facet
+  facet_wrap(~timepoint, nrow = 1) +
+  
+  #DEGs in both organisms
+  geom_point(color = "#4DBBD5FF",
+             fill = "#4DBBD5FF",
+             alpha = 1.5,
+             size = 1,
+             pch = 21,
+             data = human_mouse_log2fc_avg_wide %>%
+               #Filter DEGs in both organisms, same sign
+               filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05 
+                      # & sign(mean_log2fc_human) == sign(mean_log2fc_mouse)
+                      )) +
+  
+  #Immune DEGs
+  geom_point(color = "#4361ee",
+             fill = "#4361ee",
+             alpha = 1.5,
+             size = 1,
+             pch = 21,
+             data = human_mouse_log2fc_avg_wide %>%
+               filter(human_symbol %in% c(btm_annotation_genes$symbol)) %>% 
+               #Filter DEGs in both organisms, same sign
+               filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05 
+                      # & sign(mean_log2fc_human) == sign(mean_log2fc_mouse)
+                      )) +
+  
+  #Add correlation metrics (Immune)
+  geom_label(
+    data = cor_data %>% filter(gene_type == "all"),
+    aes(x = 0, y = 7, label = label),
+    inherit.aes = FALSE,
+    fill = "white",
+    hjust = 0,
+    vjust = 1,
+    size = 2.5) +
+    geom_label(
+    data = cor_data %>% filter(gene_type == "non_immune"),
+    aes(x = 0, y = 6, label = label),
+    inherit.aes = FALSE,
+    fill = "#4DBBD5FF",
+    color = "white",
+    hjust = 0,
+    vjust = 1,
+    size = 2.5) +
+  geom_label(
+    data = cor_data %>% filter(gene_type == "immune"),
+    aes(x = 0, y = 5, label = label),
+    inherit.aes = FALSE,
+    fill = "#4361ee", 
+    color = "white",
+    hjust = 0,
+    vjust = 1,
+    size = 2.5) +
+  
+  #Add lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  
+  #Adjust the axes range
+  xlim(-5, 5) +
+
+  #Theme
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size =10),
+        axis.text.y = element_text(size = 10),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
+  theme(legend.position = "none",
+        legend.direction = "horizontal") +
+  labs(x = "Mouse L2FC",
+       y = "Human L2FC",
+       title= "Correlation plot, Fluad,\nHuman vs Mouse")
+
+human_mouse_log2fc_log2fc_avg_wide_scatterplot
+
+human_mouse_log2fc_log2fc_avg_wide_scatterplot %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_dge_degs_scatterplot.png")),
+         width = 6, height = 3)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ### Zscores
 
