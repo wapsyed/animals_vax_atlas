@@ -171,7 +171,7 @@ mouse_fluad_log2summary = GSE120661_exprs %>% #20,845 probes
                names_to = "sample",
                values_to = "expression") %>% 
   group_by(probe) %>% 
-  summarize(mean = mean(expression,na.rm = TRUE),
+  summarise(mean = mean(expression,na.rm = TRUE),
             median = median(expression, na.rm = T)) %>%  
   inner_join(annot %>% 
               rename(probe = agilent_sureprint_g3_ge_8x60k), 
@@ -387,7 +387,7 @@ all_degs_mouse = all_contrasts_degs %>%
 all_degs_mouse %>% 
   group_by(condition) %>%
   filter(adj_p_val <= 0.05) %>% 
-  summarize(n_degs = n())
+  summarise(n_degs = n())
 	
 #Save
 all_degs_mouse %>% saveRDS(file = here("tables", "influenza_fluad_mouse_dge_limma_degs.rds"))
@@ -409,7 +409,7 @@ mouse_fluad_log2_hgnc_symbol = readRDS(here("tables", "influenza_fluad_mouse_exp
 #Compute summary statistics
 fluad_log2fc_summary = mouse_fluad_log2fc_filtered_sample_long %>% 
   group_by(human_symbol, timepoint) %>%
-  summarize(
+  summarise(
     avg_log2fc = mean(log2fc, na.rm = TRUE),  # mean log2 fold change
     n_subjects = n(),                         # number of samples
     sd = sd(value, na.rm = TRUE),             # standard deviation
@@ -564,7 +564,7 @@ GSE124689_counts_genes_selected = GSE124689_counts %>%
                values_to = "expression") %>% 
   group_by(entrez_id, gene_id) %>% 
   drop_na(entrez_id) %>% 
-  summarize(median = median(expression),
+  summarise(median = median(expression),
             median = round(median, 10)) %>% 
   slice_max(median, n = 1) %>% 
   ungroup()
@@ -600,7 +600,7 @@ GSE124689_counts_genes_selected_symbol = GSE124689_counts %>%
   group_by(gene_symbol, gene_id) %>% 
   filter(gene_symbol != "") %>% 
   drop_na(gene_symbol) %>% 
-  summarize(median = median(expression),
+  summarise(median = median(expression),
             median = round(median, 10)) %>% 
   slice_max(median, n = 1) %>% 
   ungroup()
@@ -822,7 +822,7 @@ fluad_human_degs %>% saveRDS(file = here("tables", "influenza_fluad_human_dge_li
 fluad_human_degs %>% 
   group_by(condition) %>%
   filter(adj_p_val <= 0.05) %>% 
-  summarize(n_degs = n())
+  summarise(n_degs = n())
 ```
 
 
@@ -907,7 +907,7 @@ human_fluad_log2fc_filtered_sample_long =
 #Compute summary statistics
 human_fluad_log2fc_summary = human_fluad_log2fc_filtered_sample_long %>% 
   group_by(human_symbol, timepoint) %>%
-  summarize(
+  summarise(
     avg_log2fc = mean(log2fc, na.rm = TRUE),  # mean log2 fold change
     n_subjects = n(),                         # number of samples
     sd = sd(value, na.rm = TRUE),             # standard deviation
@@ -1061,7 +1061,109 @@ all_degs_human_mouse = all_degs_mouse %>%
 all_degs_human_mouse %>% saveRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds"))
 ```
 
+### Compare DGE methods
+```{r}
+#Import ------
+#t-Test
+human_log2fc_paired_unpaired_ttest =
+  readRDS(file = here("tables", "influenza_fluad_human_dge_paired_unpaired_ttest.rds")) %>% 
+  mutate(organism = "Human")
+mouse_log2fc_paired_unpaired_ttest =
+  readRDS(file = here("tables", "influenza_fluad_mouse_log2fc_paired_unpaired_ttest.rds")) %>% 
+  mutate(organism = "Mouse")
 
+#Limma
+human_degs = readRDS(file = here("tables", "influenza_fluad_human_dge_limma_degs.rds")) %>% 
+  clean_names() %>% 
+  rename(padj = adj_p_val) %>% 
+  mutate(organism = "Human",
+         test = "Limma",
+         paired = "Paired") 
+
+mouse_degs = readRDS(file = here("tables", "influenza_fluad_mouse_dge_limma_degs.rds")) %>% 
+  clean_names() %>% 
+  rename(padj = adj_p_val) %>% 
+  mutate(organism = "Mouse",
+         test = "Limma",
+         paired = "Paired") 
+
+#Merge datasets
+degs_ttest_limma =
+  bind_rows(
+    human_log2fc_paired_unpaired_ttest,
+    human_degs,
+    mouse_log2fc_paired_unpaired_ttest,
+    mouse_degs
+    )
+
+#Summarize  
+degs_ttest_limma_summary = degs_ttest_limma %>% 
+  group_by(organism, timepoint, test, paired) %>% 
+  summarise(
+    n_degs = sum(padj <= 0.05, na.rm = TRUE),
+    .groups = "drop"
+  ) %>% 
+  mutate(timepoint_num = readr::parse_number(timepoint),
+    timepoint = paste0("Day", timepoint),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+
+degs_ttest_limma_summary
+
+```
+
+
+```{r fig.height=5, fig.width=5}
+# Plot number of DEGs per test and significance level
+degs_ttest_limma_summary_plot_gg <- degs_ttest_limma_summary %>%
+  ggplot(aes(
+    x = timepoint,
+    y = n_degs,
+    fill = test,
+    alpha = paired
+  )) +
+  geom_col(width = 0.8, position = position_dodge2()) +
+  
+  # Manual colors per test
+  scale_fill_manual(values = c(
+    "t-Test" = "gray25",
+    "Limma" = "#4DBBD5FF"
+  )) +
+  
+  # Alpha: paired = 1, unpaired = 0.5
+  scale_alpha_manual(values = c("Paired" = 1, "Unpaired" = 0.2)) +
+  
+  # Continuous x-axis for numeric timepoints
+  scale_x_discrete(
+    breaks = sort(unique(degs_ttest_limma_summary$timepoint)),
+    expand = c(0.01, 0.01)
+  ) +
+  scale_y_continuous(expand = c(0, 0)) +
+  
+  theme_vaxgo() +
+  labs(
+    title = "Total DEGs by test and timepoint",
+    subtitle = "Comparison across tests (FDR ≤ 0.05)",
+    x = "Day",
+    y = "Number of DEGs",
+    fill = "Test",
+    alpha = "Pairing"
+  ) +
+  facet_wrap(~organism, scales = "free_x", space = "free_x") +
+  theme(
+    legend.position = "top",
+    axis.line.y = element_blank(),
+    panel.grid.major.y = element_line(color = "gray75", linetype = 3),
+    axis.ticks.y = element_line(color = "gray75")
+  )
+
+# Render plot
+degs_ttest_limma_summary_plot_gg
+
+degs_ttest_limma_summary_plot_gg %>% 
+  ggsave(filename = here("Figures", "influenza_fluad_human_mouse_dge_ttest_limma_summary.png"),
+         width = 5,
+         height = 5)
+```
 
 ## Quality control
 Import
@@ -1217,7 +1319,7 @@ human_mouse_fluad_raw_qn %>%
 #Calculate the avg expression
 human_mouse_fluad_raw_qn_avg = human_mouse_fluad_raw_qn %>% 
   group_by(symbol, organism, timepoint, measure) %>% 
-  summarize(avg = mean(value),
+  summarise(avg = mean(value),
             n_subjects = n(),
             sd = sd(value),
             se = sd/sqrt(n_subjects)) %>% 
@@ -1252,7 +1354,7 @@ human_mouse_fluad_raw_qn_log2fc %>%
 #Average L2FC
 human_mouse_fluad_raw_qn_log2fc_avg = human_mouse_fluad_raw_qn_log2fc %>% 
   group_by(symbol, organism, timepoint, measure) %>% 
-  summarize(avg_log2fc = mean(log2fc, na.rm = T),
+  summarise(avg_log2fc = mean(log2fc, na.rm = T),
             n_subjects = n(),
             #Dispersion
             sd = sd(value, na.rm = T),
@@ -1301,7 +1403,7 @@ Sanity check
 # Calculate quantiles for each sample and measure
 quantile_summary <- human_mouse_fluad_raw_qn %>%
   group_by(sample_id, measure) %>%
-  summarize(
+  summarise(
     q0   = quantile(value, probs = 0.00, na.rm = TRUE),
     q25  = quantile(value, probs = 0.25, na.rm = TRUE),
     q50  = quantile(value, probs = 0.50, na.rm = TRUE),
@@ -1323,7 +1425,7 @@ ggplot(quantile_summary, aes(x = quantile %>% fct_relevel("q0", "q25", "q50", "q
 
 human_mouse_fluad_raw_qn %>%
   group_by(measure, organism, timepoint) %>%
-  summarize(
+  summarise(
     q0   = quantile(value, 0.00, na.rm = TRUE),
     q25  = quantile(value, 0.25, na.rm = TRUE),
     q50  = quantile(value, 0.50, na.rm = TRUE),
@@ -1468,7 +1570,7 @@ human_mouse_fluad_raw_qn_kaboxplot_data = human_mouse_fluad_raw_qn %>%
                              measure == "value_qn" ~ "Quantile\nnormalized",
                              T ~ measure)) %>% 
   group_by(measure, organism, participant_id, timepoint) %>%
-  summarize(
+  summarise(
     q0  = quantile(value, 0),
     q25 = quantile(value, 0.25),
     q50 = quantile(value, 0.5),
@@ -1831,7 +1933,7 @@ cor_human_mouse_timepoint <- timepoint_combinations %>%
              timepoint_mouse = timepoint_mouse)
   }) %>% 
   group_by(timepoint_human, timepoint_mouse) %>%
-  summarize(
+  summarise(
     comparison = "Human vs. Mouse",
     mean = mean(r, na.rm = TRUE),
     sd   = sd(r, na.rm = TRUE),
@@ -2042,7 +2144,7 @@ correlation_long_all_timepoints <- human_mouse_fluad_raw_qn_log2fc %>%
 correlation_long_all_timepoints %>% 
   group_by(timepoint) %>% 
   arrange(timepoint, -correlation) %>% 
-  summarize(mean = mean(correlation, na.rm = T),
+  summarise(mean = mean(correlation, na.rm = T),
             median = median(correlation, na.rm = T),
             min = min(correlation, na.rm = T),
             max = max(correlation, na.rm = T),
@@ -2237,7 +2339,7 @@ correlation_long_all_timepoints <- human_mouse_fluad_raw_qn_log2fc %>%
 correlation_long_all_timepoints %>% 
   group_by(timepoint) %>% 
   arrange(timepoint, -correlation) %>% 
-  summarize(mean = mean(correlation, na.rm = T),
+  summarise(mean = mean(correlation, na.rm = T),
             median = median(correlation, na.rm = T),
             min = min(correlation, na.rm = T),
             max = max(correlation, na.rm = T),
@@ -3992,7 +4094,7 @@ pairwise_human_fit_measures
 ### Prepare data
 ```{r}
 #Import
-GSE120661_counts_not_normalized_log2 = readRDS(here("tables", "GSE120661_counts_not_normalized_log2.rds")) %>% 
+GSE120661_counts_not_normalized_log2 = readRDS(here("tables", "influenza_hepatitisb_GSE120661_exprs.rds")) %>% 
   as.data.frame()
 GSE120661_metadata = read_csv(file = here("tables", "influenza_hepatitisb_GSE120661_metadata.csv"))
 
@@ -4057,7 +4159,7 @@ mouse_engerixb_log2summary = mouse_engerixb_log2 %>% #20,845 probes
                names_to = "sample",
                values_to = "expression") %>% 
   group_by(probe) %>% 
-  summarize(mean = mean(expression,na.rm = TRUE),
+  summarise(mean = mean(expression,na.rm = TRUE),
             median = median(expression, na.rm = T)) %>%  
   inner_join(annot %>% 
               rename(probe = agilent_sureprint_g3_ge_8x60k), 
@@ -4156,7 +4258,7 @@ mouse_engerixb_log2fc_filtered_sample_long = mouse_engerixb_log2_hgnc_symbol %>%
 
 #Save
 mouse_engerixb_log2fc_filtered_sample_long %>% 
-  saveRDS(here("tables", "mouse_engerixb_log2fc_filtered_sample_long.rds"))
+  saveRDS(here("tables", "hepatitisb_engerixb_mouse_log2fc_sample_clean_long.rds"))
 
 
 #Pivot wider
@@ -4169,7 +4271,8 @@ beep()
 ```
 
 
-#### Differential expression (Limma)
+#### Differential expression 
+##### Limma
 Paired samples design
 ```{r}
 
@@ -4241,16 +4344,116 @@ all_degs_mouse_engerixb = all_contrasts_degs %>%
          ci_lower = ci_l)
 	
 # #Save
-all_degs_mouse_engerixb %>% saveRDS(file = here("tables", "hepatitisb_engerixb_mouse_degs_mouse.rds"))
+all_degs_mouse_engerixb %>% saveRDS(file = here("tables", "hepatitisb_engerixb_mouse_dge_limma_degs.rds"))
 
 all_degs_mouse_engerixb %>% 
   group_by(condition) %>%
   filter(adj_p_val <= 0.05) %>% 
-  summarize(n_degs = n())
+  summarise(n_degs = n())
+
+```
+
+##### Simple t-Test
+```{r}
+#Import
+mouse_log2fc_filtered_sample_long = 
+  readRDS(here("tables", "hepatitisb_engerixb_mouse_log2fc_sample_clean_long.rds"))
+#Import
+mouse_log2_hgnc_symbol = readRDS(here("tables", "hepatitisb_engerixb_mouse_exprs.rds")) %>% 
+  distinct()
+
+mouse_metadata = readRDS(file = here("tables", "hepatitisb_engerixb_mouse_metadata.rds"))
 
 ```
 
 
+```{r}
+#Compute summary statistics
+mouse_log2fc_summary = mouse_log2fc_filtered_sample_long %>% 
+  group_by(human_symbol, timepoint) %>%
+  summarise(
+    avg_log2fc = mean(log2fc, na.rm = TRUE),  # mean log2 fold change
+    n_subjects = n(),                         # number of samples
+    sd = sd(value, na.rm = TRUE),             # standard deviation
+    se = sd / sqrt(n_subjects),               # standard error
+    effect_size = avg_log2fc / sd)            # Cohen’s d-like effect size
+
+mouse_log2_hgnc_symbol_wide = mouse_log2_hgnc_symbol %>%
+  rownames_to_column("human_symbol") %>%
+  pivot_longer(cols = -human_symbol,
+               names_to = "geo_sample",
+               values_to = "log2") %>% 
+  inner_join(mouse_metadata %>% 
+               select(geo_sample, participant_id, timepoint),
+             by = "geo_sample") %>% 
+  select(human_symbol, participant_id, timepoint, log2) %>% 
+  distinct() %>% 
+  select(participant_id, human_symbol, timepoint, value = log2) %>%
+  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_") 
+
+# Paired t-test
+mouse_log2fc_paired_ttest <- mouse_log2_hgnc_symbol_wide %>%
+  group_by(human_symbol) %>%
+  
+  summarise(
+    pval_day1 = tryCatch(t.test(day_1, day_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day3 = tryCatch(t.test(day_3, day_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day7 = tryCatch(t.test(day_7, day_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    .groups = 'drop'
+  ) %>%
+  
+  mutate(
+    padj_day1 = p.adjust(pval_day1, method = "fdr"),
+    padj_day3 = p.adjust(pval_day3, method = "fdr"),
+    padj_day7 = p.adjust(pval_day7, method = "fdr")
+  ) %>% 
+  pivot_longer(
+    cols = starts_with(c("pval_", "padj_")),
+    names_to = c(".value", "timepoint"),
+    names_pattern = "(pval|padj)_(day\\d+)"
+  ) %>% 
+  mutate(timepoint = str_remove(timepoint, "day"),
+         test = "t-Test",
+         paired = "Paired")
+
+#Unpaired
+mouse_log2fc_unpaired_ttest <- mouse_log2_hgnc_symbol_wide %>%
+  group_by(human_symbol) %>%
+  
+  summarise(
+    pval_day1 = tryCatch(t.test(day_1, day_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day3 = tryCatch(t.test(day_3, day_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day7 = tryCatch(t.test(day_7, day_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    .groups = 'drop'
+  ) %>%
+  
+  mutate(
+    padj_day1 = p.adjust(pval_day1, method = "fdr"),
+    padj_day3 = p.adjust(pval_day3, method = "fdr"),
+    padj_day7 = p.adjust(pval_day7, method = "fdr")
+  ) %>% 
+  pivot_longer(
+    cols = starts_with(c("pval_", "padj_")),
+    names_to = c(".value", "timepoint"),
+    names_pattern = "(pval|padj)_(day\\d+)"
+  ) %>% 
+  mutate(timepoint = str_remove(timepoint, "day"),
+         test = "t-Test",
+         paired = "Unpaired")
+
+mouse_log2fc_paired_unpaired_ttest = mouse_log2fc_paired_ttest %>% 
+  bind_rows(mouse_log2fc_unpaired_ttest) 
+
+mouse_log2fc_paired_unpaired_ttest %>% 
+  saveRDS(file = here("tables", "hepatitisb_engerixb_mouse_log2fc_paired_unpaired_ttest.rds"))
+
+```
 
 #### Correlation plots, pairwise
 
@@ -4331,7 +4534,7 @@ labeling by participant, with custom color scales and a themed layout.
 
 #Import
 mouse_engerixb_metadata = readRDS(file = here("tables", "hepatitisb_engerixb_mouse_metadata.rds"))
-mouse_engerixb_log2fc_filtered_sample_long = readRDS(here("tables", "mouse_engerixb_log2fc_filtered_sample_long.rds"))
+mouse_engerixb_log2fc_filtered_sample_long = readRDS(here("tables", "hepatitisb_engerixb_mouse_log2fc_sample_clean_long.rds"))
 
 #Input
 samples_metadata_pca_input = mouse_engerixb_metadata
@@ -4428,7 +4631,7 @@ format, and attach module group information.
 btm_annotation_genes =
   read_csv(file = here("tables", "btm_annotation_genes.csv"))
 mouse_engerixb_metadata = readRDS(file = here("tables", "hepatitisb_engerixb_mouse_metadata.rds"))
-mouse_engerixb_log2fc_filtered_sample_long = readRDS(here("tables", "mouse_engerixb_log2fc_filtered_sample_long.rds"))
+mouse_engerixb_log2fc_filtered_sample_long = readRDS(here("tables", "hepatitisb_engerixb_mouse_log2fc_sample_clean_long.rds"))
 
 #Annotate genes by BTM
 samples_genes_btm = mouse_engerixb_log2fc_filtered_sample_long %>% 
@@ -4440,7 +4643,7 @@ samples_genes_btm = mouse_engerixb_log2fc_filtered_sample_long %>%
 dge_btm_mean_process = samples_genes_btm %>%
   mutate(condition = paste0(participant_id, "_Day", timepoint)) %>% 
   group_by(participant_id, timepoint, process) %>% 
-  summarize(mean_log2fc = mean(log2fc)) %>%
+  summarise(mean_log2fc = mean(log2fc)) %>%
   pivot_wider(names_from = "participant_id", values_from = "mean_log2fc") %>% 
   inner_join(btm_annotation_genes %>% 
                select(process, group, subgroup) %>% 
@@ -4686,7 +4889,7 @@ human_engerix_log2summary = human_exprs_engerixb %>%
                names_to = "sample",
                values_to = "expression") %>% 
   group_by(probe) %>% 
-  summarize(mean = mean(expression,na.rm = TRUE),
+  summarise(mean = mean(expression,na.rm = TRUE),
             median = median(expression, na.rm = T)) %>%  
   inner_join(probes_annotation %>% 
               rename(probe = gene_id,
@@ -4784,14 +4987,13 @@ human_engerixb_log2fc_filtered_sample_long = human_engerixb_log2fc_filtered_samp
 
 #Annotate sample and pivot longer
 human_engerixb_log2fc_filtered_sample_long_annotated = human_engerixb_log2fc_filtered_sample_long %>% 
-  select(-value, -day0) %>% 
-  inner_join(GSE124533_metadata_filtered %>% 
+  inner_join(human_engerixb_metadata %>% 
                select(sample_id = geo_sample,
                       participant_id, timepoint), by = join_by("participant_id", "timepoint"))
 
 #Save
 human_engerixb_log2fc_filtered_sample_long_annotated %>% 
-  saveRDS(file = here("tables", "hepatitisb_engerixb_human_exprs_hgnc_symbol_long.rds"))
+  saveRDS(file = here("tables", "hepatitisb_engerixb_human_log2fc_sample_clean_long.rds"))
 
 beep()
 
@@ -4903,14 +5105,113 @@ all_degs_human = all_contrasts_degs %>%
 all_degs_human %>% 
   group_by(condition) %>%
   filter(adj_p_val <= 0.05) %>% 
-  summarize(n_degs = n())
+  summarise(n_degs = n())
 	
 #Save
 all_degs_human %>% saveRDS(file = here("tables", "hepatitisb_engerixb_human_dge_limma_degs.rds"))
 ```
 
 
+##### Simple t-Test
+```{r}
+#Import
+human_log2fc_filtered_sample_long = 
+  readRDS(here("tables", "hepatitisb_engerixb_human_log2fc_sample_clean_long.rds"))
+#Import
+human_log2_hgnc_symbol = readRDS(here("tables", "hepatitisb_engerixb_human_exprs_hgnc_symbol.rds")) %>% 
+  distinct()
 
+human_metadata = readRDS(file = here("tables", "hepatitisb_engerixb_human_metadata.rds"))
+
+```
+
+
+```{r}
+#Compute summary statistics
+human_log2fc_summary = human_log2fc_filtered_sample_long %>% 
+  group_by(human_symbol, timepoint) %>%
+  summarise(
+    avg_log2fc = mean(log2fc, na.rm = TRUE),  # mean log2 fold change
+    n_subjects = n(),                         # number of samples
+    sd = sd(value, na.rm = TRUE),             # standard deviation
+    se = sd / sqrt(n_subjects),               # standard error
+    effect_size = avg_log2fc / sd)            # Cohen’s d-like effect size
+
+human_log2_hgnc_symbol_wide = human_log2_hgnc_symbol %>%
+  pivot_longer(cols = -human_symbol,
+               names_to = "geo_sample",
+               values_to = "log2") %>% 
+  inner_join(human_metadata %>% 
+               select(geo_sample, participant_id, timepoint),
+             by = "geo_sample") %>% 
+  select(human_symbol, participant_id, timepoint, log2) %>% 
+  distinct() %>% 
+  select(participant_id, human_symbol, timepoint, value = log2) %>%
+  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_")
+
+# Paired t-test
+human_log2fc_paired_ttest <- human_log2_hgnc_symbol_wide %>%
+  group_by(human_symbol) %>%
+  
+  summarise(
+    pval_day1 = tryCatch(t.test(day_1, day_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day3 = tryCatch(t.test(day_3, day_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day7 = tryCatch(t.test(day_7, day_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    .groups = 'drop'
+  ) %>%
+  
+  mutate(
+    padj_day1 = p.adjust(pval_day1, method = "fdr"),
+    padj_day3 = p.adjust(pval_day3, method = "fdr"),
+    padj_day7 = p.adjust(pval_day7, method = "fdr")
+  ) %>% 
+  pivot_longer(
+    cols = starts_with(c("pval_", "padj_")),
+    names_to = c(".value", "timepoint"),
+    names_pattern = "(pval|padj)_(day\\d+)"
+  ) %>% 
+  mutate(timepoint = str_remove(timepoint, "day"),
+         test = "t-Test",
+         paired = "Paired")
+
+#Unpaired
+human_log2fc_unpaired_ttest <- human_log2_hgnc_symbol_wide %>%
+  group_by(human_symbol) %>%
+  
+  summarise(
+    pval_day1 = tryCatch(t.test(day_1, day_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day3 = tryCatch(t.test(day_3, day_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    pval_day7 = tryCatch(t.test(day_7, day_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
+    .groups = 'drop'
+  ) %>%
+  
+  mutate(
+    padj_day1 = p.adjust(pval_day1, method = "fdr"),
+    padj_day3 = p.adjust(pval_day3, method = "fdr"),
+    padj_day7 = p.adjust(pval_day7, method = "fdr")
+  ) %>% 
+  pivot_longer(
+    cols = starts_with(c("pval_", "padj_")),
+    names_to = c(".value", "timepoint"),
+    names_pattern = "(pval|padj)_(day\\d+)"
+  ) %>% 
+  mutate(timepoint = str_remove(timepoint, "day"),
+         test = "t-Test",
+         paired = "Unpaired")
+
+human_log2fc_paired_unpaired_ttest = human_log2fc_paired_ttest %>% 
+  bind_rows(human_log2fc_unpaired_ttest) 
+
+human_log2fc_paired_unpaired_ttest %>% 
+  saveRDS(file = here("tables", "hepatitisb_engerixb_human_log2fc_paired_unpaired_ttest.rds"))
+
+```
 
 #### Correlation plots, pairwise
 
@@ -5096,7 +5397,7 @@ human_mouse_engerix_metadata %>%
 
 all_degs_human = readRDS(file = here("tables", "hepatitisb_engerixb_human_dge_limma_degs.rds")) %>% 
   mutate(timepoint = str_remove(comparison_a, "Time"))
-all_degs_mouse = readRDS(file = here("tables", "hepatitisb_engerixb_mouse_degs_mouse.rds")) %>% 
+all_degs_mouse = readRDS(file = here("tables", "hepatitisb_engerixb_mouse_dge_limma_degs.rds")) %>% 
   mutate(timepoint = str_remove(condition, "Engerix_") %>% str_remove("_PBMC"))
 all_degs_human_mouse = all_degs_human %>% 
   bind_rows(all_degs_mouse) %>% 
@@ -5106,6 +5407,122 @@ all_degs_human_mouse = all_degs_human %>%
          timepoint = if_else(organism == "Mouse", as.numeric(timepoint)/24, timepoint))
 all_degs_human_mouse %>% saveRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds"))
 ```
+
+
+
+### Compare DGE methods
+```{r}
+#Import ------
+#t-Test
+human_log2fc_paired_unpaired_ttest =
+  readRDS(file = here("tables", "hepatitisb_engerixb_human_log2fc_paired_unpaired_ttest.rds")) %>% 
+  mutate(organism = "Human")
+mouse_log2fc_paired_unpaired_ttest =
+  readRDS(file = here("tables", "hepatitisb_engerixb_mouse_log2fc_paired_unpaired_ttest.rds")) %>% 
+  mutate(organism = "Mouse")
+
+#Limma
+human_degs = readRDS(file = here("tables", "hepatitisb_engerixb_human_dge_limma_degs.rds")) %>% 
+  clean_names() %>% 
+  rename(padj = adj_p_val) %>% 
+  mutate(organism = "Human",
+         test = "Limma",
+         paired = "Paired",
+         timepoint = str_remove(comparison_a, "Time"))
+
+mouse_degs = readRDS(file = here("tables", "hepatitisb_engerixb_mouse_dge_limma_degs.rds")) %>% 
+  clean_names() %>% 
+  rename(padj = adj_p_val) %>% 
+  mutate(organism = "Mouse",
+         test = "Limma",
+         paired = "Paired",
+         timepoint = str_remove(condition, "Engerix_") %>% str_remove("_PBMC"),
+         timepoint = (as.numeric(timepoint)/24) %>% as.character())
+
+#Merge datasets
+degs_ttest_limma =
+  bind_rows(
+    human_log2fc_paired_unpaired_ttest,
+    human_degs,
+    mouse_log2fc_paired_unpaired_ttest,
+    mouse_degs
+    )
+
+#Summarize  
+degs_ttest_limma_summary = degs_ttest_limma %>% 
+  group_by(organism, timepoint, test, paired) %>% 
+  summarise(
+    n_degs = sum(padj <= 0.05, na.rm = TRUE),
+    .groups = "drop"
+  ) %>% 
+  mutate(timepoint_num = readr::parse_number(timepoint),
+    timepoint = paste0("Day ", timepoint),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+
+degs_ttest_limma_summary
+
+```
+
+
+```{r fig.height=5, fig.width=5}
+# Plot number of DEGs per test and significance level
+degs_ttest_limma_summary_plot_gg <- degs_ttest_limma_summary %>%
+  filter(n_degs != 0) %>% 
+  ggplot(aes(
+    x = timepoint,
+    y = n_degs,
+    fill = test,
+    alpha = paired
+  )) +
+  geom_col(width = 0.8, position = position_dodge2()) +
+  
+  # Manual colors per test
+  scale_fill_manual(values = c(
+    "t-Test" = "gray25",
+    "Limma" = "#4DBBD5FF"
+  )) +
+  
+  # Alpha: paired = 1, unpaired = 0.5
+  scale_alpha_manual(values = c("Paired" = 1, "Unpaired" = 0.2)) +
+  
+  # Continuous x-axis for numeric timepoints
+  scale_x_discrete(
+    # breaks = sort(unique(degs_ttest_limma_summary$timepoint)),
+    expand = c(0.01, 0.01)
+  ) +
+  scale_y_continuous(expand = c(0, 0)) +
+  
+  theme_vaxgo() +
+  labs(
+    title = "Total DEGs by test and timepoint",
+    subtitle = "Comparison across tests (FDR ≤ 0.05)",
+    x = "Day",
+    y = "Number of DEGs",
+    fill = "Test",
+    alpha = "Pairing"
+  ) +
+  facet_wrap(~organism, scales = "free_x", space = "free_x") +
+  theme(
+    legend.position = "top",
+    axis.line.y = element_blank(),
+    panel.grid.major.y = element_line(color = "gray75", linetype = 3),
+    axis.ticks.y = element_line(color = "gray75")
+  )
+
+# Render plot
+degs_ttest_limma_summary_plot_gg
+
+degs_ttest_limma_summary_plot_gg %>% 
+  ggsave(filename = here("Figures", "hepatitisb_engerixb_human_mouse_dge_ttest_limma_summary.png"),
+         width = 5,
+         height = 5)
+```
+
+
+
+
+
+
 
 ## FIT
 
@@ -5118,7 +5535,7 @@ GSE19668_input2FIT = GSE19668_counts_log2_summary_annotated_probes %>%
     filter(timepoint == 2) %>% 
   select(participant_id, MM.Entrez = entrezgene_id, EffectSize = log2fc) %>% 
   group_by(MM.Entrez) %>% 
-  summarize(mean_log2fc = mean(EffectSize))
+  summarise(mean_log2fc = mean(EffectSize))
 
 #Save
 GSE19668_input2FIT %>% 
@@ -5350,7 +5767,7 @@ GSE19668_metadata_filtered %>% saveRDS(file = here("tables", "saureus_infection_
 
 ```
 
-## Annotate dataset
+### Annotate dataset
 ```{r}
 #Import
 saureus_mouse_exprs = readRDS(here("tables","saureus_infection_GSE19668_exprs.rds"))
@@ -5441,7 +5858,7 @@ mouse_log2summary = mouse_exprs %>% #20,845 probes
                names_to = "sample",
                values_to = "expression") %>% 
   group_by(probe) %>% 
-  summarize(mean = mean(expression,na.rm = TRUE),
+  summarise(mean = mean(expression,na.rm = TRUE),
             median = median(expression, na.rm = T)) %>%  
   inner_join(annot %>% 
               rename(probe = affy_mouse430_2), 
@@ -5617,22 +6034,24 @@ all_degs %>% saveRDS(file = here("tables", "saureus_infection_mouse_dge_limma_de
 all_degs %>% 
   group_by(condition) %>%
   filter(adj_p_val <= 0.05) %>% 
-  summarize(n_degs = n())
+  summarise(n_degs = n())
 
 ```
 
 
 
 
-###### T test (TERMINAR)
+#### T test 
 ```{r}
 #Import
-mouse_exprs = readRDS(file = here("tables", "saureus_infection_mouse_exprs_hgnc_symbol_long.rds"))
-mouse_metadata = readRDS(file = here("tables", "saureus_infection_mouse_metadata.rds"))
+mouse_exprs = readRDS(file = here("tables", "saureus_infection_mouse_exprs_hgnc_symbol.rds")) %>% 
+  ungroup()
+mouse_metadata =  readRDS(file = here("tables", "saureus_infection_mouse_metadata_filtered.rds"))
 log2fc_sample = readRDS(here("tables", "saureus_infection_mouse_log2fc_sample_clean_long.rds"))
 log2fc_sample_symbol = log2fc_sample %>% 
   inner_join(mouse_exprs %>% 
-               select(human_symbol, probe_id = probe),
+               select(human_symbol, probe_id = probe) %>% 
+               distinct(),
              by = "probe_id")
 
 ```
@@ -5642,7 +6061,7 @@ log2fc_sample_symbol = log2fc_sample %>%
 #Compute summary statistics
 log2fc_summary = log2fc_sample_symbol %>% 
   group_by(human_symbol, timepoint) %>%
-  summarize(
+  summarise(
     avg_log2fc = mean(log2fc, na.rm = TRUE),  # mean log2 fold change
     n_subjects = n(),                         # number of samples
     sd = sd(log2fc, na.rm = TRUE),             # standard deviation
@@ -5650,16 +6069,16 @@ log2fc_summary = log2fc_sample_symbol %>%
     effect_size = avg_log2fc / sd)            # Cohen’s d-like effect size
 
 log2_hgnc_symbol_wide = mouse_exprs %>%
-  select(-probe) %>% 
-  pivot_longer(cols = -human_symbol,
+  pivot_longer(cols = -c(human_symbol, probe),
                names_to = "geo_sample",
                values_to = "log2") %>% 
   inner_join(mouse_metadata %>% 
-               select(geo_sample, subject_id, timepoint),
+               select(geo_sample, subject_id = participant_id, timepoint),
              by = "geo_sample") %>% 
   select(human_symbol, subject_id, timepoint, log2) %>% 
   distinct() %>% 
   select(subject_id, human_symbol, timepoint, value = log2) %>%
+  distinct() %>% 
   pivot_wider(names_from = timepoint, values_from = value, names_prefix = "hour_") 
 
 # Paired t-test
@@ -5669,20 +6088,21 @@ log2fc_paired_ttest <- log2_hgnc_symbol_wide %>%
   summarise(
     pval_hour2 = tryCatch(t.test(hour_2, hour_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
                          error = function(e) NA_real_),
+    pval_hour4 = tryCatch(t.test(hour_4, hour_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
     pval_hour6 = tryCatch(t.test(hour_6, hour_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
                          error = function(e) NA_real_),
     pval_hour12 = tryCatch(t.test(hour_12, hour_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
                          error = function(e) NA_real_),
-    pval_hour24 = tryCatch(t.test(hour_24, hour_0, paired = TRUE, var.equal = FALSE, alternative = "two.sided")$p.value,
-                         error = function(e) NA_real_),
+
     .groups = 'drop'
   ) %>%
   
   mutate(
     padj_hour2 = p.adjust(pval_hour2, method = "fdr"),
+    padj_hour4 = p.adjust(pval_hour4, method = "fdr"),
     padj_hour6 = p.adjust(pval_hour6, method = "fdr"),
     padj_hour12 = p.adjust(pval_hour12, method = "fdr"),
-    padj_hour24 = p.adjust(pval_hour24, method = "fdr"),
   ) %>% 
   pivot_longer(
     cols = starts_with(c("pval_", "padj_")),
@@ -5700,20 +6120,20 @@ log2fc_unpaired_ttest = log2_hgnc_symbol_wide %>%
   summarise(
     pval_hour2 = tryCatch(t.test(hour_2, hour_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
                          error = function(e) NA_real_),
+    pval_hour4 = tryCatch(t.test(hour_4, hour_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
     pval_hour6 = tryCatch(t.test(hour_6, hour_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
                          error = function(e) NA_real_),
     pval_hour12 = tryCatch(t.test(hour_12, hour_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
-                         error = function(e) NA_real_),
-    pval_hour24 = tryCatch(t.test(hour_24, hour_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
                          error = function(e) NA_real_),
     .groups = 'drop'
   ) %>%
   
   mutate(
     padj_hour2 = p.adjust(pval_hour2, method = "fdr"),
+    padj_hour4 = p.adjust(pval_hour4, method = "fdr"),
     padj_hour6 = p.adjust(pval_hour6, method = "fdr"),
     padj_hour12 = p.adjust(pval_hour12, method = "fdr"),
-    padj_hour24 = p.adjust(pval_hour24, method = "fdr"),
   ) %>% 
   pivot_longer(
     cols = starts_with(c("pval_", "padj_")),
@@ -5728,22 +6148,22 @@ log2fc_paired_unpaired_ttest = log2fc_unpaired_ttest %>%
   bind_rows(log2fc_paired_ttest) 
 
 log2fc_paired_unpaired_ttest %>% 
-  saveRDS(file = here("tables", "ecoli_infection_mouse_log2fc_paired_unpaired_ttest.rds"))
+  saveRDS(file = here("tables", "saureus_infection_mouse_log2fc_paired_unpaired_ttest.rds"))
 
 ```
 
 
-###### Compare DGE methods
+#### Compare DGE methods
 
 ```{r}
 #Import ------
 #t-Test
 mouse_log2fc_paired_unpaired_ttest =
-  readRDS(file = here("tables", "ecoli_infection_mouse_log2fc_paired_unpaired_ttest.rds")) %>% 
+  readRDS(file = here("tables", "saureus_infection_mouse_log2fc_paired_unpaired_ttest.rds")) %>% 
   mutate(organism = "Mouse")
 
 #Limma
-mouse_degs = readRDS(file = here("tables", "ecoli_infection_mouse_dge_limma_degs.rds")) %>% 
+mouse_degs = readRDS(file = here("tables", "saureus_infection_mouse_dge_limma_degs.rds")) %>% 
   clean_names() %>% 
   rename(padj = adj_p_val) %>% 
   mutate(organism = "Mouse",
@@ -5803,7 +6223,7 @@ degs_ttest_limma_summary_plot_gg <- degs_ttest_limma_summary %>%
   
   theme_vaxgo() +
   labs(
-    title = "Total DEGs by test and timepoint",
+    title = "Total DEGs by test and timepoint, mouse",
     subtitle = "Comparison across tests (FDR ≤ 0.05)",
     x = "Day",
     y = "Number of DEGs",
@@ -5822,7 +6242,7 @@ degs_ttest_limma_summary_plot_gg <- degs_ttest_limma_summary %>%
 degs_ttest_limma_summary_plot_gg
 
 degs_ttest_limma_summary_plot_gg %>% 
-  ggsave(filename = here("Figures", "ecoli_infection_mouse_dge_ttest_limma_summary.png"),
+  ggsave(filename = here("Figures", "saureus_infection_mouse_dge_ttest_limma_summary.png"),
          width = 5,
          height = 5)
 ```
@@ -5839,17 +6259,10 @@ degs_ttest_limma_summary_plot_gg %>%
 
 
 
-##Import
-
-
-```{r}
-mouse_degs = readRDS(file = here("tables", "saureus_infection_mouse_dge_limma_degs.rds"))
-```
-
-
-
 #### Correlation plots, pairwise
+
 ```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
+mouse_degs = readRDS(file = here("tables", "saureus_infection_mouse_dge_limma_degs.rds"))
 #Plot correlation between animals ------
 #Change params in geoms
 #Density
@@ -6151,7 +6564,7 @@ human_exprs_log2fc_sample = human_exprs_metadata %>%
   filter(pathogen == "Healthy") %>% 
   select(probe_id, value_raw_ref = value_raw) %>% 
   group_by(probe_id) %>% 
-  summarize(value_raw_ref = mean(value_raw_ref)) %>% 
+  summarise(value_raw_ref = mean(value_raw_ref)) %>% 
   inner_join(human_exprs_metadata %>% 
                filter(pathogen != "Healthy"),
              by = join_by("probe_id")) %>% 
@@ -6202,7 +6615,7 @@ human_log2summary = human_exprs %>%
                names_to = "sample",
                values_to = "expression") %>% 
   group_by(probe) %>% 
-  summarize(mean = mean(expression,na.rm = TRUE),
+  summarise(mean = mean(expression,na.rm = TRUE),
             median = median(expression, na.rm = T)) %>%  
   inner_join(annot, 
             by = "probe") %>% 
@@ -6362,77 +6775,78 @@ all_degs_human %>% saveRDS(file = here("tables", "saureus_infection_human_dge_li
 all_degs_human %>% 
   dplyr::group_by(condition) %>%
   dplyr::filter(adj_p_val <= 0.05) %>% 
-  dplyr::summarize(n_degs = n())
+  dplyr::summarise(n_degs = n())
 
 ```
 
 
-#### t-Test
+#### T test 
 ```{r}
-#Import ================
-human_log2_hgnc_symbol = readRDS(file = here("tables", "saureus_infection_human_exprs_hgnc_symbol.rds"))
-human_metadata = readRDS(file = here("tables", "saureus_infection_human_metadata.rds"))
+#Import
+human_exprs = readRDS(file = here("tables", "saureus_infection_human_exprs_hgnc_symbol.rds")) 
+human_metadata =  readRDS(file = here("tables", "saureus_infection_human_metadata.rds")) %>% 
+  mutate(timepoint = if_else(condition == "No infection", 0, timepoint))
+log2fc_sample = readRDS(here("tables", "saureus_infection_human_log2fc_sample_clean_long.rds"))
+log2fc_sample_symbol = log2fc_sample %>% 
+  inner_join(human_exprs %>% 
+               select(human_symbol, probe_id = probe) %>% 
+               distinct(),
+             by = "probe_id")
 
-#Wrangle ==============
-#Pivot to long and wide format, and annotate
-human_log2_samples_log2fc_long = human_log2_hgnc_symbol %>% 
-  pivot_longer(cols = -c(human_symbol, probe),
-               names_to = "geo_sample",
-               values_to = "log2fc") %>% 
-  inner_join(human_metadata,
-             by = "geo_sample")
+```
 
-human_log2_wide = human_log2_hgnc_symbol %>%
+
+```{r}
+#Compute summary statistics
+log2fc_summary = log2fc_sample_symbol %>% 
+  group_by(human_symbol, timepoint) %>%
+  summarise(
+    avg_log2fc = mean(log2fc, na.rm = TRUE),  # mean log2 fold change
+    n_subjects = n(),                         # number of samples
+    sd = sd(log2fc, na.rm = TRUE),             # standard deviation
+    se = sd / sqrt(n_subjects),               # standard error
+    effect_size = avg_log2fc / sd)            # Cohen’s d-like effect size
+
+log2_hgnc_symbol_wide = human_exprs %>%
   pivot_longer(cols = -c(human_symbol, probe),
                names_to = "geo_sample",
                values_to = "log2") %>% 
   inner_join(human_metadata %>% 
-               select(geo_sample, participant_id, pathogen),
+               select(geo_sample, subject_id = participant_id, timepoint),
              by = "geo_sample") %>% 
-  select(human_symbol, participant_id, timepoint, log2) %>% 
+  select(human_symbol, subject_id, timepoint, log2) %>% 
   distinct() %>% 
-  select(participant_id, human_symbol, timepoint, value = log2) %>%
-  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_")
+  select(subject_id, human_symbol, timepoint, value = log2) %>%
+  distinct() %>% 
+  pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_") 
 
-human_exprs_log2_infected_healthy = human_exprs_metadata %>% 
-  filter(pathogen == "Healthy") %>% 
-  select(probe_id, value_raw_ref = value_raw) %>% 
-  group_by(probe_id) %>% 
-  summarize(value_raw_ref = mean(value_raw_ref)) %>% 
-  inner_join(human_exprs_metadata %>% 
-               filter(pathogen != "Healthy"),
-             by = join_by("probe_id")) %>% 
-  filter(pathogen != "Healthy") %>% 
-  inner_join(human_log2_samples_log2fc_long %>% 
-               select(probe_id = probe, human_symbol),
-             by = join_by("probe_id")) %>% 
-  mutate(log2fc = value_raw - value_raw_ref) %>% 
-  distinct() 
 
-# Unpaired t-test ----------
-human_log2fc_unpaired_ttest <- human_exprs_log2_infected_healthy %>%
+#Unpaired
+log2fc_unpaired_ttest = log2_hgnc_symbol_wide %>%
   group_by(human_symbol) %>%
   
   summarise(
-    pval = tryCatch(
-      t.test(value_raw, value_raw_ref,
-             paired = FALSE, var.equal = FALSE, 
-             alternative = "two.sided")$p.value,
-      error = function(e) NA_real_
-    ),
+    pval_day1 = tryCatch(t.test(day_1, day_0, paired = F, var.equal = FALSE, alternative = "two.sided")$p.value,
+                         error = function(e) NA_real_),
     .groups = 'drop'
   ) %>%
+  
   mutate(
-    padj = p.adjust(pval, method = "fdr")
-    ) %>% 
-  mutate(
-    condition = "Saureus infection",
-    timepoint = "1",
-    test = "t-Test",
-    paired = "Unpaired")
+    padj_day1  = p.adjust(pval_day1, method = "fdr")
+  ) %>% 
+  pivot_longer(
+    cols = starts_with(c("pval_", "padj_")),
+    names_to = c(".value", "timepoint"),
+    names_pattern = "(pval|padj)_(day\\d+)"
+  ) %>% 
+  mutate(timepoint = str_remove(timepoint, "day"),
+         test = "t-Test",
+         paired = "Unpaired") 
 
+log2fc_paired_unpaired_ttest = log2fc_unpaired_ttest 
 
-human_log2fc_unpaired_ttest %>% saveRDS(file = here("tables", "saureus_infection_human_dge_unpaired_ttest.rds"))
+log2fc_paired_unpaired_ttest %>% 
+  saveRDS(file = here("tables", "saureus_infection_human_log2fc_paired_unpaired_ttest.rds"))
 
 ```
 
@@ -6440,40 +6854,6 @@ human_log2fc_unpaired_ttest %>% saveRDS(file = here("tables", "saureus_infection
 
 
 
-
-
-#### Import
-```{r}
-#Import
-GSE33341_counts_log2_summary_annotated_probes = 
-  readRDS(file = here("tables", "saureus_infection_human_exprs_hgnc_symbol_long.rds"))
-
-human_log2_hgnc_symbol = readRDS(file = here("tables", "saureus_infection_human_exprs_hgnc_symbol.rds"))
-
-
-
-#Pivot to long and wide format, and annotate
-human_log2_samples_log2fc_long = human_log2_hgnc_symbol %>% 
-  pivot_longer(cols = -c(human_symbol, probe),
-               names_to = "geo_sample",
-               values_to = "log2fc") %>% 
-  inner_join(human_metadata,
-             by = "geo_sample")
-
-
-human_log2_samples_log2fc_wide = human_log2_samples_log2fc_long %>% 
-  select(human_symbol, probe, participant_id, timepoint, log2fc) %>%
-  pivot_wider(names_from = "participant_id",
-              values_from = "log2fc") %>% 
-  mutate(timepoint = as.character(timepoint) %>% fct_reorder(timepoint %>% as.numeric()))
-
-#Pivot wider
-GSE33341_log2fc_sample_wide = GSE33341_counts_log2_summary_annotated_probes %>%
-  select(human_symbol, participant_id, timepoint, log2fc) %>% 
-  pivot_wider(names_from = participant_id,
-              values_from = log2fc) %>% 
-  ungroup()
-```
 
 
 
@@ -6551,7 +6931,111 @@ human_mouse_log2fc_samples %>%
 
 ```
 
+### Compare DGE methods
+```{r}
+#Import ------
+#t-Test
+human_log2fc_paired_unpaired_ttest =
+  readRDS(file = here("tables", "saureus_infection_human_log2fc_paired_unpaired_ttest.rds")) %>% 
+  mutate(organism = "Human",
+         timepoint = "24")
+mouse_log2fc_paired_unpaired_ttest =
+  readRDS(file = here("tables", "saureus_infection_mouse_log2fc_paired_unpaired_ttest.rds")) %>% 
+  mutate(organism = "Mouse")
 
+#Limma
+human_degs = readRDS(file = here("tables", "saureus_infection_human_dge_limma_degs.rds")) %>% 
+  clean_names() %>% 
+  rename(padj = adj_p_val) %>% 
+  mutate(organism = "Human",
+         test = "Limma",
+         paired = "Unpaired",
+         timepoint = "24") 
+
+mouse_degs = readRDS(file = here("tables", "saureus_infection_mouse_dge_limma_degs.rds")) %>% 
+  clean_names() %>% 
+  rename(padj = adj_p_val) %>% 
+  mutate(organism = "Mouse",
+         test = "Limma",
+         paired = "Paired") 
+
+#Merge datasets
+degs_ttest_limma =
+  bind_rows(
+    human_log2fc_paired_unpaired_ttest,
+    human_degs,
+    mouse_log2fc_paired_unpaired_ttest,
+    mouse_degs
+    )
+
+#Summarize  
+degs_ttest_limma_summary = degs_ttest_limma %>% 
+  group_by(organism, timepoint, test, paired) %>% 
+  summarise(
+    n_degs = sum(padj <= 0.05, na.rm = TRUE),
+    .groups = "drop"
+  ) %>% 
+  mutate(timepoint_num = readr::parse_number(timepoint),
+    timepoint = paste0(timepoint, "h"),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+
+degs_ttest_limma_summary
+
+```
+
+
+```{r fig.height=5, fig.width=5}
+# Plot number of DEGs per test and significance level
+degs_ttest_limma_summary_plot_gg <- degs_ttest_limma_summary %>%
+  ggplot(aes(
+    x = timepoint,
+    y = n_degs,
+    fill = test,
+    alpha = paired
+  )) +
+  geom_col(width = 0.8, position = position_dodge2()) +
+  
+  # Manual colors per test
+  scale_fill_manual(values = c(
+    "t-Test" = "gray25",
+    "Limma" = "#4DBBD5FF"
+  )) +
+  
+  # Alpha: paired = 1, unpaired = 0.5
+  scale_alpha_manual(values = c("Paired" = 1, "Unpaired" = 0.2)) +
+  
+  # Continuous x-axis for numeric timepoints
+  scale_x_discrete(
+    breaks = sort(unique(degs_ttest_limma_summary$timepoint)),
+    expand = c(0.01, 0.01)
+  ) +
+  scale_y_continuous(expand = c(0, 0)) +
+  
+  theme_vaxgo() +
+  labs(
+    title = "Total DEGs by test and timepoint, Human",
+    subtitle = "Comparison across tests (FDR ≤ 0.05)",
+    x = "Day",
+    y = "Number of DEGs",
+    fill = "Test",
+    alpha = "Pairing"
+  ) +
+  facet_wrap(~organism, scales = "free_x", space = "free_x") +
+  theme(
+    legend.position = "top",
+    axis.line.y = element_blank(),
+    panel.grid.major.y = element_line(color = "gray75", linetype = 3),
+    axis.ticks.y = element_line(color = "gray75")
+  )
+
+# Render plot
+degs_ttest_limma_summary_plot_gg
+
+degs_ttest_limma_summary_plot_gg %>% 
+  ggsave(filename = here("Figures", "saureus_infection_human_mouse_dge_ttest_limma_summary.png"),
+         width = 5,
+         height = 5)
+```
 
 
 ## FIT
@@ -6563,7 +7047,7 @@ GSE19668_input2FIT = GSE19668_counts_log2_summary_annotated_probes %>%
     filter(timepoint == 2) %>% 
   select(participant_id, MM.Entrez = entrezgene_id, EffectSize = log2fc) %>% 
   group_by(MM.Entrez) %>% 
-  summarize(mean_log2fc = mean(EffectSize))
+  summarise(mean_log2fc = mean(EffectSize))
 
 #Save
 GSE19668_input2FIT %>% 
@@ -6749,7 +7233,7 @@ dge_btm_mean_process = mouse_human_fit_log2fc %>%
   rename(symbol = human_symbol) %>% 
   inner_join(btm_annotation_genes, by = "symbol") %>% 
   group_by(organism, process) %>% 
-  summarize(mean_log2fc = mean(log2fc),
+  summarise(mean_log2fc = mean(log2fc),
             group,
             subgroup) %>%
   ungroup() %>% 
@@ -6971,7 +7455,7 @@ log2fc_sample = mouse_expression_metadata %>%
   select(probe_id, batch, subject_num, day0_value_raw = value_raw) %>% 
   #Get the mean expression value for healthy
   group_by(probe_id, batch) %>% 
-  summarize(n = n(),
+  summarise(n = n(),
             #Mean of healthy
             day0_value_raw = sum(day0_value_raw)/n,
             batch) %>% 
@@ -7034,7 +7518,7 @@ mouse_log2summary = ecoli_mouse_exprs %>% #20,845 probes
                names_to = "sample",
                values_to = "expression") %>% 
   group_by(probe) %>% 
-  summarize(mean = mean(expression,na.rm = TRUE),
+  summarise(mean = mean(expression,na.rm = TRUE),
             median = median(expression, na.rm = T)) %>%  
   inner_join(annot %>% 
               rename(probe = affy_mouse430_2), 
@@ -7216,7 +7700,7 @@ all_degs_mouse_ecoli %>% saveRDS(file = here("tables", "ecoli_infection_mouse_dg
 all_degs_mouse_ecoli %>% 
   group_by(condition) %>%
   filter(adj_p_val <= 0.05) %>% 
-  summarize(n_degs = n())
+  summarise(n_degs = n())
 
 ```
 
@@ -7240,7 +7724,7 @@ log2fc_sample_symbol = log2fc_sample %>%
 #Compute summary statistics
 log2fc_summary = log2fc_sample_symbol %>% 
   group_by(human_symbol, timepoint) %>%
-  summarize(
+  summarise(
     avg_log2fc = mean(log2fc, na.rm = TRUE),  # mean log2 fold change
     n_subjects = n(),                         # number of samples
     sd = sd(log2fc, na.rm = TRUE),             # standard deviation
@@ -7331,102 +7815,6 @@ log2fc_paired_unpaired_ttest %>%
 ```
 
 
-###### Compare DGE methods
-
-```{r}
-#Import ------
-#t-Test
-mouse_log2fc_paired_unpaired_ttest =
-  readRDS(file = here("tables", "ecoli_infection_mouse_log2fc_paired_unpaired_ttest.rds")) %>% 
-  mutate(organism = "Mouse")
-
-#Limma
-mouse_degs = readRDS(file = here("tables", "ecoli_infection_mouse_dge_limma_degs.rds")) %>% 
-  clean_names() %>% 
-  rename(padj = adj_p_val) %>% 
-  mutate(organism = "Mouse",
-         test = "Limma",
-         paired = "Paired") 
-
-
-#Merge datasets
-degs_ttest_limma =
-  bind_rows(
-    mouse_log2fc_paired_unpaired_ttest,
-    mouse_degs
-    )
-
-#Summarize  
-degs_ttest_limma_summary = degs_ttest_limma %>% 
-  group_by(organism, timepoint, test, paired) %>% 
-  summarise(
-    n_degs = sum(padj <= 0.05, na.rm = TRUE),
-    .groups = "drop"
-  ) %>% 
-  mutate(timepoint_num = readr::parse_number(timepoint),
-    timepoint = paste0(timepoint, "h"),
-    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
-
-degs_ttest_limma_summary
-
-```
-
-
-```{r fig.height=5, fig.width=5}
-# Plot number of DEGs per test and significance level
-degs_ttest_limma_summary_plot_gg <- degs_ttest_limma_summary %>%
-  ggplot(aes(
-    x = timepoint,
-    y = n_degs,
-    fill = test,
-    alpha = paired
-  )) +
-  geom_col(width = 0.8, position = position_dodge2()) +
-  
-  # Manual colors per test
-  scale_fill_manual(values = c(
-    "t-Test" = "gray25",
-    "Limma" = "#4DBBD5FF"
-  )) +
-  
-  # Alpha: paired = 1, unpaired = 0.5
-  scale_alpha_manual(values = c("Paired" = 1, "Unpaired" = 0.2)) +
-  
-  # Continuous x-axis for numeric timepoints
-  scale_x_discrete(
-    breaks = sort(unique(degs_ttest_limma_summary$timepoint)),
-    expand = c(0.01, 0.01)
-  ) +
-  scale_y_continuous(expand = c(0, 0)) +
-  
-  theme_vaxgo() +
-  labs(
-    title = "Total DEGs by test and timepoint",
-    subtitle = "Comparison across tests (FDR ≤ 0.05)",
-    x = "Day",
-    y = "Number of DEGs",
-    fill = "Test",
-    alpha = "Pairing"
-  ) +
-  facet_wrap(~organism, scales = "free_y") +
-  theme(
-    legend.position = "top",
-    axis.line.y = element_blank(),
-    panel.grid.major.y = element_line(color = "gray75", linetype = 3),
-    axis.ticks.y = element_line(color = "gray75")
-  )
-
-# Render plot
-degs_ttest_limma_summary_plot_gg
-
-degs_ttest_limma_summary_plot_gg %>% 
-  ggsave(filename = here("Figures", "ecoli_infection_mouse_dge_ttest_limma_summary.png"),
-         width = 5,
-         height = 5)
-```
-
-
-
 
 
 
@@ -7475,7 +7863,7 @@ human_log2fc_sample = human_expression_metadata %>%
          status == "Healthy") %>% 
   select(probe_id, participant_id = subject_id, status, day0_value_raw = value_raw) %>% 
   group_by(probe_id, status) %>% 
-  summarize(n = n(),
+  summarise(n = n(),
             #Mean of healthy
             day0_value_raw = sum(day0_value_raw)/n) %>% 
   select(probe_id, day0_value_raw) %>% 
@@ -7527,7 +7915,7 @@ human_ecoli_log2summary = human_exprs %>%
                names_to = "sample",
                values_to = "expression") %>% 
   group_by(probe) %>% 
-  summarize(mean = mean(expression,na.rm = TRUE),
+  summarise(mean = mean(expression,na.rm = TRUE),
             median = median(expression, na.rm = T)) %>%  
   inner_join(annot %>% 
               rename(probe = affy_hg_u133a_2), 
@@ -7687,7 +8075,7 @@ all_degs_human_ecoli %>% saveRDS(file = here("tables", "ecoli_infection_human_dg
 all_degs_human_ecoli %>% 
   dplyr::group_by(condition) %>%
   dplyr::filter(adj_p_val <= 0.05) %>% 
-  dplyr::summarize(n_degs = n())
+  dplyr::summarise(n_degs = n())
 
 ```
 
@@ -7709,7 +8097,7 @@ log2fc_sample_symbol = log2fc_sample %>%
 #Compute summary statistics
 log2fc_summary = log2fc_sample_symbol %>% 
   group_by(human_symbol) %>%
-  summarize(
+  summarise(
     avg_log2fc = mean(log2fc, na.rm = TRUE),  # mean log2 fold change
     n_subjects = n(),                         # number of samples
     sd = sd(log2fc, na.rm = TRUE),             # standard deviation
@@ -7725,10 +8113,7 @@ log2_hgnc_symbol_wide = log2fc_sample_symbol %>%
   distinct() %>% 
   select(subject_id, human_symbol, timepoint, hour_0 = day0_value_raw, value = value_raw) %>%
   pivot_wider(names_from = timepoint, values_from = value, names_prefix = "hour_")
-```
 
-
-```{r}
 #Unpaired
 log2fc_unpaired_ttest = log2_hgnc_symbol_wide %>%
   group_by(human_symbol) %>%
@@ -7754,101 +8139,6 @@ log2fc_unpaired_ttest %>%
 
 ```
 
-
-
-###### Compare DGE methods
-
-```{r}
-#Import ------
-#t-Test
-human_log2fc_unpaired_ttest =
-  readRDS(file = here("tables", "ecoli_infection_human_log2fc_unpaired_ttest.rds")) %>% 
-  mutate(organism = "Human")
-
-#Limma
-human_degs = readRDS(file = here("tables", "ecoli_infection_human_dge_limma_degs.rds")) %>% 
-  clean_names() %>% 
-  rename(padj = adj_p_val) %>% 
-  mutate(organism = "Human",
-         test = "Limma",
-         paired = "Unpaired") 
-
-
-#Merge datasets
-degs_ttest_limma =
-  bind_rows(
-    human_log2fc_unpaired_ttest,
-    human_degs
-    )
-
-#Summarize  
-degs_ttest_limma_summary = degs_ttest_limma %>% 
-  group_by(organism, timepoint, test, paired) %>% 
-  summarise(
-    n_degs = sum(padj <= 0.05, na.rm = TRUE),
-    .groups = "drop"
-  ) %>% 
-  mutate(timepoint_num = readr::parse_number(timepoint),
-    timepoint = paste0(timepoint, "h"),
-    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
-
-degs_ttest_limma_summary
-
-```
-
-
-```{r fig.height=5, fig.width=5}
-# Plot number of DEGs per test and significance level
-degs_ttest_limma_summary_plot_gg <- degs_ttest_limma_summary %>%
-  ggplot(aes(
-    x = timepoint,
-    y = n_degs,
-    fill = test,
-    alpha = paired
-  )) +
-  geom_col(width = 0.8, position = position_dodge2()) +
-  
-  # Manual colors per test
-  scale_fill_manual(values = c(
-    "t-Test" = "gray25",
-    "Limma" = "#4DBBD5FF"
-  )) +
-  
-  # Alpha: paired = 1, unpaired = 0.5
-  scale_alpha_manual(values = c("Unpaired" = 0.5)) +
-  
-  # Continuous x-axis for numeric timepoints
-  scale_x_discrete(
-    breaks = sort(unique(degs_ttest_limma_summary$timepoint)),
-    expand = c(0.01, 0.01)
-  ) +
-  scale_y_continuous(expand = c(0, 0)) +
-  
-  theme_vaxgo() +
-  labs(
-    title = "Total DEGs by test and timepoint",
-    subtitle = "Comparison across tests (FDR ≤ 0.05)",
-    x = "Day",
-    y = "Number of DEGs",
-    fill = "Test",
-    alpha = "Pairing"
-  ) +
-  facet_wrap(~organism, scales = "free_y") +
-  theme(
-    legend.position = "top",
-    axis.line.y = element_blank(),
-    panel.grid.major.y = element_line(color = "gray75", linetype = 3),
-    axis.ticks.y = element_line(color = "gray75")
-  )
-
-# Render plot
-degs_ttest_limma_summary_plot_gg
-
-degs_ttest_limma_summary_plot_gg %>% 
-  ggsave(filename = here("Figures", "ecoli_infection_human_dge_ttest_limma_summary.png"),
-         width = 5,
-         height = 5)
-```
 
 
 
@@ -7904,6 +8194,109 @@ human_mouse_metadata_ecoli %>%
   saveRDS(here("tables", "ecoli_infection_human_mouse_samples_metadata.rds"))
 ```
 
+#### Compare DGE methods
+```{r}
+#Import ------
+#t-Test
+human_log2fc_paired_unpaired_ttest =
+  readRDS(file = here("tables", "ecoli_infection_human_log2fc_unpaired_ttest.rds")) %>% 
+  mutate(organism = "Human")
+mouse_log2fc_paired_unpaired_ttest =
+  readRDS(file = here("tables", "ecoli_infection_mouse_log2fc_paired_unpaired_ttest.rds")) %>% 
+  mutate(organism = "Mouse")
+
+#Limma
+human_degs = readRDS(file = here("tables", "ecoli_infection_human_dge_limma_degs.rds")) %>% 
+  clean_names() %>% 
+  rename(padj = adj_p_val) %>% 
+  mutate(organism = "Human",
+         test = "Limma",
+         paired = "Unpaired") 
+
+mouse_degs = readRDS(file = here("tables", "ecoli_infection_mouse_dge_limma_degs.rds")) %>% 
+  clean_names() %>% 
+  rename(padj = adj_p_val) %>% 
+  mutate(organism = "Mouse",
+         test = "Limma",
+         paired = "Paired") 
+
+#Merge datasets
+degs_ttest_limma =
+  bind_rows(
+    human_log2fc_paired_unpaired_ttest,
+    human_degs,
+    mouse_log2fc_paired_unpaired_ttest,
+    mouse_degs
+    )
+
+#Summarize  
+degs_ttest_limma_summary = degs_ttest_limma %>% 
+  group_by(organism, timepoint, test, paired) %>% 
+  summarise(
+    n_degs = sum(padj <= 0.05, na.rm = TRUE),
+    .groups = "drop"
+  ) %>% 
+  mutate(timepoint_num = readr::parse_number(timepoint),
+    timepoint = paste0(timepoint, "h"),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+
+degs_ttest_limma_summary
+
+```
+
+
+```{r fig.height=5, fig.width=5}
+# Plot number of DEGs per test and significance level
+degs_ttest_limma_summary_plot_gg <- degs_ttest_limma_summary %>%
+  ggplot(aes(
+    x = timepoint,
+    y = n_degs,
+    fill = test,
+    alpha = paired
+  )) +
+  geom_col(width = 0.8, position = position_dodge2()) +
+  
+  # Manual colors per test
+  scale_fill_manual(values = c(
+    "t-Test" = "gray25",
+    "Limma" = "#4DBBD5FF"
+  )) +
+  
+  # Alpha: paired = 1, unpaired = 0.5
+  scale_alpha_manual(values = c("Paired" = 1, "Unpaired" = 0.2)) +
+  
+  # Continuous x-axis for numeric timepoints
+  scale_x_discrete(
+    breaks = sort(unique(degs_ttest_limma_summary$timepoint)),
+    expand = c(0.01, 0.01)
+  ) +
+  scale_y_continuous(expand = c(0, 0)) +
+  
+  theme_vaxgo() +
+  labs(
+    title = "Total DEGs by test and timepoint",
+    subtitle = "Comparison across tests (FDR ≤ 0.05)",
+    x = "Day",
+    y = "Number of DEGs",
+    fill = "Test",
+    alpha = "Pairing"
+  ) +
+  facet_wrap(~organism, scales = "free_x", space = "free_x") +
+  theme(
+    legend.position = "top",
+    axis.line.y = element_blank(),
+    panel.grid.major.y = element_line(color = "gray75", linetype = 3),
+    axis.ticks.y = element_line(color = "gray75")
+  )
+
+# Render plot
+degs_ttest_limma_summary_plot_gg
+
+degs_ttest_limma_summary_plot_gg %>% 
+  ggsave(filename = here("Figures", "ecoli_infection_human_mouse_dge_ttest_limma_summary.png"),
+         width = 5,
+         height = 5)
+```
 
 
 #===================
