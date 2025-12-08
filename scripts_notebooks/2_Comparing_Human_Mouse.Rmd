@@ -7343,15 +7343,6 @@ Plot correlation
 ```{r fig.height=5, fig.width=7}
 #Mouse vs Human
 #Pivot to wide GSEA + mean
-dge_btm_gsea_mean_wide = gsea_results %>% 
-  select(organism, timepoint, process, group, subgroup, set_size, nes, mean_log2fc, p_adjust, qvalue) %>% 
-  group_by(timepoint, process, subgroup, group, set_size) %>%
-  pivot_wider(names_from = organism,
-    values_from = c(mean_log2fc, nes, p_adjust, qvalue, set_size),
-    names_sep = "_") %>% 
-  ungroup()
-
-
 dge_btm_process_wide = dge_btm_process  %>% 
     ungroup() %>%
   select(process, mean_log2fc, organism, timepoint, process, group) %>% 
@@ -8173,6 +8164,11 @@ Import
 ```{r}
 #Import results -------
 gsea_results = readRDS(here("tables", "hepatitisb_engerixb_human_mouse_gsea_hallmarks_results.rds"))
+dge_hallmarks_mean_process = readRDS(file = here("tables", "hepatitisb_engerixb_human_mouse_dge_hallmarks_mean_process.rds")) %>% 
+  inner_join(msigdbr_grouped %>% 
+               select(process, group) %>% distinct(),
+             by = "process")
+msigdbr_grouped = read_csv(file = here("tables", "msigdb_hallmarks_grouped_genes.csv"))
 dge_long_genes = readRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds")) %>% 
   mutate(pathogen = "Hepatitis B", vaccine = "EngerixB",
          timepoint = as.numeric(timepoint),
@@ -8180,135 +8176,198 @@ dge_long_genes = readRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_lim
 
 ssgsea_results = readRDS(file = here("tables", "hepatitisb_engerixb_human_mouse_gsea_ssGSEA_hallmarks_results_summary.rds"))
 
-dge_hallmarks_process_genes_matched = dge_hallmarks_process_genes 
-
-gsea_results_matched = ssgsea_results %>% 
-  rename(set_size = n_genes)
+filename = "hepatitisb_engerixb_human_mouse"
 
 
 #Mouse vs Human
 #Pivot to wide GSEA + mean
-dge_hallmarks_gsea_mean_wide = gsea_results_matched %>% 
-  select(organism, timepoint, process, nes, set_size, mean_log2fc, p_adjust) %>% 
-  group_by(timepoint, process, set_size) %>%
-  pivot_wider(names_from = organism,
-    values_from = c(mean_log2fc, nes, p_adjust, set_size),
-    names_sep = "_") %>% 
-  ungroup()
-
-
-dge_hallmarks_process_genes_wide = dge_hallmarks_process_genes_matched  %>% 
+dge_hallmarks_process_wide = dge_hallmarks_mean_process  %>% 
     ungroup() %>%
-  select(symbol, mean_l2fc, adj_p_val, organism, timepoint, process) %>% 
+  select(process, mean_log2fc, organism, timepoint, process, group) %>% 
   distinct() %>% 
   group_by(organism, timepoint, process) %>% 
   pivot_wider(names_from = organism,
-              values_from = c(mean_l2fc, adj_p_val)) %>% 
+              values_from = c(mean_log2fc),
+               names_sep = "_") %>% 
   ungroup() %>% 
-  drop_na(mean_l2fc_Human)
+  rename(mean_log2fc_Human = Human, mean_log2fc_Mouse = Mouse) %>% 
+  drop_na(mean_log2fc_Human)
 
-
-
-#Calculate correlation -----
-
-# Means vs means
-cor_labels <- dge_hallmarks_process_genes_wide %>%
-  select(process, timepoint, Mouse = mean_l2fc_Mouse, Human = mean_l2fc_Human) %>% 
-  group_by(timepoint) %>% 
-  summarise(test_result = list(cor.test(x = Human, 
-                                        y = Mouse, 
-                                        method = "spearman")), 
-            .groups = "drop") %>%
-  mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
-         p_value = purrr::map_dbl(test_result, "p.value")) %>%
-  select(-test_result) %>%
-  # Labels
-  mutate(filter = "all",
-         r_squared = cor_value^2,
-    p_label = case_when(
-    p_value <= 0.01 ~ "***",
-    p_value <= 0.05 ~ "**",
-    p_value <= 0.10 ~ "*",
-    TRUE            ~ "ns"
-  ),
-    
-    cor_label = paste0("r=", round(cor_value, 2),
-      ", R²=", round(r_squared, 2),
-      ", ", p_label)) %>%  
-  mutate(timepoint_num = timepoint,
-    timepoint = paste0("Day ", timepoint_num),
-    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
-
-cor_labels_sig <- dge_hallmarks_process_genes_wide %>%
-  filter(adj_p_val_Mouse <= 0.05 & adj_p_val_Human <= 0.05) %>% 
-  select(process, timepoint, Mouse = mean_l2fc_Mouse, Human = mean_l2fc_Human) %>% 
-  group_by(timepoint) %>% 
-  summarise(test_result = list(cor.test(x = Human, 
-                                        y = Mouse, 
-                                        method = "spearman")), 
-            .groups = "drop") %>%
-  mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
-         p_value = purrr::map_dbl(test_result, "p.value")) %>%
-  select(-test_result) %>%
-  # Labels
-  mutate(filter = "all",
-         r_squared = cor_value^2,
-    p_label = case_when(
-    p_value <= 0.01 ~ "***",
-    p_value <= 0.05 ~ "**",
-    p_value <= 0.10 ~ "*",
-    TRUE            ~ "ns"
-  ),
-    
-    cor_label = paste0("r=", round(cor_value, 2),
-      ", R²=", round(r_squared, 2),
-      ", ", p_label)) %>%  
-  mutate(timepoint_num = timepoint,
-    timepoint = paste0("Day ", timepoint_num),
-    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)])))
-
-
-#NES
-
-cor_labels_nes <- dge_hallmarks_gsea_mean_wide %>%
-  select(process, timepoint, Mouse = nes_Mouse, Human = nes_Human) %>% 
-  group_by(timepoint) %>% 
-  summarise(test_result = list(cor.test(x = Human, 
-                                        y = Mouse, 
-                                        method = "spearman")), 
-            .groups = "drop") %>%
-  mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
-         p_value = purrr::map_dbl(test_result, "p.value")) %>%
-  select(-test_result) %>%
-  # Labels
-  mutate(filter = "all",
-         r_squared = cor_value^2,
-    p_label = case_when(
-    p_value <= 0.01 ~ "***",
-    p_value <= 0.05 ~ "**",
-    p_value <= 0.10 ~ "*",
-    TRUE            ~ "ns"
-  ),
-    
-    cor_label = paste0("r=", round(cor_value, 2),
-      ", R²=", round(r_squared, 2),
-      ", ", p_label)) %>%  
-  mutate(timepoint_num = timepoint,
-    timepoint = paste0("Day ", timepoint_num),
-    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+dge_hallmarks_ssgsea_mean_wide = ssgsea_results %>% 
+  select(organism, timepoint, process, group, nes, mean_log2fc, p_adjust) %>% 
+  group_by(timepoint, process, group) %>%
+  pivot_wider(names_from = organism,
+    values_from = c(nes, p_adjust, mean_log2fc),
+    names_sep = "_") %>% 
+  ungroup() %>% 
+  mutate(timepoint = as.numeric(timepoint))
 
 
 ```
 
-###### Plot means
-```{r fig.height=5, fig.width=10}
-dge_hallmarks_mean_group_correlation_df = dge_hallmarks_gsea_mean_wide %>% 
+Plot correlation
+
+```{r fig.height=5, fig.width=7}
+#Mouse vs Human
+#Pivot to wide GSEA + mean
+dge_hallmarks_process_wide = dge_hallmarks_mean_process  %>% 
+    ungroup() %>%
+  select(process, mean_log2fc, organism, timepoint, process, group) %>% 
+  distinct() %>% 
+  group_by(organism, timepoint, process) %>% 
+  pivot_wider(names_from = organism,
+              values_from = c(mean_log2fc),
+               names_sep = "_") %>% 
   ungroup() %>% 
-  inner_join(msigdbr_grouped %>% select(process, group) %>% distinct(), by = "process") %>%
+  rename(mean_log2fc_Human = Human, mean_log2fc_Mouse = Mouse) %>% 
+  drop_na(mean_log2fc_Human)
+
+dge_hallmarks_ssgsea_mean_wide = ssgsea_results %>% 
+  select(organism, timepoint, process, group, nes, mean_log2fc, p_adjust) %>% 
+  group_by(timepoint, process, group) %>%
+  pivot_wider(names_from = organism,
+    values_from = c(nes, p_adjust, mean_log2fc),
+    names_sep = "_") %>% 
+  ungroup() %>% 
+  mutate(timepoint = as.numeric(timepoint))
+
+
+```
+
+```{r fig.height=5, fig.width=7}
+#Calculate correlation -----
+
+# Means vs means
+cor_labels <- dge_hallmarks_process_wide %>%
+  select(process, timepoint, Mouse = mean_log2fc_Mouse, Human = mean_log2fc_Human) %>% 
+  group_by(timepoint) %>% 
+  summarise(test_result = list(cor.test(x = Human, 
+                                        y = Mouse, 
+                                        method = "spearman")), 
+            .groups = "drop") %>%
+  mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
+         p_value = purrr::map_dbl(test_result, "p.value")) %>%
+  select(-test_result) %>%
+  # Labels
+  mutate(filter = "all",
+         r_squared = cor_value^2,
+    p_label = case_when(
+    p_value <= 0.01 ~ "***",
+    p_value <= 0.05 ~ "**",
+    p_value <= 0.10 ~ "*",
+    TRUE            ~ "ns"
+  ),
+    
+    cor_label = paste0("r=", round(cor_value, 2),
+      ", R²=", round(r_squared, 2),
+      ", ", p_label)) %>%  
+  mutate(timepoint_num = timepoint,
+    timepoint = paste0("Day ", timepoint),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+
+cor_labels_sig <- dge_hallmarks_process_wide %>%
+    inner_join(dge_hallmarks_ssgsea_mean_wide %>% select(process, timepoint, p_adjust_Mouse, p_adjust_Human) %>% 
+               filter(p_adjust_Mouse <= 0.25, p_adjust_Human <= 0.25),
+             by = join_by("process", "timepoint")) %>% 
+  select(process, timepoint, Mouse = mean_log2fc_Mouse, Human = mean_log2fc_Human) %>% 
+  group_by(timepoint) %>% 
+  summarise(test_result = list(safe_cor_test(x = Human, 
+                                        y = Mouse, 
+                                        method = "spearman")), 
+            .groups = "drop") %>%
+  mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
+         p_value = purrr::map_dbl(test_result, "p.value")) %>%
+  select(-test_result) %>%
+  # Labels
+  mutate(filter = "filtered",
+         r_squared = cor_value^2,
+    p_label = case_when(
+    p_value <= 0.01 ~ "***",
+    p_value <= 0.05 ~ "**",
+    p_value <= 0.10 ~ "*",
+    TRUE            ~ "ns"
+  ),
+    
+    cor_label = paste0("r=", round(cor_value, 2),
+      ", R²=", round(r_squared, 2),
+      ", ", p_label)) %>% 
+  mutate(timepoint_num = timepoint,
+    timepoint = paste0("Day ", timepoint),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+
+
+# ssGSEA
+cor_labels_ssgsea_nes <- dge_hallmarks_ssgsea_mean_wide %>%
+  ungroup() %>% 
+  select(process, timepoint, group, Mouse = nes_Mouse, Human = nes_Human) %>% 
+  group_by(timepoint) %>% 
+  summarise(test_result = list(safe_cor_test(x = Human, 
+                                        y = Mouse, 
+                                        method = "spearman")), 
+            .groups = "drop") %>%
+  mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
+         p_value = purrr::map_dbl(test_result, "p.value")) %>%
+  select(-test_result) %>%
+   # Labels
+  mutate(filter = "all",
+         r_squared = cor_value^2,
+    p_label = case_when(
+    p_value <= 0.01 ~ "***",
+    p_value <= 0.05 ~ "**",
+    p_value <= 0.10 ~ "*",
+    TRUE            ~ "ns"
+  ),
+    
+    cor_label = paste0("r=", round(cor_value, 2),
+      ", R²=", round(r_squared, 2),
+      ", ", p_label)) %>% 
+  mutate(timepoint_num = timepoint,
+    timepoint = paste0("Day ", timepoint),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+
+
+cor_labels_ssgsea_nes_sig <- dge_hallmarks_ssgsea_mean_wide %>%
+  filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25) %>%
+  ungroup() %>% 
+  select(process, timepoint, group, Mouse = nes_Mouse, Human = nes_Human) %>% 
+  group_by(timepoint) %>% 
+  summarise(test_result = list(safe_cor_test(x = Human, 
+                                        y = Mouse, 
+                                        method = "spearman")), 
+            .groups = "drop") %>%
+  mutate(cor_value = purrr::map_dbl(test_result, "estimate"),
+         p_value = purrr::map_dbl(test_result, "p.value")) %>%
+  select(-test_result) %>%
+   # Labels
+  mutate(filter = "filtered",
+         r_squared = cor_value^2,
+    p_label = case_when(
+    p_value <= 0.01 ~ "***",
+    p_value <= 0.05 ~ "**",
+    p_value <= 0.10 ~ "*",
+    TRUE            ~ "ns"
+  ),
+    
+    cor_label = paste0("r=", round(cor_value, 2),
+      ", R²=", round(r_squared, 2),
+      ", ", p_label)) %>% 
+  mutate(timepoint_num = timepoint,
+    timepoint = paste0("Day ", timepoint),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+
+```
+
+###### Plot means
+
+```{r fig.height=4, fig.width=8}
+dge_hallmarks_mean_group_correlation_df = dge_hallmarks_process_wide  %>% 
+  inner_join(dge_hallmarks_ssgsea_mean_wide %>% select(process, timepoint, p_adjust_Mouse, p_adjust_Human),
+             by = join_by("process", "timepoint")) %>% 
+  ungroup() %>% 
   mutate(process = str_replace_all(process, "_", " ") %>% str_wrap(width = 15)) %>% 
   mutate(timepoint_num = timepoint,
-    timepoint = paste0("Day ", timepoint_num),
-    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+    timepoint = paste0("Day ", timepoint),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)])))  
 
 #Plot correlation plot (means)
 dge_hallmarks_mean_group_correlation_plot =  dge_hallmarks_mean_group_correlation_df %>% 
@@ -8322,9 +8381,16 @@ dge_hallmarks_mean_group_correlation_plot =  dge_hallmarks_mean_group_correlatio
   geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
   geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
   
-  facet_wrap(~timepoint, nrow = 1, scales = "fixed") +
+  facet_wrap(~timepoint, nrow = 1, scales = "free") +
   #Plot all points
+  geom_point(aes(fill = group,
+                 color = group),
+             size = 2,
+             alpha = 0.2,
+             pch = 21) +
+  #Plot only significant in both
   geom_point(aes(fill = group),
+             data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25), 
              color = "black",
              size = 2,
              alpha = 1,
@@ -8334,12 +8400,12 @@ dge_hallmarks_mean_group_correlation_plot =  dge_hallmarks_mean_group_correlatio
   scale_color_manual(values = hallmarks_colors) +
   guides(color = F) +
   labs(fill = "Group",
-       y = "Human (Mean Log2FC)",
-       x = "Model (Mean Log2FC)",
-       title = paste0("MSigDB Hallmarks, GSEA, Log2FC mean, ", filename),
+       y = "Human (Log2FC)",
+       x = "Model (Log2FC)",
+       title = paste0("hallmarks immune, Mean, ", filename),
        subtitle = "Processes that have padj <0.25 in both human and model have alpha = 1.") +
-  ylim(-0.3, 0.3) +
-  xlim(-0.3, 0.3) +
+  ylim(-0.5, 0.5) +
+  xlim(-0.5, 0.5) +
   #Theme
     theme_vaxgo() +
     theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
@@ -8355,11 +8421,17 @@ dge_hallmarks_mean_group_correlation_plot
 dge_hallmarks_mean_group_correlation_plot_corlabels =  dge_hallmarks_mean_group_correlation_plot +
     #Plot correlation labels
   geom_label(data = cor_labels,
-             aes(x = -0.3, y = Inf, label = cor_label),
+             aes(x = -0.5, y = Inf, label = cor_label),
              fill= "white",
              color = "black", 
                    label.padding = unit(0.3, "lines"),
-             hjust = 0, vjust = 1, inherit.aes = FALSE, size = 2.5) 
+             hjust = 0, vjust = 1, inherit.aes = FALSE, size = 2.5) +
+  geom_label(data = cor_labels_sig,
+             aes(x = 0, y = Inf, label = cor_label),
+             fill= "black",
+             color = "white", 
+                   label.padding = unit(0.3, "lines"),
+             hjust = 0, vjust = 1, inherit.aes = FALSE, size = 2.5)
 
 dge_hallmarks_mean_group_correlation_plot_labels = dge_hallmarks_mean_group_correlation_plot +
   geom_text_repel(aes(segment.inflect = T, 
@@ -8367,6 +8439,7 @@ dge_hallmarks_mean_group_correlation_plot_labels = dge_hallmarks_mean_group_corr
                       segment.alpha = 0.5,
                       color = group
                       ),
+                data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25),
                   min.segment.length = unit(0, "lines"), 
                   hjust = 0, 
                   lineheight = 0.8,
@@ -8386,7 +8459,7 @@ dge_hallmarks_mean_group_correlation_plot_labels = dge_hallmarks_mean_group_corr
 #Save results
 dge_hallmarks_mean_group_correlation_plot_corlabels %>%
   ggsave(filename = here("Figures", paste0(filename, "_dge_hallmarks_mean_group_correlation_plot.png")),
-         width = 9,
+         width = 8,
          height = 4)
 
 dge_hallmarks_mean_group_correlation_plot_labels %>%
@@ -8397,16 +8470,87 @@ dge_hallmarks_mean_group_correlation_plot_labels %>%
 dge_hallmarks_mean_group_correlation_plot_corlabels
 dge_hallmarks_mean_group_correlation_plot_labels
 ```
+Facet by group
 
-###### Plot NES
-```{r fig.height=5, fig.width=10}
-dge_hallmarks_nes_group_correlation_df = dge_hallmarks_gsea_mean_wide %>% 
-  ungroup() %>% 
-  inner_join(msigdbr_grouped %>% select(process, group) %>% distinct(), by = "process") %>%
-  mutate(process = str_replace_all(process, "_", " ") %>% str_wrap(width = 15)) %>% 
+Mean log2fc
+
+```{r fig.height=10, fig.width=8}
+dge_hallmarks_mean_group_correlation_plot_facetted = dge_hallmarks_gsea_mean_wide %>% 
+  mutate(timepoint = as.character(timepoint)) %>% 
+    mutate(group = fct_relevel(group, c(immune_order)),
+         process = str_wrap(process, width = 15)) %>% 
   mutate(timepoint_num = timepoint,
     timepoint = paste0("Day ", timepoint_num),
-    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) 
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)])))  %>% 
+  ggplot() +
+  aes(x = mean_log2fc_Mouse,
+      y = mean_log2fc_Human,
+      color = group) +
+  facet_grid(~group~timepoint, scales = "free") +
+  #Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+    geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
+    geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+    geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+  
+    #Plot all
+    geom_point(aes(fill = group),
+               color = "black",
+               size = 2,
+               alpha = 0.2,
+               pch = 21) +
+    #Plot only significant in both
+    geom_point(aes(fill = group),
+               data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25), 
+               color = "black",
+               size = 2,
+               alpha = 1,
+               pch = 21) +
+    geom_text_repel(aes(label = process),
+                    color = "black",
+                  min.segment.length = 0,
+                  data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25) %>%
+                    mutate(diff = mean_log2fc_Human - mean_log2fc_Mouse) %>%
+                    group_by(timepoint, group) %>% 
+                    slice_min(n = 5, abs(diff)) %>% 
+                    ungroup(), 
+                  size = 2, 
+                  segment.size = 0.2,  
+                  lineheight = 0.8, 
+                  max.overlaps = 20) +
+    scale_fill_manual(values = immune_colors) +
+    scale_color_manual(values = immune_colors) +
+    guides(color = F) +
+    labs(fill = "Immune group",
+         y = "Human (Log2FC)",
+         x = "Model (Log2FC)") +
+    #Theme
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.text = element_text(size = 8, hjust = 0))
+
+dge_hallmarks_mean_group_correlation_plot_facetted
+
+#Save results
+dge_hallmarks_mean_group_correlation_plot_facetted %>%
+  ggsave(filename = here("Figures", paste0(filename, "_dge_hallmarks_mean_group_correlation_plot_facetted.png")),
+         width = 8,
+         height = 11)
+  
+```
+
+
+###### Plot NES
+```{r fig.height=4, fig.width=8}
+dge_hallmarks_nes_group_correlation_df = dge_hallmarks_ssgsea_mean_wide %>% 
+  ungroup() %>% 
+  mutate(process = str_replace_all(process, "_", " ") %>% str_wrap(width = 15)) %>% 
+  mutate(timepoint_num = timepoint,
+    timepoint = paste0("Day ", timepoint),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)])))  
 
 #Plot correlation plot (means)
 dge_hallmarks_nes_group_correlation_plot =  dge_hallmarks_nes_group_correlation_df %>% 
@@ -8420,8 +8564,8 @@ dge_hallmarks_nes_group_correlation_plot =  dge_hallmarks_nes_group_correlation_
   geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
   geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
   
-  facet_wrap(~timepoint, nrow = 1, scales = "fixed") +
- #Plot all points
+  facet_wrap(~timepoint, nrow = 1, scales = "free") +
+  #Plot all points
   geom_point(aes(fill = group,
                  color = group),
              size = 2,
@@ -8429,7 +8573,7 @@ dge_hallmarks_nes_group_correlation_plot =  dge_hallmarks_nes_group_correlation_
              pch = 21) +
   #Plot only significant in both
   geom_point(aes(fill = group),
-             data = . %>% filter(p_adjust_Human <= 0.05 & p_adjust_Human <= 0.05), 
+             data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25), 
              color = "black",
              size = 2,
              alpha = 1,
@@ -8441,10 +8585,10 @@ dge_hallmarks_nes_group_correlation_plot =  dge_hallmarks_nes_group_correlation_
   labs(fill = "Group",
        y = "Human (NES)",
        x = "Model (NES)",
-       title = paste0("MSigDB Hallmarks, GSEA, NES, ", filename),
+       title = paste0("hallmarks immune, ssGSEA, NES, ", filename),
        subtitle = "Processes that have padj <0.25 in both human and model have alpha = 1.") +
-  # ylim(-0.3, 0.3) +
-  # xlim(-0.3, 0.3) +
+  ylim(-7, 7) +
+  xlim(-7, 7) +
   #Theme
     theme_vaxgo() +
     theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
@@ -8459,12 +8603,18 @@ dge_hallmarks_nes_group_correlation_plot
 #Print
 dge_hallmarks_nes_group_correlation_plot_corlabels =  dge_hallmarks_nes_group_correlation_plot +
     #Plot correlation labels
-  geom_label(data = cor_labels,
-             aes(x = -0, y = Inf, label = cor_label),
+  geom_label(data = cor_labels_ssgsea_nes,
+             aes(x = -7, y = Inf, label = cor_label),
              fill= "white",
              color = "black", 
                    label.padding = unit(0.3, "lines"),
-             hjust = 0, vjust = 1, inherit.aes = FALSE, size = 2.5) 
+             hjust = 0, vjust = 1, inherit.aes = FALSE, size = 2.5) +
+  geom_label(data = cor_labels_ssgsea_nes_sig,
+             aes(x = 0, y = Inf, label = cor_label),
+             fill= "black",
+             color = "white", 
+                   label.padding = unit(0.3, "lines"),
+             hjust = 0, vjust = 1, inherit.aes = FALSE, size = 2.5)
 
 dge_hallmarks_nes_group_correlation_plot_labels = dge_hallmarks_nes_group_correlation_plot +
   geom_text_repel(aes(segment.inflect = T, 
@@ -8472,7 +8622,7 @@ dge_hallmarks_nes_group_correlation_plot_labels = dge_hallmarks_nes_group_correl
                       segment.alpha = 0.5,
                       color = group
                       ),
-                  data = . %>% filter(p_adjust_Human <= 0.05 & p_adjust_Human <= 0.05), 
+                data = . %>% filter(p_adjust_Human <= 0.25 & p_adjust_Mouse <= 0.25),
                   min.segment.length = unit(0, "lines"), 
                   hjust = 0, 
                   lineheight = 0.8,
@@ -8492,7 +8642,7 @@ dge_hallmarks_nes_group_correlation_plot_labels = dge_hallmarks_nes_group_correl
 #Save results
 dge_hallmarks_nes_group_correlation_plot_corlabels %>%
   ggsave(filename = here("Figures", paste0(filename, "_dge_hallmarks_nes_group_correlation_plot.png")),
-         width = 9,
+         width = 8,
          height = 4)
 
 dge_hallmarks_nes_group_correlation_plot_labels %>%
