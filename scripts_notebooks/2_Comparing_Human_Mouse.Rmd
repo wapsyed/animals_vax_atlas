@@ -11037,7 +11037,8 @@ Plot distributions
 
 ```{r fig.height=12, fig.width=10}
 #Import ========================
-gsea_btm_results = readRDS(here("tables", paste0(filename, "_gsea_btm_results.rds")))
+gsea_btm_results =  readRDS(here("tables", "saureus_infection_human_mouse_gsea_btm_results.rds"))
+
 dge_btm_mean_process = readRDS(file = here("tables", paste0(filename, "_dge_btm_mean_process.rds")))
 dge_btm_process_genes = readRDS(file = here("tables", paste0(filename, "_dge_btm_process_genes.rds")))
 
@@ -11060,6 +11061,23 @@ duplicated_human_data <- map_dfr(new_timepoints, ~ {
 dge_btm_process_genes_matched = dge_btm_process_genes %>% 
   filter(organism != "Human") %>% 
   bind_rows(duplicated_human_data) 
+
+# ================================
+
+#GSEA results
+human_data_reference <- gsea_btm_results %>% filter(organism == "Human")
+new_timepoints <- c(gsea_btm_results %>% filter(organism != "Human") %>% pull(timepoint) %>% unique() %>% as.character())
+duplicated_human_data <- map_dfr(new_timepoints, ~ {
+  df_copy <- human_data_reference
+  df_copy <- df_copy %>%
+    mutate(timepoint = .x)
+
+  return(df_copy)
+})
+
+gsea_results_matched = gsea_btm_results %>%
+  filter(organism != "Human") %>%
+  bind_rows(duplicated_human_data)
 
 # ================================
 
@@ -11284,10 +11302,6 @@ dge_btm_process_genes_wide =
       adj_p_val_Human,
       group
     ) %>% 
-    mutate(
-      p_label_mouse = if_else(adj_p_val_Mouse <= 0.05, "DEG", "ns"),
-      p_label_human = if_else(adj_p_val_Human <= 0.05, "DEG", "ns")
-    ) %>% 
   drop_na(Human, Mouse) 
 
 safe_cor_test <- purrr::possibly(
@@ -11296,10 +11310,7 @@ safe_cor_test <- purrr::possibly(
 )
 
 dge_btm_process_genes_correlation = dge_btm_process_genes_wide %>%
-  # Duplicate
-  bind_rows(dge_btm_process_genes_wide %>%
-              mutate(p_label_mouse = "all", p_label_human = "all"))  %>%
-  group_by(timepoint, p_label_mouse, process) %>%
+  group_by(timepoint, process) %>%
   summarise(
     test_result = list(safe_cor_test(
       x = Human, y = Mouse, method = "pearson"
@@ -11351,21 +11362,19 @@ filter_1 = dge_btm_process_genes_correlation %>%
   group_by(timepoint) %>% 
   arrange(process, 
           -abs(cor_value)) %>% 
-  filter(timepoint == "12h",
-         p_label_mouse %in% c("all", "DEG")) %>% 
   distinct() %>% 
   ungroup() %>% 
   select(-cor_label, timepoint_num, -p_value)
 
 filter_1_wide = filter_1 %>% 
   pivot_wider(names_from = "p_label_mouse", 
-              values_from = c("cor_value", "n_genes", "r_squared", "p_label")) %>% 
+              values_from = c("cor_value", "n_genes", "r_squared")) %>% 
   mutate(diff_cor = cor_value_DEG - cor_value_all,
          diff_n_genes = n_genes_DEG - n_genes_all,
          diff_r_squared = r_squared_DEG - r_squared_all)
 
 filter_1 %>% 
-  group_by(timepoint, p_label_mouse)  %>% 
+  group_by(timepoint)  %>% 
   summarise(mean_cor = mean(cor_value, na.rm = T),
             mean_rsq = mean(r_squared, na.rm = T))
 ```
@@ -11374,6 +11383,7 @@ filter_1 %>%
 ```{r}
 #What does the choice of using DEGs or all genes affect the correlation and the number of genes?
 filter_1 %>% 
+  filter(timepoint_num == 12) %>% 
   ggplot() +
   aes(y = cor_value, 
       x = n_genes,
@@ -11389,7 +11399,10 @@ filter_1 %>%
 ```{r fig.height=10, fig.width=10}
 #Does the choice of using DEGs or all genes affect the correlation?
 filter_1 %>% 
-  mutate(process = fct_relevel(process, c(filter_1_wide %>% arrange(-diff_cor) %>% pull(process)))) %>% 
+  filter(timepoint_num == 12) %>% 
+  arrange(-cor_value) %>% 
+  drop_na(cor_value) %>% 
+  mutate(process = fct_reorder(process, cor_value)) %>% 
   ggplot() +
   aes(y = process, 
       x = cor_value,
@@ -11420,28 +11433,92 @@ Are the leading edges in mice the same in humans?
 gsea_btm_results_core = gsea_results_matched %>% 
   separate_rows(core_enrichment, sep = "/")
 
-gsea_btm_results_core_joined = gsea_btm_results_core %>% 
+gsea_btm_results_core_joined =
+  gsea_btm_results_core %>% 
   filter(organism == "Human") %>% 
-  select(human = organism, process, timepoint, core_enrichment, set_size) %>% 
+  select(process, timepoint,
+         gene = core_enrichment,
+         set_size_human = set_size) %>% 
+  mutate(human_core = TRUE) %>% 
   full_join(
-    gsea_btm_results_core %>%
-      filter(organism == "Mouse") %>%
-      select(mouse = organism, process, timepoint, core_enrichment, set_size),
-    by = join_by("timepoint", "process", "core_enrichment")
+    gsea_btm_results_core %>% 
+      filter(organism == "Mouse") %>% 
+      select(process, timepoint,
+             gene = core_enrichment,
+             set_size_mouse = set_size) %>% 
+      mutate(mouse_core = TRUE),
+    by = c("process", "timepoint", "gene")
   ) %>% 
-  mutate(mouse = if_else(is.na(mouse), "Human only", "Shared")) 
+  mutate(
+    status = case_when(
+      human_core == TRUE & mouse_core == TRUE ~ "Shared",
+      human_core == TRUE & is.na(mouse_core) ~ "Human only",
+      mouse_core == TRUE & is.na(human_core) ~ "Mouse only",
+      TRUE ~ "Other"
+    )
+  ) %>% 
+  arrange(timepoint, process, status)
 
 
 shared_perc = gsea_btm_results_core_joined %>% 
-  group_by(timepoint, process, mouse) %>% 
+  group_by(timepoint, process, status) %>% 
   summarise(n = n(), .groups = "drop_last") %>% 
   mutate(percent = (n / sum(n)) * 100,
          percent = percent %>% round(0)) %>% 
   ungroup() 
 
+#Which are the processes that share most of the core genes?
 shared_perc %>% 
-  group_by(timepoint, mouse) %>% 
-  summarise(mean_perc = mean(percent))
+  filter(status == "Shared") %>% 
+  arrange(-n, -percent)
+
+#What is the mean percentage?
+mean_percentage_shared = shared_perc %>% 
+  group_by(timepoint, status) %>% 
+  summarise(mean_perc = mean(percent)) %>% 
+  filter(status == "Shared")
+
+mean_percentage_shared
+```
+
+
+```{r fig.height=10, fig.width=10}
+shared_perc_plot = shared_perc %>% 
+  inner_join(gsea_btm_results_core %>% select(timepoint, process, group),
+             by = join_by("timepoint", "process")) %>% 
+  filter(status == "Shared") %>% 
+  filter(timepoint == "12") %>% 
+  mutate(process = fct_reorder(process, percent)) %>% 
+  arrange(-n, -percent) %>% 
+  ggplot() +
+  aes(x = percent, 
+      y = process,
+      fill = group,
+      size = n) +
+  geom_point(pch = 21)+
+  scale_fill_manual(values = immune_colors) +
+  theme_vaxgo() +
+  geom_vline(xintercept = c(mean_percentage_shared %>% filter(timepoint == "12") %>% pull(mean_perc)),
+             linetype = 2,
+             alpha = 0.6,
+             linewidth = 0.8,
+             color = "gray20") +
+  annotate("text",
+           x = c(mean_percentage_shared %>% filter(timepoint == "12") %>% pull() %>% round(0)),
+           y = 0.5,
+           label = paste0("Mean = ", 
+                          c(mean_percentage_shared %>% filter(timepoint == "12") %>% pull() %>% round(0)), 
+                          "%"),
+           vjust = -1,
+           hjust = 0,
+           color = "gray20")
+
+shared_perc_plot
+
+shared_perc_plot %>% 
+  ggsave(filename = here("Figures", "saureus_infection_human_mouse_gsea_btm_results_leadingedge_core_shared_perc.png"),
+         width = 10,
+         height = 10)
   
   
 ```
@@ -11449,38 +11526,63 @@ shared_perc %>%
 
 Do these leading edges have the same log2fc?
 ```{r}
-df_test = dge_btm_process_genes_wide %>% 
+#Do these leading edges have the same log2fc?
+df_test =
+  dge_btm_process_genes_wide %>% 
   filter(str_detect(process, "S2"),
          timepoint == "12") %>% 
-  full_join(gsea_btm_results_core_joined %>% 
-               filter(str_detect(process, "S2"), timepoint == "12"), 
-         by = join_by("process", "timepoint", "symbol" == "core_enrichment")) %>% 
-  mutate(mouse = if_else(is.na(mouse), "Mouse only", mouse)) %>% 
-  inner_join(shared_perc %>% 
-  filter(str_detect(process, "S2"),
-         timepoint == "12",
-         mouse == "Shared") %>% 
-    rename(shared = mouse),
-  by = join_by("process", "timepoint")) %>% 
-  inner_join(dge_btm_gsea_mean_wide %>% 
-               filter(str_detect(process, "S2"),
-         timepoint == "12") %>% 
-           select(process, timepoint, nes_Mouse, nes_Human),
-         by = "process") %>% 
-  mutate(nes_Mouse = round(nes_Mouse, 2),
-         nes_Human = round(nes_Human, 2))
+  
+  # Join com os genes core
+  full_join(
+    gsea_btm_results_core_joined %>% 
+      filter(str_detect(process, "S2"),
+             timepoint == "12"),
+    by = join_by("process", "timepoint", symbol == gene)
+  ) %>% 
+  
+  # join com shared %
+  inner_join(
+    shared_perc %>% 
+      filter(str_detect(process, "S2"),
+             timepoint == "12",
+             status == "Shared") %>%
+      rename(percent = percent,
+             status_percent = status),
+    by = join_by("process", "timepoint")
+  ) %>%
+  
+  # join com NES
+  inner_join(
+    dge_btm_gsea_mean_wide %>% 
+      filter(str_detect(process, "S2"),
+             timepoint == "12") %>% 
+      select(process, timepoint, nes_Mouse, nes_Human),
+    by = join_by("process", "timepoint")
+  ) %>% 
+  
+  mutate(
+    nes_Mouse = round(nes_Mouse, 2),
+    nes_Human = round(nes_Human, 2),
+    
+    # criar label completo para facet
+    facet_label = paste0(
+      process, " — Shared = ", percent, "%, ",
+      "NES Mouse = ", nes_Mouse, ", NES Human = ", nes_Human
+    )
+  ) %>% 
+  mutate(status = if_else(is.na(status), "Not core", status)) %>% 
+  inner_join(dge_btm_process_genes_correlation %>% 
+               mutate(timepoint_num = as.character(timepoint_num)) %>% 
+               select(timepoint = timepoint_num, process, cor_value, r_squared, p_label, cor_label),
+             by = join_by("process", "timepoint"))
 
 
-df_test %>% 
+#Scatterplot
+df_test_scatter = df_test %>% 
   ggplot() +
   aes(x = Mouse,
       y = Human,
-      fill = mouse) +
-  geom_point(df = dge_btm_process_genes_wide %>% 
-               filter(str_detect(process, "S2"),
-                      timepoint == "12"),
-             aes(x = Mouse, y = Human ),
-             alpha = 0.5, pch = 21, size = 3) +
+      fill = status) +
   geom_point(size = 3, alpha = 1, pch = 21, color = "black") +
   theme_vaxgo() +
     geom_abline(alpha = 0.2, linetype = 2) +
@@ -11489,45 +11591,55 @@ df_test %>%
   geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
   scale_fill_manual(values = c("Shared" = "#4361ee",
     "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF"
+    "Human only" = "#90A4AEFF",
+    "Not core" = "white"
   )) +
-  facet_wrap(~process~paste0("Shared = ", percent, "%", ", NES Mouse =", nes_Mouse, ", NES Human =", nes_Human)) +
-  labs(fill = "Core")
-  
-```
+  facet_wrap(~process~paste0(cor_label, ", Genes shared =", n, ", Shared = ", percent, "%", 
+                             ",\nNES Mouse = ", nes_Mouse, ", NES Human = ", nes_Human)) +
+  labs(fill = "Core",
+       x = "Mouse (Log2FC)",
+       y = "Human (Log2FC)")
 
-```{r fig.height=6, fig.width=5}
-df_test %>% 
+df_test_scatter
+  
+#Positions using log2fc
+df_test_log2fc = df_test %>% 
   pivot_longer(names_to = "organism",
                values_to = "log2fc",
                cols = c("Mouse", "Human")) %>% 
   ggplot() +
   aes(x = organism,
       y = log2fc,
-      fill = mouse,
+      fill = status,
       group = symbol,
-      color = mouse) +
-  geom_line(size = 1.5) +
-  geom_point(size = 3, alpha = 1, pch = 21, color = "black") +
+      color = status) +
+  geom_line(size = 0.5, alpha = 0.5, data = . %>% filter(status == "Not core")) +
+  geom_line(size = 0.5, alpha = 1, data = . %>% filter(status != "Not core")) +
+  geom_point(size = 3, alpha = 0.5, pch = "l", data = . %>% filter(status == "Not core")) +
+  geom_point(size = 3, alpha = 1, pch = "l", data = . %>% filter(status != "Not core")) +
   theme_vaxgo() +
-  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2, size = 1, color = "black") +
   scale_fill_manual(values = c("Shared" = "#4361ee",
     "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF"
+    "Human only" = "#90A4AEFF",
+    "Not core" = "gray80"
   )) +
   scale_color_manual(values = c("Shared" = "#4361ee",
     "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF"
+    "Human only" = "#90A4AEFF",
+    "Not core" = "gray80"
   )) +
-  facet_wrap(~process~paste0("Shared = ", percent, "%", ", NES Mouse =", nes_Mouse, ", NES Human =", nes_Human)) +
-  labs(fill = "Core") +
-  scale_x_discrete(expand = c(0.1, 0.1))
+  facet_wrap(~process~paste0(cor_label, ", Genes shared =", n, ", Shared = ", percent, "%", 
+                             ",\nNES Mouse = ", nes_Mouse, ", NES Human = ", nes_Human)) +
+  labs(fill = "Core",
+       color = "Core",
+       y = "Log2fc",
+       x = "") +
+  scale_x_discrete(expand = c(0.01, 0.01))
 
+df_test_log2fc
 
-```
-
-
-```{r fig.height=4, fig.width=6}
+#Positions using ranks
 df_test_ranked <- df_test %>%
   pivot_longer(
     names_to = "organism",
@@ -11535,37 +11647,64 @@ df_test_ranked <- df_test %>%
     cols = c("Mouse", "Human")
   ) %>%
   group_by(organism) %>%
-  mutate(rank = rank(-log2fc, ties.method = "first")) %>%   # maior log2fc = rank 1
-  ungroup()
+  mutate(rank = rank(-log2fc, ties.method = "first")) %>%   
+  ungroup() %>% 
+  arrange(rank) %>% 
+  drop_na(log2fc)
 
-df_test_ranked %>% 
+df_test_ranked_plot = df_test_ranked %>% 
   ggplot() +
-  aes(x = rank,
-      y = organism,
-      fill = mouse,
+  aes(x = organism,
+      y = rank,
+      fill = status,
       group = symbol,
-      color = mouse) +
-  geom_line(size = 1.5) +
-  geom_point(size = 3, alpha = 1, pch = 21, color = "black") +
+      color = status) +
+  geom_line(size = 0.5, alpha = 0.5, data = . %>% filter(status == "Not core")) +
+  geom_line(size = 0.5,alpha = 1,  data = . %>% filter(status != "Not core")) +
+  geom_point(size = 3, alpha = 0.5, pch = "l", data = . %>% filter(status == "Not core")) +
+  geom_point(size = 3, alpha = 1, pch = "l", data = . %>% filter(status != "Not core")) +
   theme_vaxgo() +
-  scale_fill_manual(values = c(
-    "Shared" = "#4361ee",
+  scale_fill_manual(values = c("Shared" = "#4361ee",
     "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF"
+    "Human only" = "#90A4AEFF",
+    "Not core" = "gray80"
   )) +
-  scale_color_manual(values = c(
-    "Shared" = "#4361ee",
+  scale_color_manual(values = c("Shared" = "#4361ee",
     "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF"
+    "Human only" = "#90A4AEFF",
+    "Not core" = "gray80"
   )) +
-  facet_wrap(~process~paste0("Shared = ", percent, "%", ", NES Mouse =", nes_Mouse, ", NES Human =", nes_Human)) +
+  facet_wrap(~process~paste0(cor_label, ", Genes shared =", n, ", Shared = ", percent, "%", 
+                             ",\nNES Mouse = ", nes_Mouse, ", NES Human = ", nes_Human)) +
   labs(fill = "Core",
        color = "Core",
-       y = "",
-       x = "Rank") +
-  scale_y_discrete(expand = c(0.01, 0.01))
-
+       y = "Rank",
+       x = "") +
+  scale_x_discrete(expand = c(0.01, 0.01)) +
+  scale_y_reverse()
 ```
+
+
+```{r fig.height=6, fig.width=7}
+leading_edges_plots = ((df_test_scatter + theme(legend.position = "top")) |
+   ((df_test_log2fc + theme(strip.text = element_blank(), 
+                            legend.position = "none")) /
+    (df_test_ranked_plot + theme(strip.text = element_blank(), 
+                                 legend.position = "none")))) +
+  plot_layout(
+    widths = c(0.70, 0.15, 0.15),
+    guides = "collect"
+  ) +
+  plot_annotation(theme = theme(legend.position = "bottom"))
+
+leading_edges_plots
+
+leading_edges_plots %>% 
+  ggsave(filename = here("Figures", "saureus_infection_human_mouse_gsea_btm_results_leadingedge_core.png"),
+         width = 7,
+         height = 6)
+```
+
 
 
 
