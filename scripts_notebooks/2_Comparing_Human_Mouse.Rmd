@@ -19233,70 +19233,84 @@ human_mouse_log2fc_log2fc_avg_wide_scatterplot %>%
 
 ```{r}
 #Import
-human_mouse_fluad_log2fc_samples =
-  readRDS(file = here("tables", "influenza_fluad_human_mouse_log2fc_samples.rds"))
+log2fc_samples_annotated = log2fc_samples %>% 
+  inner_join(all_human_mouse_metadata %>% 
+               mutate(timepoint = if_else(pathogen == "Staphylococcus aureus" & timepoint == 1, 24, timepoint)),
+             by = join_by("geo_sample", "participant_id"))
 
-human_mouse_fluad_metadata =
-  readRDS(file = here("tables", "influenza_fluad_human_mouse_metadata.rds"))
+all_degs_human_mouse
 
-all_degs_human_mouse = readRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds")) %>% 
-  mutate(pathogen = "Influenza", treatment = "Fluad") %>% 
-  rename(mean_l2fc = mean, ci_lower = lower, ci_upper = upper)
+ 
 ```
 
 ```{r}
 # #Input
-# filename = "influenza_fluad_human_mouse"
+# filename = "all_human_mouse"
 # gene_set_name = "AllGenes"
-# human_mouse_log2fc_samples = human_mouse_fluad_log2fc_samples
+# human_mouse_log2fc_samples = log2fc_samples_annotated
 
 #Input
-# filename = "influenza_fluad_human_mouse"
+# filename = "all_human_mouse"
 # gene_set_name = "Immune"
-# human_mouse_log2fc_samples = human_mouse_fluad_log2fc_samples  %>%
+# human_mouse_log2fc_samples = log2fc_samples_annotated  %>%
 #   filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
 
 
 # #Input
-# filename = "influenza_fluad_human_mouse"
-# gene_set_name = "DEGs"
-# mouse_degs = all_degs_human_mouse %>%
-#   group_by(timepoint) %>%
-#   filter(adj_p_val <= 0.05, organism == "Mouse") %>%
-#   select(human_symbol, timepoint)
-# human_degs = all_degs_human_mouse %>%
-#   group_by(timepoint) %>%
-#   filter(adj_p_val <= 0.05, organism == "Human") %>%
-#   select(human_symbol, timepoint)
-# human_mouse = mouse_degs %>%
-#   inner_join(human_degs, by = join_by("human_symbol", "timepoint"))
-# 
-# human_mouse_log2fc_samples = human_mouse_fluad_log2fc_samples  %>%
-#   inner_join(human_mouse, by = join_by(timepoint, human_symbol))
+filename = "all_human_mouse"
+gene_set_name = "DEGs"
+mouse_degs = all_degs_human_mouse %>%
+  group_by(pathogen, timepoint) %>%
+  filter(adj_p_val <= 0.05, organism == "Mouse") %>%
+  select(pathogen, human_symbol, timepoint)
+human_degs = all_degs_human_mouse %>%
+  group_by(pathogen, timepoint) %>%
+  filter(adj_p_val <= 0.05, organism == "Human") %>%
+  select(pathogen, human_symbol, timepoint)
+human_mouse = bind_rows(
+  #Vaccination
+  mouse_degs %>%
+  inner_join(human_degs %>% 
+               ungroup() %>% 
+               filter(pathogen %in% c("Influenza", "Hepatitis B")), 
+             by = join_by("human_symbol", "timepoint", "pathogen")),
+  #Infection
+  mouse_degs %>% 
+  inner_join(human_degs %>% 
+               ungroup() %>% 
+               filter(!pathogen %in% c("Influenza", "Hepatitis B")) %>% 
+               select(-timepoint), 
+             by = join_by("human_symbol", "pathogen"))
+  ) %>% 
+  mutate(timepoint = parse_number(timepoint))
 
-#Input
-filename = "influenza_fluad_human_mouse"
-gene_set_name = "DEGs_Immune"
-human_mouse_log2fc_samples = human_mouse_fluad_log2fc_samples  %>%
-  inner_join(human_mouse, by = join_by("human_symbol", "timepoint")) %>%
-  filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
+human_mouse_log2fc_samples = log2fc_samples_annotated  %>%
+  inner_join(human_mouse,
+             by = join_by(timepoint, human_symbol, pathogen))
+
+# #Input
+# filename = "all_human_mouse"
+# gene_set_name = "DEGs_Immune"
+# human_mouse_log2fc_samples = log2fc_samples_annotated  %>%
+#   inner_join(human_mouse, by = join_by("human_symbol", "timepoint")) %>%
+#   filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
 
 ```
 
-```{r fig.height=3, fig.width=5}
+```{r fig.height=10, fig.width=5}
 genes_samples_long = human_mouse_log2fc_samples %>% 
-  select(organism, human_symbol, participant_id, timepoint, log2fc) %>% 
+  select(pathogen, organism, human_symbol, participant_id, timepoint, log2fc) %>% 
   distinct() %>% 
-  mutate(condition = paste0(participant_id, "_", timepoint)) 
+  mutate(condition = paste0(pathogen, "_", participant_id, "_", timepoint)) 
 
 # Annotation table
 samples_annotation = genes_samples_long %>% 
-  select(organism, participant_id, timepoint, condition) %>% 
+  select(pathogen, organism, participant_id, timepoint, condition) %>% 
   distinct()
 
 # Pivot to wide format
 genes_samples_wide_all = genes_samples_long %>% 
-  select(-timepoint, -organism, -participant_id) %>% 
+  select(-timepoint, -organism, -participant_id, -pathogen) %>% 
   pivot_wider(names_from = "condition",
               values_from = "log2fc") %>% 
   column_to_rownames("human_symbol")
@@ -19348,48 +19362,58 @@ correlation_long_all_mouse_human_timepoints_summary = cor_genes_samples_wide_all
 
   # Keep Human as reference when comparing human and mouse
   filter(!(organism_condition1 == "Mouse" & organism_condition2 == "Human")) %>% 
+  
+  filter(pathogen_condition1 == pathogen_condition2) %>% 
 
   # Annotate comparison type and timepoints
   mutate(comparison = paste0(organism_condition1, " vs. ", organism_condition2),
          timepoint_comparison = paste0(timepoint_condition1, "-", timepoint_condition2)) %>% 
 
   # Compute summary statistics per comparison and timepoint
-  group_by(comparison, timepoint_comparison) %>% 
+  group_by(pathogen_condition1, comparison, timepoint_comparison) %>% 
   mutate(
     mean = mean(correlation, na.rm = T),
     sd   = sd(correlation, na.rm = TRUE),
     n = n(),
-    n_genes,
+    # n_genes,
     se   = sd / sqrt(n),
     tval = qt(0.975, df = n - 1),
     ci_low  = mean - tval * se,
     ci_high = mean + tval * se
   ) %>% 
   ungroup() %>% 
-  select(comparison, timepoint_condition1, timepoint_condition2, mean:ci_high, n_genes) %>% 
+  select(pathogen = pathogen_condition1, comparison, timepoint_condition1, timepoint_condition2, mean:ci_high) %>% 
   distinct() %>% 
-  arrange(comparison) %>% 
+  arrange(pathogen, comparison) %>% 
 
   # For same-organism comparisons, keep only matching timepoints
   filter(!(comparison == "Mouse vs. Mouse" & timepoint_condition1 != timepoint_condition2),
-         !(comparison == "Human vs. Human" & timepoint_condition1 != timepoint_condition2),
-         !(comparison == "Human vs. Mouse" & timepoint_condition1 != timepoint_condition2)) %>% 
+         !(comparison == "Human vs. Human" & timepoint_condition1 != timepoint_condition2)) %>% 
 
   # Numeric representation of timepoint for plotting
   mutate(timepoint = timepoint_condition2 %>% as.numeric())
 
 #Unite
 correlation_long_all_mouse_human_timepoints_summary
+```
 
 
+```{r fig.height=10, fig.width=5}
 #Plot
 correlation_long_all_mouse_human_timepoints_summary_plot = correlation_long_all_mouse_human_timepoints_summary %>% 
+  mutate(pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli")) %>% 
+  mutate(timepoint = if_else(pathogen %in% c("Escherichia coli", 
+                                                 "Staphylococcus aureus"), 
+                                 paste0(timepoint, "h"),
+                                 paste0("Day ", timepoint)),
+         timepoint = fct_reorder(timepoint, parse_number(timepoint))) %>% 
   ggplot() +
-  aes(x = as.numeric(timepoint),
+  aes(x = timepoint,
       y = mean,
       group = comparison,
       color = comparison,
       fill = comparison) +
+  facet_wrap(~pathogen, scales = "free", ncol = 1) +
   geom_line(size = 1) +
   
   geom_errorbar(aes(ymin = ci_low, 
@@ -19397,9 +19421,9 @@ correlation_long_all_mouse_human_timepoints_summary_plot = correlation_long_all_
                  size = 0.5) +
   geom_point(pch = 21, fill = "white", size = 2, stroke = 1.5) +
   
-  scale_x_continuous(breaks = c(1, 3, 7), expand = c(0.01, 0.01)) +
-  scale_y_continuous(expand = c(0.01, 0.01), 
-                     limits = c(-0.2, 1)
+  scale_x_discrete(expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01),
+                     # limits = c(0, 1)
                      ) +
   theme_vaxgo() +
   scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
@@ -19415,13 +19439,14 @@ correlation_long_all_mouse_human_timepoints_summary_plot = correlation_long_all_
   theme(legend.position = "right") +
   guides(fill = "none") 
 
+
 correlation_long_all_mouse_human_timepoints_summary_plot
 
 
 correlation_long_all_mouse_human_timepoints_summary_plot %>% 
   ggsave(filename = here("Figures", paste(filename, gene_set_name, "correlation_timepoints_summary_plot_square.png", sep = "_")),
          width = 5,
-         height = 3)
+         height = 10)
 
 ```
 
