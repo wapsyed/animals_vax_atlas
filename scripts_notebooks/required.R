@@ -14,7 +14,7 @@ required_packages <- c(
 bioc_pkgs <- c(
   "biomaRt", "GEOquery", "circlize", "celldex", 
   "org.Hs.eg.db", "DESeq2", "msigdbr", 
-  "ape", "variancePartition", "ggiraph",
+  "ape", "variancePartition", 
   "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
   "mogene10sttranscriptcluster.db", "fgsea", "arrayQualityMetrics"
 )
@@ -28,21 +28,21 @@ bioc_pkgs <- c(
 #   install.packages(cran_missing)
 # }
 # 
-# Install packages from Bioconductor
-# Install BiocManager if necessary
-if (!requireNamespace("BiocManager", quietly = TRUE)) {
-  install.packages("BiocManager")
-}
-
-bioc_missing <- setdiff(bioc_pkgs, rownames(installed.packages()))
-if (length(bioc_missing) > 0) {
-  BiocManager::install(bioc_missing)
-}
-
-# Load packages (CRAN + Bioconductor)
-invisible(lapply(c(required_packages, bioc_pkgs), function(pkg) {
-  suppressPackageStartupMessages(library(pkg, character.only = TRUE))
-}))
+# # Install packages from Bioconductor
+# # Install BiocManager if necessary
+# if (!requireNamespace("BiocManager", quietly = TRUE)) {
+#   install.packages("BiocManager")
+# }
+# 
+# bioc_missing <- setdiff(bioc_pkgs, rownames(installed.packages()))
+# if (length(bioc_missing) > 0) {
+#   BiocManager::install(bioc_missing)
+# }
+# 
+# # Load packages (CRAN + Bioconductor)
+# invisible(lapply(c(required_packages, bioc_pkgs), function(pkg) {
+#   suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+# }))
 
 #Load all faster
 lapply(required_packages, library, character.only = TRUE)
