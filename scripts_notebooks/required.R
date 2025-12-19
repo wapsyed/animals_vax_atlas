@@ -17,7 +17,7 @@ bioc_pkgs <- c(
   "ape", "variancePartition", 
   "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
   "mogene10sttranscriptcluster.db", "fgsea", "arrayQualityMetrics"
-)
+) 
 
 # renv::remove("ape")
 # renv::install("ape")
