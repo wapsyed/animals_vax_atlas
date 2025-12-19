@@ -18979,7 +18979,182 @@ correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot %>%
 
 
 # 5. Merge analyses
+### Stacked barplot of overlapped genes
 
+```{r fig.width=10, fig.height=4}
+#Import datasets
+all_degs_human_mouse = readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds")) 
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+
+dge_long_genes_matched = all_degs_human_mouse %>% 
+  select(pathogen, organism, human_symbol, timepoint, mean_log2fc = mean_l2fc, adj_p_val) %>% 
+  bind_rows(
+  #Duplcate Human
+  all_degs_human_mouse %>% 
+  filter(organism == "Human",
+         treatment == "Infection") %>% 
+  select(pathogen, organism, human_symbol, mean_log2fc = mean_l2fc, adj_p_val) %>% 
+  inner_join(all_degs_human_mouse %>% 
+               filter(organism == "Mouse",
+                      treatment == "Infection") %>% 
+               select(pathogen, timepoint) %>% 
+               distinct(),
+             by = "pathogen")
+  ) %>% 
+  distinct() %>% 
+  mutate(timepoint_num = readr::parse_number(timepoint),
+    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) %>% 
+  mutate(timepoint_comparison = if_else(pathogen %in% c("Escherichia coli", "Staphylococcus aureus"),
+                                        paste0(timepoint, "-", "24h"), 
+                                        paste0(timepoint, "-", timepoint)))
+
+#Get total genes by each condition
+degs_mouse = dge_long_genes_matched %>% 
+  filter(adj_p_val <= 0.05,
+         organism == "Mouse")
+degs_human = dge_long_genes_matched %>% 
+  filter(adj_p_val <= 0.05,
+         organism == "Human")
+
+degs_mouse_summarize = dge_long_genes_matched %>% 
+  filter(adj_p_val <= 0.05) %>% 
+  group_by(organism, pathogen, timepoint) %>% 
+  summarise(n_genes = n()) 
+
+#Print
+degs_mouse_summarize
+
+#Get overlap -----
+#Get symbols
+degs_mouse_genes = degs_mouse %>% 
+  select(human_symbol, timepoint, pathogen) %>% 
+  distinct()
+
+degs_human_genes = degs_human %>% 
+  select(human_symbol, timepoint, pathogen) %>% 
+  distinct()
+
+#Inner join, Mouse and Human ------
+
+#Mouse
+degs_human_and_mouse_genes = degs_human_genes %>% 
+  inner_join(degs_mouse_genes, 
+             by = join_by("pathogen", "human_symbol", "timepoint")) %>% 
+  mutate(condition = "Mouse AND Human",
+         comparison = "Mouse vs Human",
+         organism = "Mouse",
+         group = "Common")
+
+#Duplicate rows for human
+degs_human_and_mouse_genes_human = degs_human_and_mouse_genes %>% 
+  mutate(organism = "Human")
+
+
+#Anti join, Human vs Mouse -------
+#Human
+#Human vs Mouse
+degs_human_Not_mouse_genes = degs_human_genes %>% 
+  anti_join(degs_mouse_genes, 
+             by = join_by("pathogen", "human_symbol", "timepoint")) %>% 
+  mutate(condition = "Human NOT Mouse", 
+         comparison = "Mouse vs Human",
+         organism = "Human",
+         group = "Not common")
+
+#Models
+#Mouse vs Human
+degs_mouse_Not_human_genes = degs_mouse_genes %>% 
+  anti_join(degs_human_genes, 
+             by = join_by("pathogen", "human_symbol", "timepoint")) %>% 
+  mutate(condition = "Mouse NOT Human",
+         organism = "Mouse",
+         comparison = "Mouse vs Human",
+         group = "Not common")
+
+
+#Merge data ------
+degs_human_mouse_overlap_genes = 
+  bind_rows(degs_human_and_mouse_genes,
+            degs_human_and_mouse_genes_human,
+            degs_human_Not_mouse_genes,
+            degs_mouse_Not_human_genes 
+            )
+
+#Classify by same and exclusive DEGs -----
+degs_human_mouse_overlap_genes_summary = degs_human_mouse_overlap_genes %>% 
+  group_by(pathogen, condition, timepoint) %>% 
+  summarise(n = n(),
+            organism,
+            comparison,
+            group) %>% 
+  distinct()
+
+#Print
+degs_human_mouse_overlap_genes_summary
+```
+
+Plot overlap (bars)
+
+```{r fig.height=10, fig.width=3}
+#Plot overlap
+degs_human_mouse_overlap_common_plot = degs_human_mouse_overlap_genes_summary %>%
+  mutate(timepoint = as.character(timepoint),
+         timepoint = if_else(pathogen == "Staphylococcus aureus" & timepoint == "1", "24", timepoint)) %>% 
+  ungroup() %>% 
+  mutate(pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli")) %>% 
+  filter(!c(pathogen == "Hepatitis B" & timepoint %in% c(1, 3)),
+         !c(pathogen == "Staphylococcus aureus" & timepoint == "24")) %>% 
+  mutate(timepoint = if_else(pathogen %in% c("Escherichia coli", 
+                                                 "Staphylococcus aureus"), 
+                                 paste0(timepoint, "h"),
+                                 paste0("Day ", timepoint))) %>% 
+  mutate(timepoint = fct_reorder(timepoint, parse_number(timepoint))) %>% 
+  mutate(organism = if_else(organism == "Human", "H", "M")) %>% 
+  ggplot() +
+  aes(x = organism,
+      y = n,
+      fill = fct_rev(group)) + 
+  geom_col(alpha = 1) +
+  facet_nested_wrap(~pathogen+timepoint, axes = "x",
+               nest_line = element_line(linetype = 1, color = "black", size = 1), ) +
+
+
+  scale_y_continuous(n.breaks = 5,
+                     expand = c(0.01, 0.01)) +
+  scale_fill_manual(values = c("Common" = "#4DBBD5FF",
+                               "Not common" = "gray90"))    +
+  scale_color_manual(values = c("Common" = "#4DBBD5FF",
+                               "Not common" = "gray90"))    +
+  theme_vaxgo() +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.text.y = element_text(hjust = 0.5, size = 10),
+    axis.text.x = element_text(angle = 0),
+    axis.text.y = element_text(size = 10),
+    panel.spacing.x = unit(0, "lines"), 
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    legend.position = "top",
+    legend.position.inside = c(0.5, 0.95),
+    legend.direction = "horizontal", 
+    legend.key.width = unit(0.4, 'cm'),
+    legend.key.height = unit(0.4, 'cm'),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 7, vjust = 0.5, hjust = -0.2)
+  ) +
+  labs(
+    x = "",
+    y = "Total",
+    color = ""
+    ) 
+
+
+#Save
+degs_human_mouse_overlap_common_plot %>%
+  ggsave(filename = here("Figures", "all_human_mouse_dge_degs_overlap_barplot.png"),
+         width = 3,
+         height = 10)
+```
 
 ## Correlation
 
