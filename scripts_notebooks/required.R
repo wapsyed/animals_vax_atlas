@@ -395,18 +395,18 @@ btm_immune_groups = list(group = c("SIGNAL TRANSDUCTION" = "#708d81",
                                       "PLASMA CELLS" = "#ffafcc"))
 
 
-immune_colors = c("SIGNAL TRANSDUCTION" = "#708d81",
-                  "CELL CYCLE" = "#06d6a0",
-                  "ECM AND MIGRATION" = "#52b788",
-                  "ENERGY METABOLISM" = "#95d5b2", 
-                  "INNATE RESPONSE" = "#184e77",
-                  "NEUTROPHILS" = "#219ebc",
-                  "NK CELLS" = "#a2d2ff",
-                  "IFN"= "#4361ee",
-                  "MONOCYTES" = "#4cc9f0",
-                  "PLATELETS" = "#7209b7",
-                  "B CELLS" = "#e5383b",
-                  "T CELLS" = "#f72585")
+immune_colors = c("SIGNAL TRANSDUCTION" = "#CA6702",
+                  "CELL CYCLE" = "#9B2226",
+                  "ECM AND MIGRATION" = "#94D2BD",
+                  "ENERGY METABOLISM" = "#F2CC8F", 
+                  "INNATE RESPONSE" = "#3D405B",
+                  "NEUTROPHILS" = "#90A4AEFF",
+                  "NK CELLS" = "#001219",
+                  "IFN"= "gray80",
+                  "MONOCYTES" = "#8491B4FF",
+                  "PLATELETS" = "#7E6148FF",
+                  "B CELLS" = "#4cc9f0",
+                  "T CELLS" = "#4361ee")
 
 immune_order = c("SIGNAL TRANSDUCTION",
                  "CELL CYCLE",
@@ -422,12 +422,12 @@ immune_order = c("SIGNAL TRANSDUCTION",
                  "T CELLS")
 
 
-hallmarks_colors = c("Immune Response" = "#0A9396",
-                     "Apoptosis and Hormonal Response" = "#CA6702",
-                     "Differentiation and Cell Structure" = "#9B2226",
-                     "Metabolism"  = "#3D405B", 
-                     "Proliferation and Repair" = "#4361ee",
-                     "Signaling and Stress Response"   = "#81B29A")
+hallmarks_colors = c("Immune Response" = "#4cc9f0",
+                     "Apoptosis and Hormonal Response" = "#90A4AEFF",
+                     "Differentiation and Cell Structure" = "gray80",
+                     "Metabolism"  = "#8491B4FF", 
+                     "Proliferation and Repair" = "#001219",
+                     "Signaling and Stress Response"   = "#4361ee")
 
 colors_all <- c(
   "#4361ee",
