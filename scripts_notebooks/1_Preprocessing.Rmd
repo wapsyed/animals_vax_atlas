@@ -4139,6 +4139,9 @@ annot <- getBM(
   values = gene_id,
   mart = ensembl_mart)
 
+annot %>% 
+  saveRDS(here("tables", "probe_annot_hepatitisb_engerixb_mouse.rds"))
+
 beep()
 
 #Get lookup table from FIT
@@ -5781,7 +5784,6 @@ mouse_metadata = saureus_mouse_metadata
 
 
 ```{r}
-
 #Annotate genes ------
 #Mouse -----
 #Annotate data and calculate log2fc
@@ -5839,6 +5841,9 @@ annot <- getBM(
   filters = "affy_mouse430_2", #Probes
   values = gene_id,
   mart = ensembl_mart)
+
+annot %>% 
+  saveRDS(here("tables", "probe_annot_saureus_infection_mouse.rds"))
 
 #Get lookup table from FIT
 #Install model package
@@ -8306,6 +8311,8 @@ degs_ttest_limma_summary_plot_gg %>%
 #===================
 
 # Combine all datasets
+
+Metadata
 ```{r}
 #Merge results =====================
 #Metadata
@@ -8354,7 +8361,7 @@ all_human_mouse_metadata %>%
   saveRDS(here("tables", "all_human_mouse_metadata.rds"))
 ```
 
-
+Sample log2FC
 ```{r}
 # Sample log2fc
 #Import
@@ -8431,6 +8438,166 @@ all_degs_human_mouse %>%
 
 ```
 
+## FIT
+Ref: Normand, R., Du, W., Briller, M. et al. Found In Translation: a machine learning model for mouse-to-human inference. Nat Methods 15, 1067–1073 (2018). https://doi.org/10.1038/s41592-018-0214-9
+Github: https://github.com/shenorrLabTRDF/FIT.mouse2man 
+
+Import package
+```{r}
+#Install model package
+# library(devtools)
+# devtools::install_github('shenorrLabTRDF/FIT.mouse2man')
+library(FIT.mouse2man)
+#Import files
+pca_rotations = FIT.mouse2man::pca_rotations
+best_models = FIT.mouse2man::best_models
+HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez
+MM_Entrez_symbol_desc = FIT.mouse2man::MM_Entrez_symbol_desc
+Psoriasis_classifier_neg = FIT.mouse2man::Psoriasis_classifier_neg
+slopes_per_gene_V2.0 = FIT.mouse2man::slopes_per_gene_V2.0
+StaphInfection_classifier_pos = FIT.mouse2man::StaphInfection_classifier_pos
+AllData_V2.0 = FIT.mouse2man::AllData_V2.0 #Training data
+```
+
+Obs.: Make sure that datasets from FIT package were retrieved
+
+### Fluad
+```{r}
+all_degs_mouse = readRDS(file = here("tables", "influenza_fluad_mouse_dge_limma_degs.rds")) 
+
+mouse_fluad_log2_hgnc_symbol = readRDS(here("tables", "influenza_fluad_mouse_exprs_hgnc_symbol.rds"))
+### Loop for every time point -----
+all_degs_fit2 = all_degs_mouse %>% 
+  select(symbol, EffectSize = mean, condition) %>%
+  inner_join(mouse_fluad_log2_hgnc_symbol %>% 
+               select(symbol = human_symbol, MM.Entrez = mouse_entrez),
+             by = "symbol") %>% 
+  mutate(row = MM.Entrez)
+
+# Generate csv for every condition
+all_conditions <- unique(all_degs_fit2$condition)
+purrr::walk(all_conditions, function(cond) {
+  
+  delete_dupes <- all_degs_fit2 %>%
+    filter(condition == cond) %>%
+    get_dupes(row) %>%
+    pull(row)
+  
+  filtered_df <- all_degs_fit2 %>%
+    filter(condition == cond, !row %in% delete_dupes) %>%
+    select(-condition) %>% 
+    column_to_rownames("row") %>% 
+    select(MM.Entrez, EffectSize)
+  
+  file_name <- paste0(cond, "_FIT_mouse.csv")
+  file_path <- here("tables", file_name)
+  
+  write_csv(filtered_df, file_path)
+})
+
+# FIT loop
+fit_results_combined <- map2_dfr(all_conditions, all_conditions, function(cond, cond_name) {
+  
+  file_path <- here("tables", paste0(cond, "_FIT_mouse.csv"))
+  
+  fit_output <- FIT.mouse2man::FIT(MouseFile = file_path, DataType = "rnaseq")
+
+  fit_output_tbl <- as_tibble(fit_output) %>%
+    mutate(condition = cond_name)
+  
+  return(fit_output_tbl)
+})
+beep()
+#Print
+
+fit_results_combined
+
+#Save
+fit_results_combined %>% saveRDS(here("tables", "influenza_fluad_mouse_fit_prediction_alltimes.rds"))
+
+#Clean
+#Import
+fit_results_combined = read_rds(here("tables", "influenza_fluad_mouse_fit_prediction_alltimes.rds"))
+
+#Pivot longer
+fit_example_results = fit_results_combined %>% 
+  clean_names() %>%  
+  pivot_longer(cols = c(mouse_effect_size, fit_prediction),
+               names_to = "measure", 
+               values_to = "value") %>% 
+  arrange(mouse_symbol) %>% 
+  mutate(pathogen = "Influenza",
+         treatment = "Fluad",
+         timepoint = str_remove(condition, "Fluad_") %>% str_remove("_PBMC")) %>% 
+  select(pathogen,treatment,  timepoint, everything())
+
+#Save
+fit_example_results %>% 
+  saveRDS(file = here("tables", "influenza_fluad_mouse_fit_prediction_results.rds"))
+
+#Visualize distribution
+fit_example_results %>% 
+  ggplot() +
+  aes(x = value,
+      fill = timepoint,
+      color = timepoint) +
+  facet_wrap(~measure, ncol = 1) +
+  geom_histogram() +
+  theme_vaxgo() 
+```
+
+
+
+
+```{r}
+#Get log2fc mean
+all_degs_human_mouse = readRDS(file = here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds")) 
+mouse_engerixb_log2_hgnc_symbol = readRDS(here("tables", "hepatitisb_engerixb_human_mouse_exprs_samples_log2fc.rds"))
+annot = readRDS(here("tables", "probe_annot_hepatitisb_engerixb_mouse.rds"))
+
+input2FIT = mouse_engerixb_log2_hgnc_symbol %>% 
+  ungroup() %>% 
+  inner_join(annot %>% select(probe_id = affy_mouse430_2, MM.Entrez = entrezgene_id),
+             by = "probe_id") %>% 
+  select(participant_id, MM.Entrez, EffectSize = log2fc) %>% 
+  group_by(MM.Entrez) %>% 
+  summarise(mean_log2fc = mean(EffectSize, na.rm = T)) %>% 
+  drop_na()
+  
+
+#Save
+input2FIT %>% 
+  write_csv(file = here("tables", "saureus_infection_mouse_fit_prediction_input_12h.csv"))
+
+#Run FIT
+FIT_day12_results = FIT.mouse2man::FIT(MouseFile = here("tables", "saureus_infection_mouse_fit_prediction_input_12h.csv"), DataType = "rnaseq")
+
+#Pivot longer
+fit_saureus_results = FIT_day12_results %>% 
+  clean_names() %>%  
+  pivot_longer(cols = c(mouse_effect_size, fit_prediction),
+               names_to = "measure", 
+               values_to = "value") %>% 
+  mutate(pathogen = "Staphylococcus aureus",
+         timepoint = "12") %>% 
+  arrange(mouse_symbol) %>% 
+  select(pathogen, timepoint, everything())
+
+#Save
+fit_saureus_results %>% 
+  saveRDS(file = here("tables", "saureus_mouse_mouse_fit_prediction_results_12h.rds"))
+
+#Visualize distribution
+fit_saureus_results %>% 
+  ggplot() +
+  aes(x = value,
+      fill = timepoint,
+      color = timepoint) +
+  facet_wrap(~measure, ncol = 1) +
+  geom_histogram() +
+  theme_vaxgo() 
+
+```
 
 
 
@@ -8440,6 +8607,59 @@ all_degs_human_mouse %>%
 
 
 
+### S aureus
+
+```{r}
+#Get log2fc mean
+all_degs_human_mouse = readRDS(file = here("tables", "saureus_infection_human_mouse_dge_limma_degs.rds")) 
+
+mouse_saureus_log2_hgnc_symbol = readRDS(here("tables", "saureus_infection_human_mouse_samples_log2fc.rds"))
+annot = readRDS(here("tables", "probe_annot_saureus_infection_mouse.rds"))
+
+input2FIT = mouse_saureus_log2_hgnc_symbol %>% 
+  ungroup() %>% 
+    filter(timepoint == 12) %>% 
+  inner_join(annot %>% select(probe_id = affy_mouse430_2, MM.Entrez = entrezgene_id),
+             by = "probe_id") %>% 
+  select(participant_id, MM.Entrez, EffectSize = log2fc) %>% 
+  group_by(MM.Entrez) %>% 
+  summarise(mean_log2fc = mean(EffectSize, na.rm = T)) %>% 
+  drop_na()
+  
+
+#Save
+input2FIT %>% 
+  write_csv(file = here("tables", "saureus_infection_mouse_fit_prediction_input_12h.csv"))
+
+#Run FIT
+FIT_day12_results = FIT.mouse2man::FIT(MouseFile = here("tables", "saureus_infection_mouse_fit_prediction_input_12h.csv"), DataType = "rnaseq")
+
+#Pivot longer
+fit_saureus_results = FIT_day12_results %>% 
+  clean_names() %>%  
+  pivot_longer(cols = c(mouse_effect_size, fit_prediction),
+               names_to = "measure", 
+               values_to = "value") %>% 
+  mutate(pathogen = "Staphylococcus aureus",
+         timepoint = "12") %>% 
+  arrange(mouse_symbol) %>% 
+  select(pathogen, timepoint, everything())
+
+#Save
+fit_saureus_results %>% 
+  saveRDS(file = here("tables", "saureus_mouse_mouse_fit_prediction_results_12h.rds"))
+
+#Visualize distribution
+fit_saureus_results %>% 
+  ggplot() +
+  aes(x = value,
+      fill = timepoint,
+      color = timepoint) +
+  facet_wrap(~measure, ncol = 1) +
+  geom_histogram() +
+  theme_vaxgo() 
+
+```
 
 
 
@@ -8448,17 +8668,77 @@ all_degs_human_mouse %>%
 
 
 
+Unite results from FIT
+```{r}
+fit_saureus_results = readRDS(file = here("tables", "saureus_mouse_mouse_fit_prediction_results_12h.rds"))
+fit_fluad_results = readRDS(file = here("tables", "influenza_fluad_mouse_fit_prediction_results.rds"))
+
+all_degs_human_mouse = readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds"))
+
+all_fit_results = fit_fluad_results %>% 
+  bind_rows(fit_saureus_results %>% mutate(timepoint = as.character(as.numeric(timepoint)/24))) %>% 
+  mutate(organism = case_when(measure == "fit_prediction" ~ "FIT",
+                             measure == "mouse_effect_size" ~ "Mouse",
+                             T ~ measure),
+         timepoint = fct_reorder(timepoint, as.numeric(timepoint))) 
+all_fit_results %>% 
+  saveRDS(here("tables", "all_fit_prediction_results.rds"))
+
+#Standardize with DGE output
+all_human_mouse_fit = all_degs_human_mouse %>% 
+  filter(pathogen %in% c("Influenza", "Staphylococcus aureus")) %>% 
+  mutate(timepoint = if_else(pathogen == "Staphylococcus aureus", 
+                             as.character(round((as.numeric(timepoint)/24), 2)), 
+                             timepoint)) %>% 
+  bind_rows(all_fit_results %>% 
+              filter(organism == "FIT") %>% 
+              select(organism, pathogen, treatment, timepoint, human_symbol, mean_l2fc = value, 
+                     ci_lower = ci_low, ci_upper = ci_high))
+all_human_mouse_fit
+
+```
 
 
+```{r fig.height=3, fig.width=12}
+all_human_mouse_fit$timepoint %>% unique()
 
+#Visualize distribution
+all_fit_results_histogram = all_human_mouse_fit %>% 
+  filter(!(pathogen == "Staphylococcus aureus" & timepoint %in% c("0.08", "0.17", "0.25"))) %>% 
+  ggplot() +
+  aes(x = mean_l2fc,
+      fill = timepoint) +
+  facet_nested_wrap(~pathogen+organism, axes = "x",
+               nest_line = element_line(linetype = 1, color = "black", size = 0.5), 
+               scales = "free_y", nrow = 1) +
+  geom_histogram(color = "white") +
+  scale_x_continuous(limits = c(-2, 2)) +
+  scale_y_continuous(expand = c(0,0)) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  scale_fill_manual(values = colors_immune$timepoint) +
+  theme_vaxgo() +
+  theme(strip.text.y = element_text(angle = 0, hjust = 0), 
+        axis.ticks.y = element_blank(),
+        legend.position = "top",
+        axis.text.x = element_text(size = 8),
+        axis.text.y = element_text(size = 8),
+        axis.line.y = element_blank(),
+        panel.spacing.y = unit(0.3, "lines"),
+        panel.grid.major.y = element_blank(),
+        panel.grid.major.x = element_line(alpha = 0.5, linetype = 2)
+        ) +
+  labs(title = "FIT Predictions - Infection and Vaccine",
+       x = "Effect size",
+       y = "Count",
+       fill = "Timepoint")
 
+all_fit_results_histogram
 
-
-
-
-
-
-
+all_fit_results_histogram %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_fit_results_histogram.png"), 
+         width = 12,
+         height = 3)
+```
 
 
 
