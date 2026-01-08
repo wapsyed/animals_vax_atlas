@@ -20568,10 +20568,10 @@ dge_hallmarks_gsea_mean_wide = gsea_hallmarks_results_all %>%
   mutate(organism = case_when(str_detect(condition, "Mouse") ~ "Mouse",
                               str_detect(condition, "Human") ~ "Human",
                               T~condition)) %>% 
-  select(organism, pathogen, timepoint, process, group, set_size, nes, mean_log2fc, p_adjust, qvalue) %>% 
+  select(organism, pathogen, timepoint, process, group, set_size, nes, mean_log2fc, p_adjust, p_adjust_mean, qvalue) %>% 
   group_by(pathogen, process, group, set_size) %>%
   pivot_wider(names_from = organism,
-    values_from = c(mean_log2fc, nes, p_adjust, qvalue, set_size),
+    values_from = c(mean_log2fc, nes, p_adjust,p_adjust_mean, qvalue, set_size),
     names_sep = "_") 
 
 ```
@@ -20628,12 +20628,10 @@ dge_hallmarks_gsea_mean_wide = gsea_hallmarks_results_all_matched %>%
     names_sep = "_") 
 
 
-
-
 ```
 
 
-##### Gene-level, BTMs
+##### Gene-level, Hallmarks
 
 Plot genes by btm group
 
@@ -20660,8 +20658,8 @@ dge_hallmarks_process_genes_wide = dge_hallmarks_process_genes_matched  %>%
 
 ```{r}
 #Convert to wide
-dge_btm_process_genes_wide =
-  dge_btm_process_genes_matched  %>% 
+dge_hallmarks_process_genes_wide =
+  dge_hallmarks_process_genes_matched  %>% 
     ungroup() %>%
     select(symbol, mean_l2fc, adj_p_val, pathogen, organism, timepoint, process, group) %>% 
     distinct() %>% 
@@ -20691,7 +20689,7 @@ safe_cor_test <- purrr::possibly(
   otherwise = NULL
 )
 
-dge_btm_process_genes_correlation = dge_btm_process_genes_wide %>%
+dge_hallmarks_process_genes_correlation_pearson = dge_hallmarks_process_genes_wide %>%
   group_by(pathogen, timepoint, process) %>%
   summarise(
     test_result = list(safe_cor_test(
@@ -20741,7 +20739,66 @@ dge_btm_process_genes_correlation = dge_btm_process_genes_wide %>%
          timepoint = fct_reorder(timepoint, parse_number(timepoint)),
          pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli"))
 
-filter_1 = dge_btm_process_genes_correlation %>% 
+dge_hallmarks_process_genes_correlation_spearman = dge_hallmarks_process_genes_wide %>%
+  group_by(pathogen, timepoint, process) %>%
+  summarise(
+    test_result = list(safe_cor_test(
+      x = Human, y = Mouse, method = "spearman"
+    )),
+    .groups = "drop",
+    n_genes = n(),
+    group
+  ) %>%
+  # substituir NULL por lista com NA
+  mutate(test_result = purrr::map(
+    test_result,
+    ~ if (is.null(.x))
+      list(estimate = NA_real_, p.value = NA_real_)
+    else
+      .x 
+    )) %>%
+  mutate(
+    cor_value_spearman = purrr::map_dbl(test_result, ~ .x$estimate),
+    p_value_spearman   = purrr::map_dbl(test_result, ~ .x$p.value)
+  ) %>%
+  select(-test_result) %>%
+  # Labels
+  mutate(
+    r_squared_spearman = cor_value_spearman^2,
+    p_label_spearman = case_when(
+      p_value_spearman <= 0.01 ~ "***",
+      p_value_spearman <= 0.05 ~ "**",
+      p_value_spearman <= 0.10 ~ "*",
+      TRUE            ~ "ns"
+    ),
+    cor_label_spearman = paste0(
+      "r=",
+      round(cor_value_spearman, 2),
+      ", R²=",
+      round(r_squared_spearman, 2),
+      ", ",
+      p_label_spearman
+    )
+  ) %>%
+  arrange(timepoint) %>% 
+  distinct() %>% 
+  mutate(timepoint = as.character(timepoint),
+          timepoint = if_else(pathogen %in% c("Ecoli", "Saureus"), 
+                                 paste0(timepoint, "h"),
+                                 paste0("Day ", timepoint)),
+         timepoint = fct_reorder(timepoint, parse_number(timepoint)),
+         pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli"))
+
+
+
+dge_hallmarks_process_genes_correlation = dge_hallmarks_process_genes_correlation_pearson %>% 
+  inner_join(dge_hallmarks_process_genes_correlation_spearman %>% 
+               select(pathogen, timepoint, process, cor_label_spearman),
+             by = join_by(pathogen, timepoint, process)) 
+
+
+
+filter_1 = dge_hallmarks_process_genes_correlation %>% 
   group_by(pathogen, timepoint) %>% 
   arrange(process, 
           -abs(cor_value)) %>% 
@@ -20758,7 +20815,7 @@ filter_1 %>%
 Bubble plot
 ```{r fig.height=6, fig.width=16}
 #What does the choice of using DEGs or all genes affect the correlation and the number of genes?
-btm_correlation_setsize_plot = filter_1 %>% 
+hallmarks_correlation_setsize_plot = filter_1 %>% 
   ggplot() +
   aes(y = cor_value, 
       x = n_genes,
@@ -20771,14 +20828,14 @@ btm_correlation_setsize_plot = filter_1 %>%
   geom_point(aes(size = n_genes),
              pch = 21,
              color = "black") +
-  scale_fill_manual(values = immune_colors) +
-  scale_color_manual(values = immune_colors) +
+  scale_fill_manual(values = hallmarks_colors) +
+  scale_color_manual(values = hallmarks_colors) +
   theme_vaxgo() +
   guides(color = F) +
   labs(fill = "Group",
        y = "Correlation",
        x = "n Genes",
-       title = paste0("BTM immune, ", filename)) +
+       title = paste0("MSigDB Hallmarks, ", filename)) +
   #Theme
     theme_vaxgo() +
     theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
@@ -20790,12 +20847,16 @@ btm_correlation_setsize_plot = filter_1 %>%
           )
 
 
-btm_correlation_setsize_plot
+hallmarks_correlation_setsize_plot
 
-btm_correlation_setsize_plot %>% 
-  ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_intramodule_correlation_setsize.png"),
+hallmarks_correlation_setsize_plot %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_hallmarks_results_intramodule_correlation_setsize.png"),
          width = 16,
          height = 6)
+
+
+ hallmarks_correlation_setsize_plot %>% 
+   ggplotly()
   
 ```
 
@@ -20803,10 +20864,10 @@ btm_correlation_setsize_plot %>%
 
 
 
-
+Does the choice of using DEGs or all genes affect the correlation?
 ```{r fig.height=12, fig.width=20}
 #Does the choice of using DEGs or all genes affect the correlation?
-btm_correlation_process_plot = filter_1 %>% 
+hallmarks_correlation_process_plot = filter_1 %>% 
   arrange(-cor_value) %>% 
   drop_na(cor_value) %>% 
   mutate(process = fct_reorder(process, cor_value)) %>% 
@@ -20821,14 +20882,14 @@ btm_correlation_process_plot = filter_1 %>%
   geom_point(aes(size = n_genes),
              pch = 21,
              color = "black") +
-  scale_fill_manual(values = immune_colors) +
-  scale_color_manual(values = immune_colors) +
+  scale_fill_manual(values = hallmarks_colors) +
+  scale_color_manual(values = hallmarks_colors) +
   geom_line() +
   geom_vline(xintercept = 0) +
   labs(fill = "Group",
        y = "Process",
        x = "Correlation",
-       title = paste0("BTM immune, ", filename)) +
+       title = paste0("MSigDB Hallmarks, ", filename)) +
   #Theme
     theme_vaxgo() +
     theme(axis.text.x = element_text(angle = 0, hjust = 0.5),
@@ -20839,10 +20900,10 @@ btm_correlation_process_plot = filter_1 %>%
            ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
           )
 
-btm_correlation_process_plot
+hallmarks_correlation_process_plot
 
-btm_correlation_process_plot %>% 
-  ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_intramodule_correlation_processes.png"),
+hallmarks_correlation_process_plot %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_hallmarks_results_intramodule_correlation_processes.png"),
          width = 20,
          height = 12)
 ```
@@ -20851,7 +20912,7 @@ btm_correlation_process_plot %>%
 Heatmap
 
 ```{r fig.height=14, fig.width=10}
-btm_correlation_process_heatmap =
+hallmarks_correlation_process_heatmap =
   filter_1 %>% 
   drop_na(cor_value) %>% 
   mutate(
@@ -20882,7 +20943,7 @@ btm_correlation_process_heatmap =
   labs(
     x = "",
     y = "Process",
-    title = paste0("BTM immune – intramodule correlation (", filename, ")")
+    title = paste0("Hallmarks – intramodule correlation (", filename, ")")
   ) +
   #Theme
     theme_vaxgo() +
@@ -20894,9 +20955,9 @@ btm_correlation_process_heatmap =
            ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
           ) 
 
-btm_correlation_process_heatmap
-btm_correlation_process_heatmap %>% 
-ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_intramodule_correlation_processes_heatmap.png"),
+hallmarks_correlation_process_heatmap
+hallmarks_correlation_process_heatmap %>% 
+ggsave(filename = here("Figures", "all_human_mouse_gsea_hallmarks_results_intramodule_correlation_processes_heatmap.png"),
          width = 10,
          height = 14)
 ```
@@ -20906,18 +20967,18 @@ ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_intramodule_
 Are the leading edges in mice the same in humans?
 
 ```{r}
-gsea_btm_results_core = gsea_btm_results_all_matched %>% 
+gsea_hallmarks_results_core = gsea_hallmarks_results_all_matched %>% 
   separate_rows(core_enrichment, sep = "/")
 
-gsea_btm_results_core_joined =
-  gsea_btm_results_core %>% 
+gsea_hallmarks_results_core_joined =
+  gsea_hallmarks_results_core %>% 
   filter(organism == "Human") %>% 
   select(pathogen, process, timepoint,
          gene = core_enrichment,
          set_size_human = set_size) %>% 
   mutate(human_core = TRUE) %>% 
   full_join(
-    gsea_btm_results_core %>% 
+    gsea_hallmarks_results_core %>% 
       filter(organism == "Mouse") %>% 
       select(pathogen, process, timepoint,
              gene = core_enrichment,
@@ -20936,7 +20997,7 @@ gsea_btm_results_core_joined =
   arrange(pathogen, timepoint, process, status)
 
 
-shared_perc = gsea_btm_results_core_joined %>% 
+shared_perc = gsea_hallmarks_results_core_joined %>% 
   group_by(pathogen, timepoint, process, status) %>% 
   summarise(n = n(), .groups = "drop_last") %>% 
   mutate(percent = (n / sum(n)) * 100,
@@ -20958,7 +21019,7 @@ mean_percentage_shared
 
 
 shared_perc_df_plot = shared_perc %>% 
-  inner_join(gsea_btm_results_core %>% select(pathogen, timepoint, process, group),
+  inner_join(gsea_hallmarks_results_core %>% select(pathogen, timepoint, process, group),
              by = join_by("pathogen", "timepoint", "process")) %>% 
   filter(status == "Shared") %>% 
   inner_join(mean_percentage_shared %>% 
@@ -20986,7 +21047,7 @@ shared_perc_plot =  shared_perc_df_plot %>%
                     nrow = 1,
                     strip = strip_nested(size = "variable")) +
   geom_point(pch = 21)+
-  scale_fill_manual(values = immune_colors) +
+  scale_fill_manual(values = hallmarks_colors) +
   theme_vaxgo() +
   #Theme
     theme_vaxgo() +
@@ -20997,14 +21058,14 @@ shared_perc_plot =  shared_perc_df_plot %>%
           legend.text = element_text(size = 8, hjust = 0),
            ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
           ) +
-  scale_fill_manual(values = immune_colors) +
-  scale_color_manual(values = immune_colors)
+  scale_fill_manual(values = hallmarks_colors) +
+  scale_color_manual(values = hallmarks_colors)
 
 
 shared_perc_plot
 
 shared_perc_plot %>% 
-  ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_leadingedge_core_shared_perc.png"),
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_hallmarks_results_leadingedge_core_shared_perc.png"),
          width = 20,
          height = 12)
   
@@ -21014,8 +21075,7 @@ shared_perc_plot %>%
 
 ```{r fig.height=14, fig.width=10}
 shared_perc_plot =  shared_perc_df_plot %>% 
-  mutate(process = fct_reorder(process, n),
-         group = fct_relevel(group, immune_order)) %>% 
+  mutate(process = fct_reorder(process, n)) %>% 
   ggplot() +
   aes(x = timepoint, 
       y = process,
@@ -21053,7 +21113,7 @@ shared_perc_plot =  shared_perc_df_plot %>%
 shared_perc_plot
 
 shared_perc_plot %>% 
-  ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_leadingedge_core_shared_perc_heatmap.png"),
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_hallmarks_results_leadingedge_core_shared_perc_heatmap.png"),
          width = 10,
          height = 14)
 ```
@@ -21064,20 +21124,20 @@ Do these leading edges have the same log2fc?
 ```{r}
 #Do these leading edges have the same log2fc?
 df_test =
-  dge_btm_process_genes_wide %>% 
-  filter(str_detect(process, "S2")) %>% 
+  dge_hallmarks_process_genes_wide %>% 
+  filter(str_detect(process, "ALLOGRAFT_REJECTION")) %>% 
   
   # Join com os genes core
   full_join(
-    gsea_btm_results_core_joined %>% 
-      filter(str_detect(process, "S2")),
+    gsea_hallmarks_results_core_joined %>% 
+      filter(str_detect(process, "ALLOGRAFT_REJECTION")),
     by = join_by("pathogen", "process", "timepoint", symbol == gene)
   ) %>% 
   
   # join com shared %
   inner_join(
     shared_perc %>% 
-      filter(str_detect(process, "S2"),
+      filter(str_detect(process, "ALLOGRAFT_REJECTION"),
              status == "Shared") %>%
       rename(percent = percent,
              status_percent = status),
@@ -21086,9 +21146,9 @@ df_test =
   
   # join com NES
   inner_join(
-    dge_btm_gsea_mean_wide %>% 
+    dge_hallmarks_gsea_mean_wide %>% 
       ungroup() %>% 
-      filter(str_detect(process, "S2")) %>% 
+      filter(str_detect(process, "ALLOGRAFT_REJECTION")) %>% 
       select(process, pathogen, timepoint, nes_Mouse, nes_Human),
     by = join_by("pathogen", "process", "timepoint")
   ) %>% 
@@ -21104,13 +21164,14 @@ df_test =
                                  paste0("Day ", timepoint)),
          timepoint = fct_reorder(timepoint, parse_number(timepoint)),
          pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Saureus", "Ecoli")) %>% 
-  inner_join(dge_btm_process_genes_correlation %>% 
-               select(timepoint, pathogen, process, cor_value, r_squared, p_label, cor_label),
+  inner_join(dge_hallmarks_process_genes_correlation %>% 
+               select(timepoint, pathogen, process, cor_value, r_squared, p_label, cor_label, cor_label_spearman),
              by = join_by("pathogen", "process", "timepoint")) %>% 
   mutate(# criar label completo para facet
     facet_label = paste0(timepoint, ",\nShared = ", percent, "%,\n",
       "NES Mouse = ", nes_Mouse, ",\nNES Human = ", nes_Human
-    ))
+    ),
+  facet_label = fct_reorder(facet_label, parse_number(as.character(timepoint))))
 
 df_test
 ```
@@ -21155,22 +21216,23 @@ df_test_scatter = df_test %>%
 df_test_scatter
 
 df_test_scatter %>% 
-  ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_leadingedge_core_shared_scatterplot.png"),
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_hallmarks_results_leadingedge_core_shared_scatterplot.png"),
          width = 20,
          height = 4)
 ```
 
-
+Positions using log2fc
 ```{r fig.height=4, fig.width=20}
 #Positions using log2fc
 df_test_log2fc = df_test %>% 
   pivot_longer(names_to = "organism",
                values_to = "log2fc",
                cols = c("Mouse", "Human")) %>% 
-  mutate(# criar label completo para facet
+  mutate(
     facet_label = paste0(timepoint, ",\n", cor_label, ",\nShared = ", percent, "%,\n",
       "NES Mouse = ", nes_Mouse, ",\nNES Human = ", nes_Human
-    )) %>% 
+    ),
+    facet_label = fct_reorder(facet_label, parse_number(as.character(timepoint)))) %>% 
   mutate(organism = if_else(organism == "Human", "H", "M")) %>% 
   ggplot() +
   aes(x = organism,
@@ -21217,12 +21279,12 @@ df_test_log2fc = df_test %>%
 df_test_log2fc
 
 df_test_log2fc %>% 
-  ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_leadingedge_core_log2fc_lineplot.png"),
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_hallmarks_results_leadingedge_core_log2fc_lineplot.png"),
          width = 20,
          height = 4)
 ```
 
-
+Positions using ranks
 ```{r fig.height=4, fig.width=20}
 #Positions using ranks
 df_test_ranked <- df_test %>%
@@ -21237,9 +21299,10 @@ df_test_ranked <- df_test %>%
   arrange(rank) %>% 
   drop_na(log2fc) %>% 
   mutate(# criar label completo para facet
-    facet_label = paste0(timepoint, ",\n", cor_label, ",\nShared = ", percent, "%,\n",
+    facet_label = paste0(timepoint, ",\n", cor_label_spearman, ",\nShared = ", percent, "%,\n",
       "NES Mouse = ", nes_Mouse, ",\nNES Human = ", nes_Human
-    )) %>% 
+    ),
+    facet_label = fct_reorder(facet_label, parse_number(as.character(timepoint)))) %>% 
   mutate(organism = if_else(organism == "Human", "H", "M"))
 
 df_test_ranked_plot = df_test_ranked %>% 
@@ -21276,8 +21339,7 @@ df_test_ranked_plot = df_test_ranked %>%
   scale_y_reverse() +
   guides(color = guide_legend(override.aes = list(linewidth = 3))) +
   #Theme
-    theme_vaxgo() +
-    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5),
+    theme_vaxgo() +    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5),
           strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
           legend.position = "top",
           legend.direction = "horizontal",
@@ -21288,7 +21350,7 @@ df_test_ranked_plot = df_test_ranked %>%
 df_test_ranked_plot
 
 df_test_ranked_plot %>% 
-ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_leadingedge_core_ranks_lineplot.png"),
+ggsave(filename = here("Figures", "all_human_mouse_gsea_hallmarks_results_leadingedge_core_ranks_lineplot.png"),
          width = 20,
          height = 4)
 ```
@@ -21306,7 +21368,7 @@ leading_edges_plots = ((df_test_scatter + theme(legend.position = "top")) /
 leading_edges_plots
 
 leading_edges_plots %>% 
-  ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_leadingedge_core.png"),
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_hallmarks_results_leadingedge_core.png"),
          width = 20,
          height = 12)
 ```
@@ -21328,7 +21390,7 @@ leading_edges_plots %>%
 
 
 
-##### Module-level, BTMs
+##### Module-level, Hallmarks
 
 Import
 
