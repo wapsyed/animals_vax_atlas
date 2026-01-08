@@ -429,9 +429,9 @@ immune_order = c("SIGNAL TRANSDUCTION",
 hallmarks_colors = c("Immune Response" = "#4cc9f0",
                      "Apoptosis and Hormonal Response" = "#90A4AEFF",
                      "Differentiation and Cell Structure" = "gray80",
-                     "Metabolism"  = "#8491B4FF", 
-                     "Proliferation and Repair" = "#001219",
-                     "Signaling and Stress Response"   = "#4361ee")
+                     "Metabolism"  = "#ffc300", 
+                     "Proliferation and Repair" = "#9B2226",
+                     "Signaling and Stress Response"   = "#CA6702")
 
 colors_all <- c(
   "#4361ee",
