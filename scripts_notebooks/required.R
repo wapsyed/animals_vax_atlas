@@ -7,7 +7,8 @@ required_packages <- c(
   "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
   "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp", "corto", "Hmisc",
-  "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath"
+  "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath",
+  "ggfx"
 )
 
 # Bioconductor
@@ -400,14 +401,14 @@ btm_immune_groups = list(group = c("SIGNAL TRANSDUCTION" = "#708d81",
 
 immune_colors = c("SIGNAL TRANSDUCTION" = "#CA6702",
                   "CELL CYCLE" = "#9B2226",
-                  "ECM AND MIGRATION" = "#94D2BD",
-                  "ENERGY METABOLISM" = "#F2CC8F", 
+                  "ECM AND MIGRATION" = "#d08c60",
+                  "ENERGY METABOLISM" = "#ffc300", 
+                  "PLATELETS" = "#a4b75c",
                   "INNATE RESPONSE" = "#3D405B",
                   "NEUTROPHILS" = "#90A4AEFF",
                   "NK CELLS" = "#001219",
                   "IFN"= "gray80",
                   "MONOCYTES" = "#8491B4FF",
-                  "PLATELETS" = "#7E6148FF",
                   "B CELLS" = "#4cc9f0",
                   "T CELLS" = "#4361ee")
 
