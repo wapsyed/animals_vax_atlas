@@ -2,8 +2,14 @@
 ##Packages --------
 # CRAN
 required_packages <- c(
-  "tidyverse", "rentrez", "yardstick", "ggridges", "here", "glue", "ggsci", 
-  "janitor", "readr", "paletteer", "beepr", "preprocessCore", "maditr", 
+  "tidyverse", "rentrez", "yardstick", 
+  # "ggridges", 
+  "here", "glue", "ggsci", 
+  "janitor", "readr", 
+  # "paletteer", 
+  # "beepr", 
+  # "preprocessCore", 
+  "maditr", 
   "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
   "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp", "corto", "Hmisc",
@@ -11,7 +17,20 @@ required_packages <- c(
   "ggfx", "devtools", "readxl"
 )
 
-install.packages(required_packages)
+install.packages(c(
+  "tidyverse", "rentrez", "yardstick", 
+  # "ggridges", 
+  "here", "glue", "ggsci", 
+  "janitor", "readr", 
+  # "paletteer", 
+  # "beepr", 
+  # "preprocessCore", 
+  "maditr", 
+  "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
+  "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
+  "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp", "corto", "Hmisc",
+  "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath",
+  "ggfx", "devtools", "readxl"))
 
 # Bioconductor
 bioc_pkgs <- c(
@@ -19,7 +38,8 @@ bioc_pkgs <- c(
   "org.Hs.eg.db", "DESeq2", "msigdbr", 
   "ape", "variancePartition", 
   "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
-  "mogene10sttranscriptcluster.db", "fgsea", "arrayQualityMetrics"
+  "mogene10sttranscriptcluster.db", "fgsea"
+  # "arrayQualityMetrics"
 ) 
 
 # renv::remove("ape")
