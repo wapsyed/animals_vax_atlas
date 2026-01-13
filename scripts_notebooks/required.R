@@ -8,8 +8,10 @@ required_packages <- c(
   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
   "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp", "corto", "Hmisc",
   "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath",
-  "ggfx", "devtools"
+  "ggfx", "devtools", "readxl"
 )
+
+install.packages(required_packages)
 
 # Bioconductor
 bioc_pkgs <- c(
@@ -23,27 +25,11 @@ bioc_pkgs <- c(
 # renv::remove("ape")
 # renv::install("ape")
 
-# Install packages from CRAN
-cran_missing <- setdiff(required_packages, rownames(installed.packages()))
-if (length(cran_missing) > 0) {
-  install.packages(cran_missing)
-}
 
 # Install packages from Bioconductor
 # Install BiocManager if necessary
-if (!requireNamespace("BiocManager", quietly = TRUE)) {
-  install.packages("BiocManager")
-}
-
-bioc_missing <- setdiff(bioc_pkgs, rownames(installed.packages()))
-if (length(bioc_missing) > 0) {
-  BiocManager::install(bioc_missing)
-}
-
-# Load packages (CRAN + Bioconductor)
-invisible(lapply(c(required_packages, bioc_pkgs), function(pkg) {
-  suppressPackageStartupMessages(library(pkg, character.only = TRUE))
-}))
+install.packages("BiocManager")
+BiocManager::install(bioc_pkgs)
 
 #Load all faster
 lapply(required_packages, library, character.only = TRUE)
