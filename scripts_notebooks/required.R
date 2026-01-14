@@ -1,7 +1,8 @@
 #Required
 ##Packages --------
 # CRAN
-required_packages <- c(
+
+cran_packages = c(
   "tidyverse", "rentrez", "yardstick", 
   # "ggridges", 
   "here", "glue", "ggsci", 
@@ -14,9 +15,8 @@ required_packages <- c(
   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
   "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp", "corto", "Hmisc",
   "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath",
-  "ggfx", "devtools", "readxl"
+  "ggfx", "devtools", "readxl", "rstatix"
 )
-
 install.packages(c(
   "tidyverse", "rentrez", "yardstick", 
   # "ggridges", 
@@ -30,29 +30,37 @@ install.packages(c(
   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
   "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp", "corto", "Hmisc",
   "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath",
-  "ggfx", "devtools", "readxl"))
+  "ggfx", "devtools", "readxl", "rstatix"
+  ))
 
-# Bioconductor
-bioc_pkgs <- c(
-  "biomaRt", "GEOquery", "circlize", "celldex", 
-  "org.Hs.eg.db", "DESeq2", "msigdbr", 
-  "ape", "variancePartition", 
-  "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
-  "mogene10sttranscriptcluster.db", "fgsea"
-  # "arrayQualityMetrics"
-) 
 
 # renv::remove("ape")
 # renv::install("ape")
 
 
 # Install packages from Bioconductor
-# Install BiocManager if necessary
+
+bioc_pkgs = c(
+  "biomaRt", "GEOquery", "circlize", "celldex", 
+  "org.Hs.eg.db", "DESeq2", "msigdbr", 
+  "ape", "variancePartition", 
+  "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
+  "mogene10sttranscriptcluster.db", "fgsea"
+  # "arrayQualityMetrics"
+)
+
 install.packages("BiocManager")
-BiocManager::install(bioc_pkgs)
+BiocManager::install(c(
+  "biomaRt", "GEOquery", "circlize", "celldex", 
+  "org.Hs.eg.db", "DESeq2", "msigdbr", 
+  "ape", "variancePartition", 
+  "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
+  "mogene10sttranscriptcluster.db", "fgsea"
+  # "arrayQualityMetrics"
+) )
 
 #Load all faster
-lapply(required_packages, library, character.only = TRUE)
+lapply(cran_packages, library, character.only = TRUE)
 lapply(bioc_pkgs, library, character.only = TRUE)
 
 ##Aesthetics -----
@@ -137,9 +145,9 @@ autoGSEA <- function(df, TERM2GENE, geneset_name) {
     
     degs_condition <- df %>%
       filter(condition == condition_i) %>%
-      select(genes, log2fold_change) %>%
+      select(genes, rank) %>%
       distinct() %>%
-      arrange(desc(log2fold_change)) %>% 
+      arrange(desc(rank)) %>% 
       deframe()   
     
     auto_gsea <- tryCatch({
