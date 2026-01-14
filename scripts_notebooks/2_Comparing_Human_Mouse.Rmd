@@ -16891,7 +16891,7 @@ correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot %>%
 
 
 
-
+#===========================
 # 5. Merge analyses
 ## Stacked barplot of overlapped genes
 
@@ -17105,13 +17105,13 @@ all_degs_human_mouse %>%
 ```{r}
 #Pivot wider
 human_mouse_log2fc_avg_wide = all_degs_human_mouse %>% 
-  select(pathogen, organism, human_symbol, timepoint, mean_log2fc = mean_l2fc, p_adj = adj_p_val) %>% 
+  select(pathogen, organism, human_symbol, timepoint, mean_log2fc = mean_l2fc, p_adj = adj_p_val, tstatistic = t) %>% 
   bind_rows(
   #Duplcate Human
   all_degs_human_mouse %>% 
   filter(organism == "Human",
          treatment == "Infection") %>% 
-  select(pathogen, organism, human_symbol, mean_log2fc = mean_l2fc, p_adj = adj_p_val) %>% 
+  select(pathogen, organism, human_symbol, mean_log2fc = mean_l2fc, p_adj = adj_p_val, tstatistic = t) %>% 
   inner_join(all_degs_human_mouse %>% 
                filter(organism == "Mouse",
                       treatment == "Infection") %>% 
@@ -17121,7 +17121,7 @@ human_mouse_log2fc_avg_wide = all_degs_human_mouse %>%
   ) %>% 
   distinct() %>% 
   pivot_wider(names_from = c("organism"),
-              values_from = c(mean_log2fc, p_adj),
+              values_from = c(mean_log2fc, p_adj, tstatistic),
               names_sep = "_") %>% 
   clean_names() %>% 
   drop_na() %>% 
@@ -17160,14 +17160,20 @@ degs_immune_nonimmune_summary = human_mouse_log2fc_avg_wide_degs_immune_nonimmun
   group_by(pathogen, timepoint, gene_type) %>% 
   summarise(n_genes = n(), .groups = "drop")
 
-# Calculate the correlation
-safe_cor_test <- purrr::possibly(
-  function(x, y, method = "spearman") {
-    cor.test(x, y, method = method)
-  },
-  otherwise = NULL
-)
+# # Calculate the correlation
+# safe_cor_test <- purrr::possibly(
+#   function(x, y, method = "spearman") {
+#     cor.test(x, y, method = method)
+#   },
+#   otherwise = NULL
+# )
+```
 
+
+```{r}
+#Correlation ------
+
+#Log2fc vs Log2fc
 cor_data <- human_mouse_log2fc_avg_wide_degs_immune_nonimmune %>%
   group_by(pathogen, timepoint, gene_type) %>%
   summarise(
@@ -17228,11 +17234,7 @@ human_mouse_log2fc_avg_wide_labels = human_mouse_log2fc_avg_wide %>%
   mutate(pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli")) %>% 
   distinct() 
 
-```
 
-
-Log2FC vs Log2fc
-```{r fig.height=12, fig.width=16}
 human_mouse_log2fc_avg_wide_labels_filters <- 
   bind_rows(
     #All genes
@@ -17260,6 +17262,102 @@ human_mouse_log2fc_avg_wide_labels_filters <-
   mutate(color_group = fct_relevel(color_group, "All genes", "All DEGs", "Shared DEGs", "Immune"))
 
 
+
+#t vs t
+cor_data_t <- human_mouse_log2fc_avg_wide_degs_immune_nonimmune %>%
+  group_by(pathogen, timepoint, gene_type) %>%
+  summarise(
+    cor_test_spearman = list(safe_cor_test(tstatistic_mouse, tstatistic_human, method = "spearman")),
+    cor_test_pearson = list(safe_cor_test(tstatistic_mouse, tstatistic_human, method = "pearson")),,
+    .groups = "drop"
+  ) %>%
+  inner_join(degs_immune_nonimmune_summary, by = join_by("pathogen", "timepoint", "gene_type")) %>% 
+  mutate(
+    #Spearman
+    cor_value_spearman = map_dbl(cor_test_spearman, ~ if (is.null(.x)) NA_real_ else .x$estimate),
+    p_spearman   = map_dbl(cor_test_spearman, ~ if (is.null(.x)) NA_real_ else .x$p.value),
+    p_label_spearman = case_when(
+      is.na(p_spearman)      ~ "ns",
+      p_spearman <= 0.01     ~ "***",
+      p_spearman <= 0.05     ~ "**",
+      p_spearman <= 0.10     ~ "*",
+      TRUE                ~ "ns"
+    ),
+    label_spearman = paste0("rho=", round(cor_value_spearman, 2), ", n=", n_genes, ", ", p_label_spearman),
+    #Pearson
+    cor_value_pearson = map_dbl(cor_test_pearson, ~ if (is.null(.x)) NA_real_ else .x$estimate),
+    p_pearson   = map_dbl(cor_test_pearson, ~ if (is.null(.x)) NA_real_ else .x$p.value),
+    p_label_pearson = case_when(
+      is.na(p_pearson)      ~ "ns",
+      p_pearson <= 0.01     ~ "***",
+      p_pearson <= 0.05     ~ "**",
+      p_pearson <= 0.10     ~ "*",
+      TRUE                ~ "ns"
+    ),
+    label_pearson = paste0("r=", round(cor_value_pearson, 2), ", n=", n_genes, ", ", p_label_pearson)
+  ) %>% 
+  drop_na(cor_value_spearman,
+          cor_value_pearson) %>% 
+  mutate(
+    timepoint_comparison = if_else(pathogen %in% c("Escherichia coli", "Staphylococcus aureus"),
+                                        paste0(timepoint, "-", "24h"), 
+                                        paste0(timepoint, "-", timepoint)),
+    gene_type = factor(gene_type, levels = c("All genes", "DEGs", "Not-immune", "Immune")),
+    facet_label = paste0(gene_type, ": ", label_spearman))
+
+cor_data_t_facetted = cor_data_t %>% 
+  arrange(gene_type) %>% 
+   group_by(pathogen, timepoint, timepoint_comparison) %>%
+  summarise(
+    facet_label = paste(facet_label, collapse = "\n"),
+    .groups = "drop"
+  )  %>% 
+  mutate(facet_label = paste0(timepoint_comparison, "\n", facet_label),
+         facet_label = fct_reorder(facet_label, parse_number(timepoint %>% as.character())))
+
+
+human_mouse_t_avg_wide_labels = human_mouse_log2fc_avg_wide %>% 
+  inner_join(cor_data_t_facetted, 
+             by = join_by("pathogen", "timepoint", "timepoint_comparison")) %>% 
+  mutate(pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli")) %>% 
+  distinct() 
+
+
+human_mouse_t_avg_wide_labels_filters <- 
+  bind_rows(
+    #All genes
+    human_mouse_t_avg_wide_labels %>% 
+  mutate(color_group = "All genes"),
+
+    #All DEGs
+   human_mouse_t_avg_wide_labels %>% 
+  filter(p_adj_human <= 0.05 | p_adj_mouse <= 0.05) %>% 
+  mutate(color_group = "All DEGs"),
+
+   #Shared DEGs
+   human_mouse_t_avg_wide_labels %>% 
+  filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05) %>% 
+  mutate(color_group = "Shared DEGs"),
+
+  #Immune DEGs
+    human_mouse_t_avg_wide_labels %>% 
+  filter(human_symbol %in% c(btm_annotation_genes %>% 
+                               filter(module_category == "immune") %>% 
+                               pull(symbol)),
+         p_adj_human <= 0.05 & p_adj_mouse <= 0.05) %>% 
+  mutate(color_group = "Immune")
+  ) %>% 
+  mutate(color_group = fct_relevel(color_group, "All genes", "All DEGs", "Shared DEGs", "Immune"))
+
+
+```
+
+
+Log2FC vs Log2fc
+```{r fig.height=12, fig.width=16}
+
+
+# Log2FC vs Log2fc
 human_mouse_log2fc_log2fc_avg_wide_scatterplot = human_mouse_log2fc_avg_wide_labels_filters %>% 
   
   #Plot
@@ -17344,7 +17442,91 @@ human_mouse_log2fc_log2fc_avg_wide_scatterplot %>%
 
 
 
+t-statistic vs t-statistic
+```{r fig.height=12, fig.width=16}
 
+#t-statistic vs t-statistic
+human_mouse_t_t_avg_wide_scatterplot = human_mouse_t_avg_wide_labels_filters %>% 
+  
+  #Plot
+  ggplot() +
+  aes(x = tstatistic_mouse,
+      y = tstatistic_human) +
+  #Facet
+  facet_nested_wrap(vars(pathogen, facet_label),
+                    scales = "free",
+                    nrow = 3,
+                    strip = strip_nested(size = "variable")) +
+  
+  geom_point(aes(fill = color_group),
+             alpha = 1,
+             color = "gray95",
+             pch = 21,
+             size = 1.5,
+             data = . %>% filter(color_group == "All genes")) +
+  
+  geom_point(aes(fill = color_group),
+             alpha = 1,
+             color = "gray85",
+             pch = 21,
+             size = 1.5,
+             data = . %>% filter(color_group == "All DEGs")) +
+  
+  geom_point(aes(fill = color_group,
+                 color = color_group),
+             alpha = 1,
+             pch = 21,
+             size = 1.5,
+             data = . %>% filter(!color_group %in% c("All genes", "All DEGs"))) +
+  
+  # geom_point(aes(fill = color_group,
+  #                color = color_group),
+  #            alpha = 1,
+  #            pch = 21,
+  #            size = 1.5) +
+  # 
+  #Regression line: Linear model, Pearson
+  stat_smooth(method = "lm", geom = "line", alpha = 1, se = F, size = 1,
+              mapping = aes(group = color_group,
+                        color = color_group)) +
+  guides(fill = guide_legend(override.aes = list(size = 4)),
+         color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
+         ) +
+  scale_fill_manual(values = c("All genes" = "gray95",
+                               "All DEGs" = "gray85",
+                               "Shared DEGs" = "#175289",
+                               "Immune" ="#46eec6")) +
+  scale_color_manual(values = c("All genes" = "black",
+                               "All DEGs" = "#4361ee",
+                               "Shared DEGs" = "#175289",
+                               "Immune" ="#46eec6")) +
+  #Add lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  #Theme
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size =10),
+        axis.text.y = element_text(size = 10),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+        legend.position = "top",
+        legend.direction = "horizontal",
+        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) +
+  labs(x = "Mouse (tstatistic)",
+       y = "Human (tstatistic)",
+       fill = "Gene type",
+       color = "Linear regression",
+       title = "Correlation plot,\nHuman vs Mouse")
+
+
+human_mouse_t_t_avg_wide_scatterplot 
+
+#Save
+human_mouse_t_t_avg_wide_scatterplot %>%
+  ggsave(filename = here("Figures", "all_human_mouse_dge_degs_scatterplot_tstatistic.png"),
+         width = 16, height = 12)
+
+```
 
 
 Ranks vs Ranks
@@ -20170,25 +20352,6 @@ dge_hallmarks_process_genes_wide = dge_hallmarks_process_genes_matched  %>%
 
 ```{r fig.height=5, fig.width=7}
 #Calculate correlation -----
-
-safe_cor_test <- function(x, y, method) {
-  # Remove NAs and infinite values first
-  ok <- is.finite(x) & is.finite(y)
-  x <- x[ok]
-  y <- y[ok]
-  
-  # cor.test requires n >= 3 to run without error
-  if (length(x) < 3 || sd(x) == 0 || sd(y) == 0) {
-    return(list(estimate = NA_real_, p.value = NA_real_))
-  } else {
-    tryCatch({
-      ct <- cor.test(x, y, method = method)
-      return(list(estimate = unname(ct$estimate), p.value = ct$p.value))
-    }, error = function(e) {
-      return(list(estimate = NA_real_, p.value = NA_real_))
-    })
-  }
-}
 
 
 # Means vs means

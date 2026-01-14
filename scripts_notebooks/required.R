@@ -17,6 +17,11 @@ cran_packages = c(
   "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath",
   "ggfx", "devtools", "readxl", "rstatix"
 )
+
+#Devtools
+devtools::install_github("antpiron/RedRibbon")
+
+
 install.packages(c(
   "tidyverse", "rentrez", "yardstick", 
   # "ggridges", 
@@ -102,6 +107,28 @@ theme_vaxgo = function(){
 
 
 #Functions ------
+
+#Function for correlation
+safe_cor_test <- function(x, y, method) {
+  # Remove NAs and infinite values first
+  ok <- is.finite(x) & is.finite(y)
+  x <- x[ok]
+  y <- y[ok]
+  
+  # cor.test requires n >= 3 to run without error
+  if (length(x) < 3 || sd(x) == 0 || sd(y) == 0) {
+    return(list(estimate = NA_real_, p.value = NA_real_))
+  } else {
+    tryCatch({
+      ct <- cor.test(x, y, method = method)
+      return(list(estimate = unname(ct$estimate), p.value = ct$p.value))
+    }, error = function(e) {
+      return(list(estimate = NA_real_, p.value = NA_real_))
+    })
+  }
+}
+
+
 # Function for overlapping -------
 overlap_genes <- function(cond1, cond2, data) {
   genes_cond1 <- data$genes[data$process == cond1]
