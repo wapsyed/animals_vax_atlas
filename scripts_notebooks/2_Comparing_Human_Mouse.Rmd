@@ -17628,60 +17628,242 @@ human_mouse_rank_rank_avg_wide_scatterplot %>%
 
 ### Correlation: RRHO of means
 
+
+
 ```{r}
-# 1. Filter data and calculate the ranking metric (Signed -log10 P-value)
-rrho_input_data <- human_mouse_log2fc_avg_wide %>% 
-  filter(pathogen == "Staphylococcus aureus",
-         timepoint == "12h") %>%
-  # Remove NAs to ensure valid calculations
-  filter(!is.na(p_adj_human), !is.na(p_adj_mouse), 
-         !is.na(mean_log2fc_human), !is.na(mean_log2fc_mouse)) %>%
-  mutate(
-    # Handle zero p-values: log10(0) is Infinite. 
-    # We replace 0 with the smallest positive float the machine can handle.
-    p_adj_human = ifelse(p_adj_human == 0, .Machine$double.xmin, p_adj_human),
-    p_adj_mouse = ifelse(p_adj_mouse == 0, .Machine$double.xmin, p_adj_mouse),
-    
-    # CALCULATE RANKING SCORE
-    # Formula: -log10(p_value) * sign(log2_fold_change)
-    # This pushes highly significant UP genes to the top (+), 
-    # and highly significant DOWN genes to the bottom (-).
-    score_human = -log10(p_adj_human) * sign(mean_log2fc_human),
-    score_mouse = -log10(p_adj_mouse) * sign(mean_log2fc_mouse)
-  )
+# 1. Identificar todas as combinações
+combinations <- human_mouse_log2fc_avg_wide %>%
+  distinct(pathogen, timepoint)
 
-# 2. Create List 1 (Human Data)
-# Selecting the Gene ID and the calculated Metric
-gene_list1 <- rrho_input_data %>%
-  select(Genes = human_symbol, DDE = score_human) %>%
-  as.data.frame() # RRHO2 often handles standard data.frames better than tibbles
+# 2. Criar uma lista para armazenar os resultados de cada iteração
+all_rrho_results <- list()
 
-# 3. Create List 2 (Mouse Data)
-gene_list2 <- rrho_input_data %>%
-  select(Genes = human_symbol, DDE = score_mouse) %>%
-  as.data.frame()
+for(i in 1:nrow(combinations)) {
+  
+  curr_pathogen <- combinations$pathogen[i]
+  curr_timepoint <- combinations$timepoint[i]
+  
+  # A. Filtrar e Preparar Scores
+  rrho_input_data <- human_mouse_log2fc_avg_wide %>% 
+    filter(pathogen == curr_pathogen, timepoint == curr_timepoint) %>%
+    filter(!is.na(p_adj_human), !is.na(p_adj_mouse), 
+           !is.na(mean_log2fc_human), !is.na(mean_log2fc_mouse)) %>%
+    mutate(
+      p_adj_human = ifelse(p_adj_human == 0, .Machine$double.xmin, p_adj_human),
+      p_adj_mouse = ifelse(p_adj_mouse == 0, .Machine$double.xmin, p_adj_mouse),
+      score_human = -log10(p_adj_human) * sign(mean_log2fc_human),
+      score_mouse = -log10(p_adj_mouse) * sign(mean_log2fc_mouse)
+    )
 
-# --- Next Steps: Running RRHO2 ---
-library(RRHO2)
-rrho_obj <- RRHO2_initialize(gene_list1, gene_list2, labels = c("Human", "Mouse"), log10.ind = TRUE, multipleTesting = "BH", boundary = 0.01, method = "hyper")
-RRHO2_heatmap(rrho_obj)
+  # Pular se houver poucos genes (o RRHO2 precisa de uma lista mínima)
+  if(nrow(rrho_input_data) < 100) next 
 
+  # B. Criar Listas para o RRHO2
+  gene_list1 <- rrho_input_data %>% select(Genes = human_symbol, DDE = score_human) %>% as.data.frame()
+  gene_list2 <- rrho_input_data %>% select(Genes = human_symbol, DDE = score_mouse) %>% as.data.frame()
 
-## gene lists (down regulation in list1 and down regulation in list 2) that provide the most significant overlap
-rrho_obj$genelist_dd
+  # C. Executar RRHO2 (usando try para ignorar erros pontuais)
+  rrho_obj <- try(RRHO2_initialize(gene_list2, gene_list1, labels = c("Mouse", "Human"), 
+                                   log10.ind = TRUE, method = "hyper"), silent = TRUE)
+  
+  if(inherits(rrho_obj, "try-error")) next
 
-## down regulation genes in list1
-rrho_obj$genelist_dd$gene_list1_dd
+  # D. Extrair a matriz e transformar em formato longo
+  temp_df <- as.data.frame(rrho_obj$hypermat) %>%
+    mutate(Mouse_Rank = row_number()) %>%
+    pivot_longer(cols = -Mouse_Rank, names_to = "Human_Rank", values_to = "LogP") %>%
+    mutate(
+      Human_Rank = as.numeric(gsub("V", "", Human_Rank)),
+      pathogen = curr_pathogen,       # Adiciona etiqueta do patógeno
+      timepoint = curr_timepoint      # Adiciona etiqueta do tempo
+    )
 
-## down regulation genes in list2
-rrho_obj$genelist_dd$gene_list2_dd
+  # Armazenar na lista
+  all_rrho_results[[i]] <- temp_df
+}
 
-## overlap between down regulation genes in list1 and list2
-rrho_obj$genelist_dd$gene_list_overlap_dd
+# 3. Consolidar tudo em um único Data Frame gigante
+final_rrho_df <- bind_rows(all_rrho_results)
 
-#### Visualize by Venn Diagram
-RRHO2_vennDiagram(rrho_obj, type="dd")
+final_rrho_df %>% 
+  saveRDS(file = here("tables", "all_human_mouse_rrho_df.rds"))
 ```
+
+
+```{r fig.height=8, fig.width=12}
+# 1. Normalization Step: Create a Relative Score (0 to 1) for each facet
+final_rrho_df_norm <- final_rrho_df %>%
+  group_by(pathogen, timepoint) %>%
+  mutate(
+    # Scale LogP from 0 to 1 based on the local minimum and maximum of each group
+    LogP_Norm = (LogP - min(LogP, na.rm = TRUE)) / 
+                (max(LogP, na.rm = TRUE) - min(LogP, na.rm = TRUE)),
+    # Capture the original maximum to display as a label
+    Max_LogP_Label = round(max(LogP, na.rm = TRUE), 1)
+  ) %>%
+  ungroup() %>% 
+  mutate(    pathogen = as.character(pathogen),
+    pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli"))
+
+# 2. Plotting with Relative Scaling
+rrho_plot = ggplot(final_rrho_df_norm, 
+       aes(x = Human_Rank, y = Mouse_Rank, fill = LogP_Norm)) +
+  facet_nested_wrap(~pathogen + timepoint,
+                    scales = "free", nrow = 3,
+                    strip = strip_nested(size = "variable"), 
+                    axes = "all") +
+  geom_raster(interpolate = TRUE) +
+  # Reversing axes to put Up-Up at the Top-Right
+  scale_x_reverse(expand = c(0,0)) + 
+  scale_y_reverse(expand = c(0,0)) +
+  scale_fill_gradientn(
+  colors = c("#f7f7f7", "#2166ac", "#a480cf", "#ff499e"),
+  values = c(0, 0.3, 0.7, 1),
+  name = "Relative Overlap\n(Scaled 0-1)",
+  na.value = "white"
+) +
+  # # Optional: Add the real max value as text in the corner of each facet
+  # geom_text(data = . %>% distinct(pathogen, timepoint, Max_LogP_Label),
+  #           aes(label = paste("Max -log10P:", Max_LogP_Label)),
+  #           x = Inf, y = Inf, hjust = 0.5, vjust = 0, size = 3, inherit.aes = FALSE) +
+  labs(
+    title = "Comparative RRHO2 Analysis",
+    subtitle = "Relative overlap intensity across all conditions",
+    x = "Human (Ranked Down to Up)",
+    y = "Mouse (Ranked Down to Up)"
+  ) +
+  theme_vaxgo() + # Your custom theme
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 0, hjust = 0.5),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+        legend.position = "top",
+        legend.direction = "horizontal", legend.key.width = unit(1, "cm"),
+        legend.text = element_text(size = 8, hjust = 0),
+        legend.title = element_text(size = 8),
+        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
+        legend.box.spacing = unit(0, "cm"))
+
+rrho_plot
+
+rrho_plot %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_allgenes_rrho_heatmap.png"),
+         width = 12,
+         height = 8)
+```
+
+
+```{r fig.height=8, fig.width=12}
+# 1. Prepare Rank Data
+# We calculate the ranks locally for each facet so they are comparable
+rank_data <- human_mouse_log2fc_avg_wide %>%
+  filter(!is.na(mean_log2fc_human), !is.na(mean_log2fc_mouse)) %>%
+  group_by(pathogen, timepoint) %>%
+  mutate(
+    score_human = -log10(p_adj_human) * sign(mean_log2fc_human),
+    score_mouse = -log10(p_adj_human) * sign(mean_log2fc_human),
+    # Rank genes from Down-regulated to Up-regulated
+    # This matches your inverted RRHO scale (Rank 1 = Down, Rank N = Up)
+    Human_Rank_Val = rank(score_human),
+    Mouse_Rank_Val = rank(score_mouse)
+  ) %>%
+  ungroup()
+
+# 2. Plot Rank vs Rank Scatterplot
+rank_scatterplot = ggplot(rank_data, aes(x = Human_Rank_Val, y = Mouse_Rank_Val)) +
+  facet_nested_wrap(~pathogen + timepoint,
+                    scales = "free", nrow = 3,
+                    strip = strip_nested(size = "variable"), 
+                    axes = "all") +
+  # Using geom_point with low alpha to see density
+  geom_point(alpha = 0.2, size = 0.5, color = "#2166ac") +
+  # Add a diagonal identity line to visualize perfect conservation
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "#ff499e") +
+  labs(
+    title = "Rank-Rank Scatterplot Analysis",
+    subtitle = "Gene rank correlation across all conditions (Down -> Up)",
+    x = "Human Gene Rank",
+    y = "Mouse Gene Rank"
+  ) +
+  theme_vaxgo() + 
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 0, hjust = 0.5),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1))
+
+rank_scatterplot
+
+```
+
+
+
+Examples
+
+```{r}
+library(MASS)
+library(dplyr)
+library(ggplot2)
+library(RRHO2)
+
+# 1. Setup parameters
+set.seed(42)
+n_genes <- 2000
+rho <- -0.8  # Correlation
+mu <- c(0, 0) # Means
+
+# 2. Define Covariance Matrix
+sigma <- matrix(c(1, rho, 
+                  rho, 1), 
+                nrow = 2)
+
+# 3. Generate the data
+sim_data <- as.data.frame(mvrnorm(n = n_genes, mu = mu, Sigma = sigma))
+
+# 4. Format for RRHO2 (Adding Gene names and splitting into two data frames)
+Genes <- paste0("Gene", 1:n_genes)
+
+gene_list1 <- data.frame(Genes = Genes, DDE = sim_data[,1], stringsAsFactors = FALSE)
+gene_list2 <- data.frame(Genes = Genes, DDE = sim_data[,2], stringsAsFactors = FALSE)
+
+# 5. Initialize RRHO2
+# Note: RRHO2 works on ranked lists, identifying the statistical significance 
+# of overlaps across all possible rank thresholds.
+RRHO_obj <- RRHO2_initialize(gene_list1, gene_list2, 
+                             labels = c("Human", "Mouse"), 
+                             log10.ind = TRUE)
+
+# --- VISUALIZATION ---
+
+# A. Raw Score Scatterplot
+# This shows the 0.8 correlation distribution you requested.
+gene_list1 %>% 
+  inner_join(gene_list2 %>% rename(DDE2 = DDE), by = "Genes") %>% 
+  ggplot(aes(x = DDE, y = DDE2)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", color = "red") +
+  labs(title = "Raw Score Correlation (rho = 0.8)", x = "DDE List 1", y = "DDE List 2") +
+  theme_bw()
+
+# B. Rank Scatterplot
+# RRHO2 is based on the overlap of these ranks.
+# A tight diagonal here leads to strong heatmap signals.
+gene_list1 %>% 
+  inner_join(gene_list2 %>% rename(DDE2 = DDE), by = "Genes") %>% 
+  mutate(rank_dde = rank(DDE),
+         rank_dde2 = rank(DDE2)) %>% 
+  ggplot(aes(x = rank_dde, y = rank_dde2)) +
+  geom_point(alpha = 0.3, color = "darkblue") +
+  labs(title = "Rank-Rank Correlation", x = "Rank List 1", y = "Rank List 2") +
+  theme_bw()
+
+# C. Heatmap
+# Because the correlation is high (0.8), you will see strong signals in the 
+# Up-Up (bottom-left) and Down-Down (top-right) corners.
+RRHO2_heatmap(RRHO_obj)
+
+
+
+```
+
 
 
 

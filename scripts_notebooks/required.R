@@ -21,7 +21,7 @@ cran_packages = c(
 # install_github("RRHO2/RRHO2", build_opts = c("--no-resave-data", "--no-manual"))
 # library(RRHO2)
 
-install_github()
+# install_github()
 
 install.packages(c(
   "tidyverse", "rentrez", "yardstick", 
