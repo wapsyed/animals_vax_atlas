@@ -17626,6 +17626,62 @@ human_mouse_rank_rank_avg_wide_scatterplot %>%
 
 ```
 
+### Correlation: RRHO of means
+
+```{r}
+# 1. Filter data and calculate the ranking metric (Signed -log10 P-value)
+rrho_input_data <- human_mouse_log2fc_avg_wide %>% 
+  filter(pathogen == "Staphylococcus aureus",
+         timepoint == "12h") %>%
+  # Remove NAs to ensure valid calculations
+  filter(!is.na(p_adj_human), !is.na(p_adj_mouse), 
+         !is.na(mean_log2fc_human), !is.na(mean_log2fc_mouse)) %>%
+  mutate(
+    # Handle zero p-values: log10(0) is Infinite. 
+    # We replace 0 with the smallest positive float the machine can handle.
+    p_adj_human = ifelse(p_adj_human == 0, .Machine$double.xmin, p_adj_human),
+    p_adj_mouse = ifelse(p_adj_mouse == 0, .Machine$double.xmin, p_adj_mouse),
+    
+    # CALCULATE RANKING SCORE
+    # Formula: -log10(p_value) * sign(log2_fold_change)
+    # This pushes highly significant UP genes to the top (+), 
+    # and highly significant DOWN genes to the bottom (-).
+    score_human = -log10(p_adj_human) * sign(mean_log2fc_human),
+    score_mouse = -log10(p_adj_mouse) * sign(mean_log2fc_mouse)
+  )
+
+# 2. Create List 1 (Human Data)
+# Selecting the Gene ID and the calculated Metric
+gene_list1 <- rrho_input_data %>%
+  select(Genes = human_symbol, DDE = score_human) %>%
+  as.data.frame() # RRHO2 often handles standard data.frames better than tibbles
+
+# 3. Create List 2 (Mouse Data)
+gene_list2 <- rrho_input_data %>%
+  select(Genes = human_symbol, DDE = score_mouse) %>%
+  as.data.frame()
+
+# --- Next Steps: Running RRHO2 ---
+library(RRHO2)
+rrho_obj <- RRHO2_initialize(gene_list1, gene_list2, labels = c("Human", "Mouse"), log10.ind = TRUE, multipleTesting = "BH", boundary = 0.01, method = "hyper")
+RRHO2_heatmap(rrho_obj)
+
+
+## gene lists (down regulation in list1 and down regulation in list 2) that provide the most significant overlap
+rrho_obj$genelist_dd
+
+## down regulation genes in list1
+rrho_obj$genelist_dd$gene_list1_dd
+
+## down regulation genes in list2
+rrho_obj$genelist_dd$gene_list2_dd
+
+## overlap between down regulation genes in list1 and list2
+rrho_obj$genelist_dd$gene_list_overlap_dd
+
+#### Visualize by Venn Diagram
+RRHO2_vennDiagram(rrho_obj, type="dd")
+```
 
 
 
@@ -19117,22 +19173,6 @@ cor_labels_nes_filter_Mouse_Human <- dge_btm_gsea_mean_wide %>%
   )
 
 
-
-
-```
-
-
-
-
-
-####### Plot means
-
-```{r fig.height=9, fig.width=10, message=FALSE, warning=FALSE}
-# devtools::install_github("coolbutuseless/ggblur")
-# library(ggblur)
-# install.pa ckages("ggfx")
-# library(ggfx)
-
 dge_btm_mean_group_correlation_df = dge_btm_gsea_mean_wide %>% 
   ungroup() %>% 
   mutate(group = fct_relevel(group, c(immune_order)),
@@ -19153,6 +19193,27 @@ dge_btm_mean_group_correlation_df = dge_btm_gsea_mean_wide %>%
                               T ~pathogen),
          pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli"))
 
+# 1. Preparar o "Dummy Data" para forçar os limites
+# Vamos encontrar o maior valor absoluto entre X e Y para cada painel
+dummy_limits <- dge_btm_mean_group_correlation_df %>%
+  group_by(pathogen, facet_name) %>% # Agrupe pelas mesmas variáveis do seu facet
+  summarise(
+    max_val = max(abs(c(mean_log2fc_Mouse, mean_log2fc_Human)), na.rm = TRUE)
+  ) %>%
+  # Adiciona um "respiro" (ex: 10%) para o ponto não ficar cortado na borda
+  mutate(max_val = max_val * 1.1) %>% 
+  ungroup
+
+```
+
+
+
+
+
+####### Plot means
+
+```{r fig.height=9, fig.width=10, message=FALSE, warning=FALSE}
+
 #Plot correlation plot (means)
 dge_btm_mean_group_correlation_plot = 
   
@@ -19170,12 +19231,15 @@ dge_btm_mean_group_correlation_plot =
   ) %>% 
   ggplot() +
   aes(x = mean_log2fc_Mouse,
-      y = mean_log2fc_Human,
-      labels = process) +
+      y = mean_log2fc_Human) +
   facet_nested_wrap(vars(pathogen, facet_name),
                     scales = "free",
                     nrow = 3,
                     strip = strip_nested(size = "variable")) +
+    # geom_blank(data = dummy_limits, aes(x = -max_val, y = -max_val)) +
+  # geom_blank(data = dummy_limits, aes(x = max_val, y = max_val)) +
+  # coord_fixed(ratio = 1) +
+  
     #Guide lines
   geom_abline(alpha = 0.2, linetype = 2) +
   geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
@@ -19241,10 +19305,10 @@ dge_btm_mean_group_correlation_plot =
 dge_btm_mean_group_correlation_plot
 
 #Save results
-dge_btm_mean_group_correlation_plot %>%
-  ggsave(filename = here("Figures",  "all_human_mouse_dge_btm_mean_group_correlation_plot.png"),
-         width = 10,
-         height = 9)
+# dge_btm_mean_group_correlation_plot %>%
+#   ggsave(filename = here("Figures",  "all_human_mouse_dge_btm_mean_group_correlation_plot.png"),
+#          width = 10,
+#          height = 9)
 ```
 
 

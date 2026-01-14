@@ -18,9 +18,10 @@ cran_packages = c(
   "ggfx", "devtools", "readxl", "rstatix"
 )
 
-#Devtools
-devtools::install_github("antpiron/RedRibbon")
+# install_github("RRHO2/RRHO2", build_opts = c("--no-resave-data", "--no-manual"))
+# library(RRHO2)
 
+install_github()
 
 install.packages(c(
   "tidyverse", "rentrez", "yardstick", 
@@ -35,7 +36,8 @@ install.packages(c(
   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
   "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp", "corto", "Hmisc",
   "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath",
-  "ggfx", "devtools", "readxl", "rstatix"
+  "ggfx", "devtools", "readxl", "rstatix",
+  
   ))
 
 
