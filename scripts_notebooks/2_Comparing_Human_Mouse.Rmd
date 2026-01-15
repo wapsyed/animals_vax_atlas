@@ -17629,7 +17629,7 @@ human_mouse_rank_rank_avg_wide_scatterplot %>%
 ### Correlation: RRHO of means
 
 
-
+##### All genes
 ```{r}
 # 1. Identificar todas as combinações
 combinations <- human_mouse_log2fc_avg_wide %>%
@@ -17691,181 +17691,298 @@ final_rrho_df %>%
 
 
 ```{r fig.height=8, fig.width=12}
-# 1. Normalization Step: Create a Relative Score (0 to 1) for each facet
-final_rrho_df_norm <- final_rrho_df %>%
+library(tidyverse)
+library(ggh4x)
+
+library(tidyverse)
+library(ggh4x)
+
+# --- Step 1: Calculate quadrant boundaries and extract Max LogP ---
+final_rrho_quadrants <- final_rrho_df_norm %>%
   group_by(pathogen, timepoint) %>%
   mutate(
-    # Scale LogP from 0 to 1 based on the local minimum and maximum of each group
-    LogP_Norm = (LogP - min(LogP, na.rm = TRUE)) / 
-                (max(LogP, na.rm = TRUE) - min(LogP, na.rm = TRUE)),
-    # Capture the original maximum to display as a label
-    Max_LogP_Label = round(max(LogP, na.rm = TRUE), 1)
+    # Explicitly use dplyr::n_distinct or max to find the center
+    mid_human = max(Human_Rank, na.rm = TRUE) / 2,
+    mid_mouse = max(Mouse_Rank, na.rm = TRUE) / 2,
+    
+    # Classify each pixel into one of the 4 quadrants
+    quadrant = case_when(
+      Human_Rank > mid_human  & Mouse_Rank > mid_mouse  ~ "Up_Up",
+      Human_Rank <= mid_human & Mouse_Rank <= mid_mouse ~ "Down_Down",
+      Human_Rank > mid_human  & Mouse_Rank <= mid_mouse ~ "Up_Down",
+      Human_Rank <= mid_human & Mouse_Rank > mid_mouse  ~ "Down_Up"
+    )
   ) %>%
-  ungroup() %>% 
-  mutate(    pathogen = as.character(pathogen),
-    pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli"))
+  group_by(pathogen, timepoint, quadrant) %>%
+  summarise(
+    Max_LogP_Abs = max(LogP, na.rm = TRUE),
+    # Using [1] instead of first() to avoid S4 method errors
+    max_h = max(Human_Rank, na.rm = TRUE),
+    max_m = max(Mouse_Rank, na.rm = TRUE),
+    .groups = "drop_last"
+  ) %>%
+  mutate(
+    # Normalize LogP within each facet
+    Max_LogP_Norm = Max_LogP_Abs / max(Max_LogP_Abs, na.rm = TRUE)
+  ) %>%
+  ungroup()
 
-# 2. Plotting with Relative Scaling
-rrho_plot = ggplot(final_rrho_df_norm, 
-       aes(x = Human_Rank, y = Mouse_Rank, fill = LogP_Norm)) +
+# --- Step 2: Prepare label positions ---
+# Because of scale_reverse, we place labels relative to the total rank size
+labels_data <- final_rrho_quadrants %>%
+  mutate(
+    x_pos = case_when(
+      grepl("^Up", quadrant)   ~ max_h * 0.85, # Top of the list (High Rank)
+      grepl("^Down", quadrant) ~ max_h * 0.15  # Bottom of the list (Low Rank)
+    ),
+    y_pos = case_when(
+      grepl("Up$", quadrant)   ~ max_m * 0.85,
+      grepl("Down$", quadrant) ~ max_m * 0.15
+    )
+  )
+
+# --- Step 3: Final Heatmap Plot ---
+
+
+rrho_plot = ggplot() +
+  # Heatmap layer
+  geom_raster(data = final_rrho_df_norm, 
+              aes(x = Human_Rank, y = Mouse_Rank, fill = LogP_Norm),
+              interpolate = TRUE) +
+  
+  # Faceting
   facet_nested_wrap(~pathogen + timepoint,
                     scales = "free", nrow = 3,
                     strip = strip_nested(size = "variable"), 
                     axes = "all") +
-  geom_raster(interpolate = TRUE) +
-  # Reversing axes to put Up-Up at the Top-Right
+  
+  # Coordinate adjustment
   scale_x_reverse(expand = c(0,0)) + 
   scale_y_reverse(expand = c(0,0)) +
+  
+  # Aesthetic mapping
   scale_fill_gradientn(
-  colors = c("#f7f7f7", "#2166ac", "#a480cf", "#ff499e"),
-  values = c(0, 0.3, 0.7, 1),
-  name = "Relative Overlap\n(Scaled 0-1)",
-  na.value = "white"
-) +
-  # # Optional: Add the real max value as text in the corner of each facet
-  # geom_text(data = . %>% distinct(pathogen, timepoint, Max_LogP_Label),
-  #           aes(label = paste("Max -log10P:", Max_LogP_Label)),
-  #           x = Inf, y = Inf, hjust = 0.5, vjust = 0, size = 3, inherit.aes = FALSE) +
+    colors = c("white", "#4361ee", "#a480cf", "#46eec6"),
+    values = c(0, 0.3, 0.6, 1), na.value = "white", 
+    name = "Normalized\nOverlap Intensity",
+    labels = scales::label_percent()
+  ) +
+  
+  # Quadrant Labels
+  geom_text_repel(data = labels_data, 
+            aes(x = x_pos, y = y_pos, label = round(Max_LogP_Abs, 1)), 
+            size = 3.2, color = "black", fontface = "bold") +
+  
   labs(
     title = "Comparative RRHO2 Analysis",
-    subtitle = "Relative overlap intensity across all conditions",
-    x = "Human (Ranked Down to Up)",
-    y = "Mouse (Ranked Down to Up)"
+    subtitle = "Relative overlap intensity (Text: Max -log10 p-value per quadrant)",
+    x = "Human Gene Rank (Up to Down)",
+    y = "Mouse Gene Rank (Up to Down)"
   ) +
-  theme_vaxgo() + # Your custom theme
+  theme_vaxgo() + 
   theme(aspect.ratio = 1,
-        axis.text.x = element_text(angle = 0, hjust = 0.5),
-        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
-        legend.position = "top",
-        legend.direction = "horizontal", legend.key.width = unit(1, "cm"),
-        legend.text = element_text(size = 8, hjust = 0),
-        legend.title = element_text(size = 8),
-        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
-        legend.box.spacing = unit(0, "cm"))
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = "right",
+        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1))
 
-rrho_plot
-
-rrho_plot %>% 
-  ggsave(filename = here("Figures", "all_human_mouse_allgenes_rrho_heatmap.png"),
+print(rrho_plot)
+rrho_plot %>%
+  ggsave(filename = here("Figures", "all_human_mouse_allgenes_rrho_heatmap_values.png"),
          width = 12,
          height = 8)
 ```
 
-
+All genes
 ```{r fig.height=8, fig.width=12}
 # 1. Preparar os dados (mantendo sua lógica de rank)
 rank_data <- human_mouse_log2fc_avg_wide %>%
-  filter(!is.na(mean_log2fc_human), !is.na(mean_log2fc_mouse),
+  filter(!is.na(mean_log2fc_human) | !is.na(mean_log2fc_mouse),
          !is.na(p_adj_human), !is.na(p_adj_mouse)) %>%
   group_by(pathogen, timepoint) %>%
   mutate(
     score_human = -log10(p_adj_human) * sign(mean_log2fc_human),
     score_mouse = -log10(p_adj_mouse) * sign(mean_log2fc_mouse),
     Human_Rank_Val = rank(score_human),
-    Mouse_Rank_Val = rank(score_mouse)
+    Mouse_Rank_Val = rank(score_mouse),
   ) %>%
-  ungroup()
+  ungroup() %>% 
+  mutate(pathogen = as.character(pathogen),
+    pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli"))
+
+# Calcular os limites por grupo
+thresholds <- rank_data %>%
+  group_by(pathogen, timepoint) %>%
+  summarise(
+    # Encontra o maior rank entre os genes com log2fc negativo
+    v_line = max(Human_Rank_Val[mean_log2fc_human < 0], na.rm = TRUE),
+    h_line = max(Mouse_Rank_Val[mean_log2fc_mouse < 0], na.rm = TRUE),
+    .groups = "drop"
+  )
 
 # 2. Plotar como Heatmap de Densidade (Raster)
-rank_density_heatmap = ggplot(rank_data, aes(x = Human_Rank_Val, y = Mouse_Rank_Val)) +
+rank_density_heatmap = rank_data %>% 
+  ggplot() + 
+  aes(x = Human_Rank_Val, y = Mouse_Rank_Val) +
   facet_nested_wrap(~pathogen + timepoint,
                     scales = "free", 
                     nrow = 3,
                     strip = strip_nested(size = "variable"), 
                     axes = "all") +
-  # geom_bin2d cria o efeito raster de densidade
-  # bins define a "resolução" do heatmap
-  geom_bin2d(bins = 20) + 
-  # Escala de cores profissional (Mako ou seu gradiente customizado)
-  scale_fill_viridis_c(option = "mako", name = "Gene\nDensity", direction = -1, ) +
-  # Linha diagonal para referência de concordância perfeita
-  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "white", alpha = 0.5) +
+ stat_density_2d(aes(fill = after_stat(density / sum(density))), 
+                  geom = "raster", 
+                  contour = F, 
+                  n = 50) +    
+  scale_fill_gradientn(
+  colors = c("white", "#4361ee", "#4DBBD5FF", "#46eec6"),
+  na.value = "white", 
+  labels = scales::label_percent(), 
+  name = "Density (%)",
+  guide = guide_colorbar(
+    barwidth = 1, 
+    barheight = 8, 
+    title.position = "top", 
+    title.hjust = 0.5,
+    ticks.colour = "black",
+    frame.colour = "black"
+  )
+) +
+  scale_x_reverse(expand = c(0,0)) +
+  scale_y_reverse(expand = c(0,0)) +
+  # Divide by threshold
+  geom_vline(data = thresholds, aes(xintercept = v_line), 
+             linetype = "solid", color = "white", alpha = 1, linewidth = 2) +
+  geom_hline(data = thresholds, aes(yintercept = h_line), 
+             linetype = "solid", color = "white", alpha = 1, linewidth = 2) +
   labs(
     title = "Rank-Rank Density Heatmap",
-    subtitle = "Global gene rank coordination (Down -> Up)",
-    x = "Human Gene Rank (Down to Up)",
-    y = "Mouse Gene Rank (Down to Up)"
+    subtitle = "Normalized density per condition",
+    x = "Human Gene Rank",
+    y = "Mouse Gene Rank"
   ) +
   theme_vaxgo() + 
   theme(aspect.ratio = 1,
-        axis.text.x = element_text(angle = 0, hjust = 0.5),
+        axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5, size =10),
+        axis.text.y = element_text(size = 10),
         strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
-        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
-        legend.position = "right")
+        legend.position = "right",
+        legend.direction = "vertical",
+        legend.key.width = unit(1, "cm"),
+        legend.text = element_text(size = 8, 
+                                   # hjust = 1, vjust = 1, 
+                                   angle = 0),
+        legend.title = element_text(size = 8),
+        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1))
+
 
 rank_density_heatmap
 
+
+rank_density_heatmap %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_allgenes_rankrank_heatmap.png"),
+         width = 12,
+         height = 8)
+```
+
+
+Immune genes
+```{r fig.height=8, fig.width=12}
+# 1. Preparar os dados (mantendo sua lógica de rank)
+rank_data_immune <- human_mouse_log2fc_avg_wide %>%
+    filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique())) %>%
+  filter(!is.na(mean_log2fc_human) | !is.na(mean_log2fc_mouse),
+         !is.na(p_adj_human), !is.na(p_adj_mouse)) %>%
+  group_by(pathogen, timepoint) %>%
+  mutate(
+    score_human = -log10(p_adj_human) * sign(mean_log2fc_human),
+    score_mouse = -log10(p_adj_mouse) * sign(mean_log2fc_mouse),
+    Human_Rank_Val = rank(score_human),
+    Mouse_Rank_Val = rank(score_mouse),
+  ) %>%
+  ungroup() %>% 
+  mutate(pathogen = as.character(pathogen),
+    pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli"))
+
+# Calcular os limites por grupo
+thresholds <- rank_data_immune %>%
+  group_by(pathogen, timepoint) %>%
+  summarise(
+    # Encontra o maior rank entre os genes com log2fc negativo
+    v_line = max(Human_Rank_Val[mean_log2fc_human < 0], na.rm = TRUE),
+    h_line = max(Mouse_Rank_Val[mean_log2fc_mouse < 0], na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 2. Plotar como Heatmap de Densidade (Raster)
+rank_immune_density_heatmap = rank_data_immune %>% 
+  ggplot() + 
+  aes(x = Human_Rank_Val, y = Mouse_Rank_Val) +
+  facet_nested_wrap(~pathogen + timepoint,
+                    scales = "free", 
+                    nrow = 3,
+                    strip = strip_nested(size = "variable"), 
+                    axes = "all") +
+ stat_density_2d(aes(fill = after_stat(density / sum(density))), 
+                  geom = "raster", 
+                  contour = F, 
+                  n = 50) +    
+  scale_fill_gradientn(
+  colors = c("white", "#4361ee", "#4DBBD5FF", "#46eec6"),
+  na.value = "white", 
+  labels = scales::label_percent(), 
+  name = "Density (%)",
+  guide = guide_colorbar(
+    barwidth = 1, 
+    barheight = 8, 
+    title.position = "top", 
+    title.hjust = 0.5,
+    ticks.colour = "black",
+    frame.colour = "black"
+  )
+) +
+  scale_x_reverse(expand = c(0,0)) +
+  scale_y_reverse(expand = c(0,0)) +
+  # Divide by threshold
+  geom_vline(data = thresholds, aes(xintercept = v_line), 
+             linetype = "solid", color = "white", alpha = 1, linewidth = 2) +
+  geom_hline(data = thresholds, aes(yintercept = h_line), 
+             linetype = "solid", color = "white", alpha = 1, linewidth = 2) +
+  labs(
+    title = "Rank-Rank Density Heatmap",
+    subtitle = "Normalized density per condition",
+    x = "Human Gene Rank",
+    y = "Mouse Gene Rank"
+  ) +
+  theme_vaxgo() + 
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5, size =10),
+        axis.text.y = element_text(size = 10),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+        legend.position = "right",
+        legend.direction = "vertical",
+        legend.key.width = unit(1, "cm"),
+        legend.text = element_text(size = 8, 
+                                   # hjust = 1, vjust = 1, 
+                                   angle = 0),
+        legend.title = element_text(size = 8),
+        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1))
+
+
+rank_immune_density_heatmap
+
+
+rank_immune_density_heatmap %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_immunegenes_rankrank_heatmap.png"),
+         width = 12,
+         height = 8)
 ```
 
 
 
-Examples
-
-```{r}
-library(MASS)
-library(dplyr)
-library(ggplot2)
-library(RRHO2)
-
-# 1. Setup parameters
-set.seed(42)
-n_genes <- 2000
-rho <- -0.8  # Correlation
-mu <- c(0, 0) # Means
-
-# 2. Define Covariance Matrix
-sigma <- matrix(c(1, rho, 
-                  rho, 1), 
-                nrow = 2)
-
-# 3. Generate the data
-sim_data <- as.data.frame(mvrnorm(n = n_genes, mu = mu, Sigma = sigma))
-
-# 4. Format for RRHO2 (Adding Gene names and splitting into two data frames)
-Genes <- paste0("Gene", 1:n_genes)
-
-gene_list1 <- data.frame(Genes = Genes, DDE = sim_data[,1], stringsAsFactors = FALSE)
-gene_list2 <- data.frame(Genes = Genes, DDE = sim_data[,2], stringsAsFactors = FALSE)
-
-# 5. Initialize RRHO2
-# Note: RRHO2 works on ranked lists, identifying the statistical significance 
-# of overlaps across all possible rank thresholds.
-RRHO_obj <- RRHO2_initialize(gene_list1, gene_list2, 
-                             labels = c("Human", "Mouse"), 
-                             log10.ind = TRUE)
-
-# --- VISUALIZATION ---
-
-# A. Raw Score Scatterplot
-# This shows the 0.8 correlation distribution you requested.
-gene_list1 %>% 
-  inner_join(gene_list2 %>% rename(DDE2 = DDE), by = "Genes") %>% 
-  ggplot(aes(x = DDE, y = DDE2)) +
-  geom_point(alpha = 0.3) +
-  geom_smooth(method = "lm", color = "red") +
-  labs(title = "Raw Score Correlation (rho = 0.8)", x = "DDE List 1", y = "DDE List 2") +
-  theme_bw()
-
-# B. Rank Scatterplot
-# RRHO2 is based on the overlap of these ranks.
-# A tight diagonal here leads to strong heatmap signals.
-gene_list1 %>% 
-  inner_join(gene_list2 %>% rename(DDE2 = DDE), by = "Genes") %>% 
-  mutate(rank_dde = rank(DDE),
-         rank_dde2 = rank(DDE2)) %>% 
-  ggplot(aes(x = rank_dde, y = rank_dde2)) +
-  geom_point(alpha = 0.3, color = "darkblue") +
-  labs(title = "Rank-Rank Correlation", x = "Rank List 1", y = "Rank List 2") +
-  theme_bw()
-
-# C. Heatmap
-# Because the correlation is high (0.8), you will see strong signals in the 
-# Up-Up (bottom-left) and Down-Down (top-right) corners.
-RRHO2_heatmap(RRHO_obj)
 
 
 
-```
+
 
 
 
