@@ -1,0 +1,391 @@
+---
+title: "Seok_datasets"
+output: html_document
+---
+
+# Required
+
+```{r}
+# install.packages("here") if needed
+library(here)
+source(here("scripts_notebooks", "required.R"))
+```
+
+
+Datasets
+```{r}
+# Trauma
+#   Human Trauma: GSE36809
+#   Mouse Trauma: GSE7404
+# Burn
+#   Human Burn: GSE37069
+#   Mouse Burn: GSE7404
+
+```
+
+
+
+# 1. Download datasets
+## Trauma, Human (GSE36809)
+Clinical metadata were curated and standardized to ensure consistency across the dataset. The time elapsed since injury, originally recorded in hours, was converted to days and rounded to one decimal place. To account for the irregular temporal distribution of samples, timepoints were discretized into seven categorical bins: <1 day (Early Hours), 1–2 days, 2–5 days, 5–10 days, 10–18 days, 18–25 days, and >25 days. Samples were stratified into 'Trauma' and 'Control' groups based on subject identifiers. Rigorous quality control was applied by excluding samples explicitly flagged in the metadata for low RNA quality or incomplete temporal data. Finally, temporal bins were treated as ordered factors to facilitate downstream differential expression modeling.
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
+#Download datasets
+filename = "mouse_trauma"
+GSE_matrix <- getGEO(filename = here("tables", "GSE36809_series_matrix.txt.gz"), 
+                     GSEMatrix = T)
+
+#Get Expression Set
+eset <- GSE_matrix
+
+#Get metadata -------
+GSE_metadata = eset %>% Biobase::pData()
+
+#Select, clean, and standardize attributes
+GSE_metadata_annotated = GSE_metadata %>% 
+  select(geo_sample = "geo_accession",
+         sample_id = "source_name_ch1",
+         description = title,
+         tissue = `tissue:ch1`,
+         sex = `Sex:ch1`,
+         timepoint = `hours_since_injury:ch1`,
+         platform_id
+         ) %>% 
+  separate(sample_id, sep = ", ", into = c("subject_id", "delete")) %>% 
+  select(-delete) %>% 
+    mutate(timepoint = if_else(timepoint == "N/A", "0", timepoint),
+         timepoint = (as.numeric(timepoint)/24) %>% round(x = ., digits = 1),
+         subject_id = str_remove(subject_id, "Subject "),
+         geo = "GSE36809",
+         treatment = if_else(subject_id != "Control", "Trauma", "Control")) %>% 
+  filter(!description %in% c("Please notice that this sample with low RNA quality.", 
+                            "Sample from patients with incomplete time points.")) %>% 
+  mutate(
+    
+    # Binned timepoints
+    timepoints_new = case_when(
+      timepoint < 1            ~ "Early_Hours",
+      timepoint >= 1 & timepoint < 2  ~ "Day_1",
+      timepoint >= 2 & timepoint < 5  ~ "Day_3",
+      timepoint >= 5 & timepoint < 10 ~ "Day_7",
+      timepoint >= 10 & timepoint < 18 ~ "Day_14",
+      timepoint >= 18 & timepoint < 25 ~ "Day_21",
+      timepoint >= 25          ~ "Day_28",
+      TRUE                         ~ "Other"
+    ),
+    
+    #Explicit bins
+    timepoints_bin = case_when(
+      timepoint < 1            ~ "<Day_1",
+      timepoint >= 1 & timepoint < 2  ~ "Day_1_>=1 to <2",
+      timepoint >= 2 & timepoint < 5  ~ "Day_3_>=2 to <5",
+      timepoint >= 5 & timepoint < 10 ~ "Day_7_>=5 to <10",
+      timepoint >= 10 & timepoint < 18 ~ "Day_14_>=10 to <18",
+      timepoint >= 18 & timepoint < 25 ~ "Day_21_>=18 to <25",
+      timepoint >= 25          ~ "Day_28_>25",
+      TRUE                         ~ "Other"
+    ),
+    
+    timepoints_new = factor(timepoints_new, levels = c("Early_Hours", "Day_1", "Day_3", "Day_7", "Day_14", "Day_21", "Day_28"))
+  )
+
+GSE_metadata_annotated %>% 
+  group_by(subject_id)%>%
+  arrange(subject_id, timepoint) %>%
+  View()
+
+GSE_metadata_annotated %>% 
+  filter(subject_id != "Control") %>% 
+  group_by(subject_id)%>%
+  summarise(n_timepoints = n()) %>% 
+  arrange(subject_id, n_timepoints) %>% 
+  filter(n_timepoints > 1) # -10 participants
+
+
+GSE_metadata_annotated %>% 
+  group_by(timepoints_new, treatment)%>%
+  summarise(n_sample = n()) %>% 
+  arrange(timepoints_new) %>% 
+  ggplot() +
+  aes(x = timepoints_new,
+      size = n_sample,
+      y = treatment,
+      color = treatment) +
+  geom_point()
+  
+
+#Save metadata
+write_csv(GSE_metadata_annotated, file = here("tables", paste0(filename, "_metadata_annotated.csv")))
+
+#Get counts matrix ------
+GSE_exprs <- eset %>% exprs()
+
+#Save as RDS
+GSE_exprs %>% as.data.frame() %>% 
+  saveRDS(here("tables", paste0(filename, "_exprs.rds")))
+
+```
+
+
+## Trauma and Burn, Mouse (GSE7404)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
+#Download datasets
+filename = "mouse_trauma_burn"
+GSE_matrix <- getGEO(filename = here("tables", "GSE7404_series_matrix.txt.gz"), 
+                     GSEMatrix = T)
+
+#Get Expression Set
+eset <- GSE_matrix
+
+#Get metadata -------
+GSE_metadata = eset %>% Biobase::pData()
+
+#Select, clean, and standardize attributes
+GSE_metadata_annotated = GSE_metadata %>% 
+  select(geo_sample = "geo_accession",
+         sample_id = "source_name_ch1",
+         participant_description = title,
+         characteristics = characteristics_ch1,
+         timepoint = `time:ch1`,
+         genetic = `genetic background:ch1`,
+         tissue = `source_name_ch1`,
+         organism = organism_ch1,
+         description = description,
+         # sex = `Sex:ch1`,
+         platform_id
+         ) %>% 
+  filter(tissue == "mouse leukocytes") %>% 
+  fill(genetic, .direction = "up") %>% 
+  mutate(treatment = case_when(str_detect(description, "burn") ~ "Burn", 
+                               str_detect(description, "trauma") ~ "Trauma", 
+                               str_detect(description, "LPS") ~ "LPS",
+                               T~description),
+         treatment = if_else(str_detect(participant_description, "Sham"), paste0(treatment, "_", "Control"), treatment),
+         tissue = str_remove(tissue, "mouse "), 
+         sex = "male",
+         geo = "GSE7404") %>% 
+  extract(
+    col = participant_description, 
+    into = c("timepoint", "participant_id"), 
+    regex = "(\\d+\\s?(?:day|Day|hr))\\s+(rep\\s?\\d+)", 
+    remove = T 
+  ) %>% 
+  mutate(timepoint = str_replace(timepoint, "hr", "Hour") %>% str_replace("day", "Day"),
+         timepoint = fct_reorder(timepoint, parse_number(timepoint))) %>% 
+  select(geo_sample, participant_id, timepoint, sex, 
+         strain = genetic, tissue, organism, treatment, platform_id) 
+
+
+GSE_metadata_annotated %>% 
+  group_by(timepoint, treatment)%>%
+  summarise(n_sample = n()) %>% 
+  arrange(timepoint) %>% 
+  ggplot() +
+  aes(x = timepoint,
+      size = n_sample,
+      y = treatment,
+      color = treatment) +
+  geom_point()
+  
+
+#Save metadata
+write_csv(GSE_metadata_annotated, file = here("tables", paste0(filename, "_metadata_annotated.csv")))
+
+#Get counts matrix ------
+GSE_exprs <- eset %>% exprs()
+
+#Save as RDS
+GSE_exprs %>% as.data.frame() %>% 
+  saveRDS(here("tables", paste0(filename, "_exprs.rds")))
+
+```
+
+
+## Annotate genes
+
+### Mouse datasets
+
+```{r}
+#Import datasets
+ecoli_mouse_exprs = readRDS(here("tables", "ecoli_infection_mouse_exprs.rds"))
+ecoli_mouse_human_metadata = readRDS(file = here("tables", "ecoli_infection_human_mouse_metadata.rds"))
+
+#Inputs
+filename = "ecoli_infection_mouse"
+mouse_exprs = ecoli_mouse_exprs
+mouse_metadata = ecoli_mouse_human_metadata
+
+#Annotate genes ------
+#Mouse -----
+#Annotate data and calculate log2fc
+mouse_exprs_metadata  = mouse_exprs %>% 
+  pivot_longer(cols = 2:125,
+               names_to = "geo_sample",
+               values_to = "value_raw") %>% 
+  inner_join(mouse_metadata, 
+             by = "geo_sample") 
+
+mouse_exprs_metadata_filtered = mouse_exprs_metadata %>% 
+               filter(host_strain == "C57BL/6J",
+                      batch == "8")
+
+#Save metadata
+mouse_exprs_metadata_filtered %>% saveRDS(file = here("tables", paste0(filename, "_metadata_filtered.rds")))
+
+#Get value from day 0 and calculate Log2FC (non-paired)
+mouse_exprs_log2fc_sample = mouse_exprs_metadata %>% 
+  #Filter batch
+  filter(organism == "Mus musculus",
+         status == "Healthy",
+         host_strain == "C57BL/6J",
+         batch == "8") %>% 
+  select(probe_id, batch, subject_num, day0_value_raw = value_raw) %>% 
+  #If the dataset is paired, ignore this part
+  ########################
+  #Get the mean expression value for healthy
+  group_by(probe_id, batch) %>% 
+  summarise(n = n(),
+            #Mean of healthy
+            day0_value_raw = sum(day0_value_raw)/n,
+            batch) %>% 
+  ungroup() %>% 
+  ########################
+  select(probe_id, day0_value_raw, batch) %>% 
+  distinct() %>% 
+  #Filter batch
+  inner_join(mouse_exprs_metadata %>% 
+               filter(timepoint != "0",
+                      host_strain == "C57BL/6J",
+                      batch == "8"),
+             by = join_by("probe_id", "batch")) %>% 
+  mutate(log2fc = value_raw - day0_value_raw) %>% 
+  distinct() 
+
+#Check duplicates
+mouse_exprs_log2fc_sample %>% 
+  filter(subject_id == "Mouse_C57BL/6J_Animal1_Batch8",
+         probe_id == "1415670_at")
+
+```
+
+```{r}
+########### Filter and annotate probes -----
+## Set up biomart
+ensembl_mart <- useMart("ensembl")
+ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
+
+## Get the MGI symbol
+gene_id <- mouse_exprs$probe_id %>% unique()
+
+# listAttributes(ensembl_mart)
+#Annotate
+annot <- getBM(
+  attributes = c("affy_mouse430_2",
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "mgi_symbol",
+                 "description"),
+  filters = "affy_mouse430_2", #Probes
+  values = gene_id,
+  mart = ensembl_mart)
+
+#Get lookup table from FIT
+#Install model package
+# library(devtools)
+# devtools::install_github('shenorrLabTRDF/FIT.mouse2man')
+library(FIT.mouse2man)
+HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez %>% 
+  clean_names() %>% 
+  rename(mouse_entrez = mouse_ortholog)
+
+#Get annotations for each probe 
+### Filter probes with highest median expression
+mouse_log2summary = mouse_exprs %>% #20,845 probes
+  as.data.frame() %>% 
+  rename(probe = probe_id) %>% 
+  pivot_longer(cols = -probe,
+               names_to = "sample",
+               values_to = "expression") %>% 
+  group_by(probe) %>% 
+  summarise(mean = mean(expression,na.rm = TRUE),
+            median = median(expression, na.rm = T)) %>%  
+  inner_join(annot %>% 
+              rename(probe = affy_mouse430_2), 
+            by = "probe") %>%  #24.009 rows
+  #Filter ensembl id
+  group_by(ensembl_gene_id) %>% 
+  slice_max(median, n = 1) %>%
+  ungroup() %>% 
+  select(-ensembl_gene_id) %>% 
+  distinct() %>% 
+  
+  #Filter entrez id
+  group_by(entrezgene_id) %>% 
+  slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
+  ungroup() %>% 
+  rename(mouse_entrez = entrezgene_id) %>% 
+  
+  #Filter hgnc symbol
+  inner_join(HS_MM_Symbol_Entrez, by = c("mouse_entrez", "mgi_symbol")) %>% 
+  group_by(hgnc_symbol) %>% 
+  slice_max(median, n = 1)  %>% #14.396
+  ungroup()
+
+#Filter out genes with multiple mgi_symbols
+hgnc_symbol_dupes = mouse_log2summary %>% 
+  #filter ensembl id with multiple mgi_symbols
+  get_dupes(hgnc_symbol)
+
+mouse_log2summary = mouse_log2summary %>% 
+  select(probe, hgnc_symbol) %>% 
+  filter(!hgnc_symbol %in% c(hgnc_symbol_dupes$hgnc_symbol %>% unique())) 
+
+#Modify expression matrix
+
+#Filtered probes
+mouse_log2_filtered_probes = mouse_exprs %>% 
+  as.data.frame() %>% 
+  rename(probe = probe_id) %>% 
+  inner_join(mouse_log2summary, by = "probe") %>%   #214,396
+  select(human_symbol = hgnc_symbol,
+         probe,
+         c(mouse_metadata %>% 
+             pull(geo_sample)))
+#Check
+mouse_log2_filtered_probes %>% dim()
+mouse_log2_hgnc_symbol = mouse_log2_filtered_probes 
+mouse_log2_hgnc_symbol %>% get_dupes(human_symbol)
+
+#Save
+mouse_log2_hgnc_symbol %>% saveRDS(file = here("tables", paste0(filename, "_exprs_hgnc_symbol.rds")))
+
+#Pivot to long and wide format, and annotate
+mouse_log2_samples_log2fc_long = mouse_log2_filtered_probes %>% 
+  pivot_longer(cols = -c(human_symbol, probe),
+               names_to = "geo_sample",
+               values_to = "log2fc") %>% 
+  inner_join(mouse_metadata,
+             by = "geo_sample")
+
+
+mouse_log2_samples_log2fc_wide = mouse_log2_samples_log2fc_long %>% 
+  select(human_symbol, probe, subject_id, timepoint, log2fc) %>%
+  pivot_wider(names_from = "subject_id",
+              values_from = "log2fc") %>% 
+  mutate(timepoint = fct_reorder(timepoint, timepoint %>% as.numeric()))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
