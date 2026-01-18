@@ -26,12 +26,15 @@ Datasets
 
 
 # 1. Download datasets
-## Trauma, Human (GSE36809)
+
+## Human
+
+### Trauma, Human (GSE36809)
 Clinical metadata were curated and standardized to ensure consistency across the dataset. The time elapsed since injury, originally recorded in hours, was converted to days and rounded to one decimal place. To account for the irregular temporal distribution of samples, timepoints were discretized into seven categorical bins: <1 day (Early Hours), 1–2 days, 2–5 days, 5–10 days, 10–18 days, 18–25 days, and >25 days. Samples were stratified into 'Trauma' and 'Control' groups based on subject identifiers. Rigorous quality control was applied by excluding samples explicitly flagged in the metadata for low RNA quality or incomplete temporal data. Finally, temporal bins were treated as ordered factors to facilitate downstream differential expression modeling.
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
 #Download datasets
-filename = "mouse_trauma"
+filename = "trauma_human"
 GSE_matrix <- getGEO(filename = here("tables", "GSE36809_series_matrix.txt.gz"), 
                      GSEMatrix = T)
 
@@ -57,6 +60,7 @@ GSE_metadata_annotated = GSE_metadata %>%
          timepoint = (as.numeric(timepoint)/24) %>% round(x = ., digits = 1),
          subject_id = str_remove(subject_id, "Subject "),
          geo = "GSE36809",
+         organism = "Human",
          treatment = if_else(subject_id != "Control", "Trauma", "Control")) %>% 
   filter(!description %in% c("Please notice that this sample with low RNA quality.", 
                             "Sample from patients with incomplete time points.")) %>% 
@@ -89,6 +93,8 @@ GSE_metadata_annotated = GSE_metadata %>%
     timepoints_new = factor(timepoints_new, levels = c("Early_Hours", "Day_1", "Day_3", "Day_7", "Day_14", "Day_21", "Day_28"))
   )
 
+
+
 GSE_metadata_annotated %>% 
   group_by(subject_id)%>%
   arrange(subject_id, timepoint) %>%
@@ -102,6 +108,96 @@ GSE_metadata_annotated %>%
   filter(n_timepoints > 1) # -10 participants
 
 
+GSE_metadata_annotated_filtered %>% 
+  group_by(timepoints_new, treatment)%>%
+  summarise(n_sample = n()) %>% 
+  arrange(timepoints_new) %>% 
+  ggplot() +
+  aes(x = timepoints_new,
+      size = n_sample,
+      y = treatment,
+      color = treatment) +
+  geom_point()
+
+GSE_metadata_annotated_filtered = GSE_metadata_annotated %>% 
+  filter(timepoints_new %in% c("Early_Hours", "Day_1", "Day_3", "Day_7"))
+
+
+#Save metadata
+write_csv(GSE_metadata_annotated_filtered, file = here("tables", paste0(filename, "_metadata_annotated.csv")))
+
+#Get counts matrix ------
+GSE_exprs <- eset %>% exprs()
+
+#Save as RDS
+GSE_exprs %>% as.data.frame() %>% 
+  select(GSE_metadata_annotated_filtered$geo_sample) %>% 
+  saveRDS(here("tables", paste0(filename, "_exprs.rds")))
+
+```
+
+### Burn, Human (GSE37069)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
+#Download datasets
+filename = "burn_human"
+GSE_matrix <- getGEO(filename = here("tables", "GSE37069_series_matrix.txt.gz"), 
+                     GSEMatrix = T)
+
+#Get Expression Set
+eset <- GSE_matrix
+
+#Get metadata -------
+GSE_metadata = eset %>% Biobase::pData()
+
+#Select, clean, and standardize attributes
+GSE_metadata_annotated = GSE_metadata %>% 
+  select(geo_sample = "geo_accession",
+         treatment = "source_name_ch1",
+         organism = organism_ch1,
+         age = `age:ch1`,
+         tissue = `tissue:ch1`,
+         sex = `Sex:ch1`,
+         timepoint = `hours_since_injury:ch1`,
+         platform_id,
+         ) %>% 
+  separate(treatment, sep = ", ", into = c("subject_id", "delete")) %>% 
+  select(-delete) %>% 
+    mutate(subject_id = str_remove(subject_id, "Subject "),
+           timepoint = if_else(timepoint == "N/A", "0", timepoint),
+         timepoint = (as.numeric(timepoint)/24) %>% round(x = ., digits = 1),
+         geo = "GSE37069",
+         treatment = if_else(subject_id != "Control", "Burn", "Control")) %>% 
+  mutate(
+    
+    # Binned timepoints
+    timepoints_new = case_when(
+      timepoint < 1            ~ "Early_Hours",
+      timepoint >= 1 & timepoint < 2  ~ "Day_1",
+      timepoint >= 2 & timepoint < 5  ~ "Day_3",
+      timepoint >= 5 & timepoint < 10 ~ "Day_7",
+      timepoint >= 10 & timepoint < 18 ~ "Day_14",
+      timepoint >= 18 & timepoint < 25 ~ "Day_21",
+      timepoint >= 25          ~ "Day_28",
+      TRUE                         ~ "Other"
+    ),
+    
+    #Explicit bins
+    timepoints_bin = case_when(
+      timepoint < 1            ~ "<Day_1",
+      timepoint >= 1 & timepoint < 2  ~ "Day_1_>=1 to <2",
+      timepoint >= 2 & timepoint < 5  ~ "Day_3_>=2 to <5",
+      timepoint >= 5 & timepoint < 10 ~ "Day_7_>=5 to <10",
+      timepoint >= 10 & timepoint < 18 ~ "Day_14_>=10 to <18",
+      timepoint >= 18 & timepoint < 25 ~ "Day_21_>=18 to <25",
+      timepoint >= 25          ~ "Day_28_>25",
+      TRUE                         ~ "Other"
+    ),
+    
+    timepoints_new = factor(timepoints_new, levels = c("Early_Hours", "Day_1", "Day_3", "Day_7", "Day_14", "Day_21", "Day_28"))
+  )
+
+
 GSE_metadata_annotated %>% 
   group_by(timepoints_new, treatment)%>%
   summarise(n_sample = n()) %>% 
@@ -112,26 +208,40 @@ GSE_metadata_annotated %>%
       y = treatment,
       color = treatment) +
   geom_point()
+
+GSE_metadata_annotated %>%
+  group_by(timepoint, treatment)%>%
+  summarise(n_sample = n()) %>%
+  arrange(timepoint) %>%
+  ggplot() +
+  aes(x = timepoint,
+      color = treatment) +
+  geom_histogram()
+
+GSE_metadata_annotated_filtered = GSE_metadata_annotated %>% 
+  filter(timepoints_new %in% c("Early_Hours", "Day_1", "Day_3", "Day_7"))
   
 
 #Save metadata
-write_csv(GSE_metadata_annotated, file = here("tables", paste0(filename, "_metadata_annotated.csv")))
+write_csv(GSE_metadata_annotated_filtered, file = here("tables", paste0(filename, "_metadata_annotated.csv")))
 
 #Get counts matrix ------
 GSE_exprs <- eset %>% exprs()
 
 #Save as RDS
-GSE_exprs %>% as.data.frame() %>% 
+GSE_exprs %>% 
+  as.data.frame() %>% 
+  select(GSE_metadata_annotated_filtered$geo_sample) %>% 
   saveRDS(here("tables", paste0(filename, "_exprs.rds")))
 
 ```
 
-
-## Trauma and Burn, Mouse (GSE7404)
+## Mouse
+### Trauma and Burn, Mouse (GSE7404)
 
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
 #Download datasets
-filename = "mouse_trauma_burn"
+filename = "trauma_burn_mouse"
 GSE_matrix <- getGEO(filename = here("tables", "GSE7404_series_matrix.txt.gz"), 
                      GSEMatrix = T)
 
