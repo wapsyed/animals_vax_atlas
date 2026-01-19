@@ -23,22 +23,7 @@ cran_packages = c(
 
 # install_github()
 
-install.packages(c(
-  "tidyverse", "rentrez", "yardstick", 
-  # "ggridges", 
-  "here", "glue", "ggsci", 
-  "janitor", "readr", 
-  # "paletteer", 
-  # "beepr", 
-  # "preprocessCore", 
-  "maditr", 
-  "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
-  "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
-  "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp", "corto", "Hmisc",
-  "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath",
-  "ggfx", "devtools", "readxl", "rstatix",
-  
-  ))
+# install.packages(cran_packages)
 
 
 # renv::remove("ape")
@@ -56,19 +41,11 @@ bioc_pkgs = c(
   # "arrayQualityMetrics"
 )
 
-install.packages("BiocManager")
-BiocManager::install(c(
-  "biomaRt", "GEOquery", "circlize", "celldex", 
-  "org.Hs.eg.db", "DESeq2", "msigdbr", 
-  "ape", "variancePartition", 
-  "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
-  "mogene10sttranscriptcluster.db", "fgsea"
-  # "arrayQualityMetrics"
-) )
+# install.packages("BiocManager")
+# BiocManager::install(c(bioc_pkgs) )
 
 #Load all faster
-lapply(cran_packages, library, character.only = TRUE)
-lapply(bioc_pkgs, library, character.only = TRUE)
+lapply(c(cran_packages, bioc_pkgs, "RRHO2"), library, character.only = TRUE)
 
 ##Aesthetics -----
 #Custom theme

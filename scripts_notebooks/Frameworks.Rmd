@@ -177,6 +177,10 @@ mouse_exprs_log2fc_sample %>%
   filter(subject_id == "Mouse_C57BL/6J_Animal1_Batch8",
          probe_id == "1415670_at")
 
+#Save
+mouse_exprs_log2fc_sample %>% 
+  saveRDS(here("tables", "ecoli_infection_mouse_log2fc_sample_clean_long.rds"))
+
 ```
 
 ```{r}
@@ -286,6 +290,157 @@ mouse_log2_samples_log2fc_wide = mouse_log2_samples_log2fc_long %>%
   mutate(timepoint = fct_reorder(timepoint, timepoint %>% as.numeric()))
 
 ```
+
+
+
+
+### Human datasets
+
+```{r}
+#Import
+ecoli_human_exprs = readRDS(here("tables", "ecoli_infection_human_exprs.rds"))
+ecoli_mouse_exprs = readRDS(here("tables", "ecoli_infection_mouse_exprs.rds"))
+ecoli_mouse_human_metadata = readRDS(file = here("tables", "ecoli_infection_human_mouse_metadata.rds"))
+
+
+#Annotate genes ------
+#Mouse -----
+#Annotate data and calculate log2fc
+human_expression_metadata  = ecoli_human_exprs %>% 
+  pivot_longer(cols = 2:63,
+               names_to = "geo_sample",
+               values_to = "value_raw") %>% 
+  inner_join(ecoli_mouse_human_metadata, 
+             by = "geo_sample") 
+
+human_expression_metadata %>% 
+  saveRDS(file = here("tables", "ecoli_infection_human_exprs_metadata.rds"))
+
+
+human_expression_metadata =
+  readRDS(file = here("tables", "ecoli_infection_human_exprs_metadata.rds"))
+
+human_metadata =  human_expression_metadata %>% 
+  filter(organism == "Human") %>% 
+  select(-value_raw, - probe_id) %>% distinct()
+
+human_metadata %>% saveRDS(file = here("tables", "ecoli_infection_human_metadata.rds"))
+
+#Get value from day 0 and calculate Log2FC
+human_log2fc_sample = human_expression_metadata %>% 
+  #Filter batch
+  filter(organism == "Human",
+         status == "Healthy") %>% 
+  select(probe_id, participant_id = subject_id, status, day0_value_raw = value_raw) %>% 
+  group_by(probe_id, status) %>% 
+  summarise(n = n(),
+            #Mean of healthy
+            day0_value_raw = sum(day0_value_raw)/n) %>% 
+  select(probe_id, day0_value_raw) %>% 
+  #Join by probe id to infected participants
+  inner_join(human_expression_metadata %>% 
+               filter(site_infection == "urinary tract"), #1 lung, 19 urinary tract),
+             by = join_by("probe_id")) %>% 
+  mutate(log2fc = value_raw - day0_value_raw) %>% 
+  select(probe_id:subject_id, batch:status, log2fc)
+
+#Check duplicates
+human_log2fc_sample %>% 
+  filter(subject_id == "Ecoli_human_urinary tract_GSM824707",
+         probe_id == "1007_s_at") #OK
+
+human_log2fc_sample %>% 
+  saveRDS(here("tables", "ecoli_infection_human_log2fc_sample_clean_long.rds"))
+
+```
+
+```{r}
+########### Filter and annotate probes -----
+## Set up biomart
+ensembl_mart <- useMart("ensembl")
+ensembl_mart <- useDataset("hsapiens_gene_ensembl", mart = ensembl_mart)
+
+## Get the MGI symbol
+gene_id <- human_log2fc_sample$probe_id %>% unique()
+# listAttributes(ensembl_mart)%>% View()
+#Annotate
+#[HG-U133A_2] Affymetrix Human Genome U133A 2.0 Array
+annot <- getBM(
+  attributes = c("affy_hg_u133a_2",
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "hgnc_symbol",
+                 "description"),
+  filters = "affy_hg_u133a_2",
+  values = gene_id,
+  mart = ensembl_mart)
+
+#Get annotations for each probe 
+### Filter probes with highest median expression
+#Get annotations for each probe 
+### Filter probes with highest median expression
+human_ecoli_log2summary = human_exprs %>% 
+  rename(probe = probe_id) %>% 
+  pivot_longer(cols = -probe,
+               names_to = "sample",
+               values_to = "expression") %>% 
+  group_by(probe) %>% 
+  summarise(mean = mean(expression,na.rm = TRUE),
+            median = median(expression, na.rm = T)) %>%  
+  inner_join(annot %>% 
+              rename(probe = affy_hg_u133a_2), 
+            by = "probe") %>% 
+  #Filter ensembl id
+  group_by(ensembl_gene_id) %>% 
+  slice_max(median, n = 1) %>%
+  ungroup() %>% 
+  select(-ensembl_gene_id) %>% 
+  distinct() %>% 
+  
+  #Filter entrez id
+  group_by(entrezgene_id) %>% 
+  slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
+  ungroup() %>% 
+  rename(human_symbol = hgnc_symbol) %>% 
+  filter(human_symbol != "") %>%
+  group_by(entrezgene_id) %>%
+  slice_sample(n = 1) %>%  # one line per entrezgene_id
+  ungroup() %>%
+  distinct(probe, .keep_all = TRUE)  # remove dup probes
+
+human_ecoli_log2summary %>% 
+  get_dupes(probe)
+
+
+
+#Filtered probes
+human_ecoli_log2_filtered_probes = human_exprs %>%
+  rename(probe = probe_id) %>% 
+  inner_join(human_ecoli_log2summary, by = "probe") %>%   #214,396
+  select(human_symbol, probe,
+         c(human_metadata$geo_sample))
+#14395
+human_ecoli_log2_filtered_probes %>% dim()
+
+human_ecoli_log2_filtered_symbol = human_ecoli_log2_filtered_probes 
+
+human_ecoli_log2_filtered_symbol %>% 
+  get_dupes(human_symbol)
+
+#Save 
+human_ecoli_log2_filtered_symbol %>% 
+  saveRDS(here("tables", "ecoli_infection_human_exprs_hgnc_symbol.rds"))
+```
+
+
+
+
+
+
+
+
+
+
 
 ## Demographics
 
