@@ -15,7 +15,7 @@ cran_packages = c(
   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
   "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp", "corto", "Hmisc",
   "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath",
-  "ggfx", "devtools", "readxl", "rstatix"
+  "ggfx", "devtools", "readxl", "rstatix", "matrixTests"
 )
 
 # install_github("RRHO2/RRHO2", build_opts = c("--no-resave-data", "--no-manual"))
