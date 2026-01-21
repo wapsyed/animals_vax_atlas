@@ -38,6 +38,7 @@ GSE_metadata_annotated = GSE_metadata %>%
          description = title,
          tissue = `tissue:ch1`,
          sex = `Sex:ch1`,
+         age = "age:ch1",
          timepoint = `hours_since_injury:ch1`,
          platform_id
          ) %>% 
@@ -95,7 +96,7 @@ GSE_metadata_annotated %>%
   filter(n_timepoints > 1) # -10 participants
 
 
-GSE_metadata_annotated_filtered %>% 
+GSE_metadata_annotated %>% 
   group_by(timepoints_new, treatment)%>%
   summarise(n_sample = n()) %>% 
   arrange(timepoints_new) %>% 
@@ -1186,7 +1187,13 @@ Unpaired
 ```{r}
 #Import
 human_log2_hgnc_symbol = readRDS(file = here("tables", "trauma_human_exprs_hgnc_symbol.rds"))
-human_metadata = read_csv(file = here("tables", "trauma_human_metadata.csv"))
+human_metadata = read_csv(file = here("tables", "trauma_human_metadata.csv")) %>% 
+  mutate(
+        condition = paste0(treatment, "_", timepoints_new),
+        condition = fct_relevel(condition, "Control_Early_Hours"),
+        sex = fct_relevel(sex, "F"),
+        age = scale(age)
+      )
 
 #Create Expression Set
 eset_human <- ExpressionSet(
@@ -1196,8 +1203,7 @@ eset_human <- ExpressionSet(
     #Check if expression is log2 transformed
     as.matrix(),
   phenoData = AnnotatedDataFrame(human_metadata %>% 
-                                   column_to_rownames("geo_sample") %>% 
-                                   mutate(condition = paste0(treatment, "_", timepoints_new))))
+                                   column_to_rownames("geo_sample")))
 ```
 
 
@@ -1215,7 +1221,7 @@ genes_to_keep <- exprs(eset_human) %>%
 eset_filtered <- eset_human[genes_to_keep, ]
 
 #Create model matrix
-design <- model.matrix(~ sex + condition + 0, # 0 defines the way we compare the samples
+design <- model.matrix(~ condition + age + sex + 0,
                        eset_filtered) 
 
 colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
@@ -1254,8 +1260,9 @@ cont_matrix <- makeContrasts(
 )
 
 fit2 <- contrasts.fit(fit, cont_matrix)
-fit2 <- eBayes(fit2, trend = T, 
-               # robust = T
+fit2 <- eBayes(fit2, 
+               # trend = T, #Does not need trend
+               robust = T
                )
 
 # Veja se os genes com esses pesos altos estão distorcendo a curva
@@ -1287,7 +1294,7 @@ all_degs_human = all_contrasts_degs %>%
 all_degs_human$condition %>% unique()
 	
 # #Save
-all_degs_human %>% saveRDS(file = here("tables", "burn_human_dge_limma_degs.rds"))
+all_degs_human %>% saveRDS(file = here("tables", "trauma_human_dge_limma_degs.rds"))
 
 all_degs_human %>% 
   group_by(condition) %>%
@@ -1301,11 +1308,11 @@ all_degs_human %>%
 #### T test
 ```{r}
 #Import
-human_exprs = readRDS(file = here("tables", "burn_human_exprs_hgnc_symbol.rds"))
-human_metadata = read_csv(file = here("tables", "burn_human_metadata.csv"))
-burn_human_log2fc_sample = readRDS(here("tables", "burn_human_log2fc_sample_clean_long.rds"))
+human_exprs = readRDS(file = here("tables", "trauma_human_exprs_hgnc_symbol.rds"))
+human_metadata = read_csv(file = here("tables", "trauma_human_metadata.csv"))
+trauma_human_log2fc_sample = readRDS(here("tables", "trauma_human_log2fc_sample_clean_long.rds"))
 
-log2fc_sample_symbol = burn_human_log2fc_sample %>% 
+log2fc_sample_symbol = trauma_human_log2fc_sample %>% 
   inner_join(human_exprs %>% 
                select(human_symbol, probe_id = probe),
              by = "probe_id") %>% 
@@ -1326,7 +1333,7 @@ log2fc_unpaired_ttest = log2fc_sample_symbol %>%
          )
 
 log2fc_unpaired_ttest %>% 
-  saveRDS(file = here("tables", "burn_human_log2fc_unpaired_ttest.rds"))
+  saveRDS(file = here("tables", "trauma_human_log2fc_unpaired_ttest.rds"))
 
 ```
 
