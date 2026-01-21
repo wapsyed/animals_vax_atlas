@@ -498,6 +498,8 @@ human_exprs_log2fc_sample = human_exprs_metadata %>%
   mutate(log2fc = value_raw - value_raw_ref) %>% 
   distinct() 
 
+human_trauma_log2fc_sample = human_exprs_log2fc_sample
+
 #Save
 human_exprs_log2fc_sample %>% 
 saveRDS(here("tables", "trauma_human_log2fc_sample_clean_long.rds"))
@@ -626,6 +628,8 @@ human_exprs_log2fc_sample = human_exprs_metadata %>%
   distinct() 
 
 #Save
+human_burn_log2fc_sample = human_exprs_log2fc_sample
+
 human_exprs_log2fc_sample %>% 
 saveRDS(here("tables", "burn_human_log2fc_sample_clean_long.rds"))
 
@@ -1037,8 +1041,14 @@ Unpaired
 ```{r}
 #Import
 human_log2_hgnc_symbol = readRDS(file = here("tables", "burn_human_exprs_hgnc_symbol.rds"))
-human_metadata = read_csv(file = here("tables", "burn_human_metadata.csv"))
-
+human_metadata = read_csv(file = here("tables", "burn_human_metadata.csv")) %>% 
+      mutate(
+        condition = paste0(treatment, "_", timepoints_new),
+        condition = fct_relevel(condition, "Control_Early_Hours"),
+        sex = fct_relevel(sex, "F"),
+        age = scale(age)
+      )
+    
 #Create Expression Set
 eset_human <- ExpressionSet(
   assayData = human_log2_hgnc_symbol %>% 
@@ -1047,15 +1057,11 @@ eset_human <- ExpressionSet(
     #Check if expression is log2 transformed
     as.matrix(),
   phenoData = AnnotatedDataFrame(human_metadata %>% 
-                                   column_to_rownames("geo_sample") %>% 
-                                   mutate(condition = paste0(treatment, "_", timepoints_new))))
+                                   column_to_rownames("geo_sample")))
 
 #Check if expression is log2 transformed
 exprs(eset_human) #values must be in the 0-16 range typically
-```
 
-
-```{r}
 # Keeping only genes with intensity > 6 (log2) in at least 5 samples
 genes_to_keep <- exprs(eset_human) %>% 
   as.data.frame() %>% 
@@ -1066,18 +1072,18 @@ genes_to_keep <- exprs(eset_human) %>%
 eset_filtered <- eset_human[genes_to_keep, ]
 
 #Create model matrix
-design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
+design <- model.matrix(~ condition + age + sex + 0, # 0 defines the way we compare the samples
                        eset_filtered) 
 
 colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
 
 aw <- arrayWeights(eset_filtered, design)
 barplot(aw, 
-        names.arg = eset_filtered$condition, # Define os nomes no eixo X
+        names.arg = eset_filtered$condition, 
         main = "Sample Weights Diagnostic", 
         ylab = "Weight", 
-        las = 2,           # Rotaciona os nomes em 90 graus
-        cex.names = 0.7,   # Diminui o tamanho da fonte se houver muitos nomes
+        las = 2,          
+        cex.names = 0.7,   
         col = "skyblue")
 
 #Fit Limma model
@@ -1103,6 +1109,154 @@ cont_matrix <- makeContrasts(
 
 fit2 <- contrasts.fit(fit, cont_matrix)
 fit2 <- eBayes(fit2, trend = T, robust = T)
+
+plotSA(fit2, main = "Sigma vs Abundance (Weights Applied)")
+
+#Get DEGs
+## For every contrast
+results_list <- lapply(1:ncol(fit2), function(i) {
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+  })
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs and clean dataset
+all_degs_human = all_contrasts_degs %>% 
+  select(comparison, everything()) %>% 
+  mutate(organism = "Human") %>% 
+  select(condition = comparison, everything()) %>% 
+  clean_names() %>% 
+  rename(human_symbol = symbol,
+         mean_l2fc = log_fc,
+         ci_upper = ci_r,
+         ci_lower = ci_l)
+
+all_degs_human$condition %>% unique()
+	
+# #Save
+all_degs_human %>% saveRDS(file = here("tables", "burn_human_dge_limma_degs.rds"))
+
+all_degs_human %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarise(n_degs = n())
+
+```
+
+
+
+#### T test
+```{r}
+#Import
+human_exprs = readRDS(file = here("tables", "burn_human_exprs_hgnc_symbol.rds"))
+human_metadata = read_csv(file = here("tables", "burn_human_metadata.csv"))
+burn_human_log2fc_sample = readRDS(here("tables", "burn_human_log2fc_sample_clean_long.rds"))
+
+log2fc_sample_symbol = burn_human_log2fc_sample %>% 
+  inner_join(human_exprs %>% 
+               select(human_symbol, probe_id = probe),
+             by = "probe_id") %>% 
+  select(-probe_id) %>% 
+  distinct() 
+
+log2fc_unpaired_ttest = log2fc_sample_symbol %>%
+  group_by(human_symbol, timepoints_new) %>%
+  summarise(
+    res = list(t.test(value_raw, value_raw_ref, paired = F, alternative = "two.sided", var.equal = F)),
+    p_val = res[[1]]$p.value,
+    diff = res[[1]]$estimate[1] -  res[[1]]$estimate[2],
+    .groups = "drop"
+  ) %>%
+  mutate(p_adj = p.adjust(p_val, method = "BH"),
+         test = "t-Test",
+         paired = "Unpaired"
+         )
+
+log2fc_unpaired_ttest %>% 
+  saveRDS(file = here("tables", "burn_human_log2fc_unpaired_ttest.rds"))
+
+```
+
+###Trauma
+#### Limma
+Unpaired
+```{r}
+#Import
+human_log2_hgnc_symbol = readRDS(file = here("tables", "trauma_human_exprs_hgnc_symbol.rds"))
+human_metadata = read_csv(file = here("tables", "trauma_human_metadata.csv"))
+
+#Create Expression Set
+eset_human <- ExpressionSet(
+  assayData = human_log2_hgnc_symbol %>% 
+    column_to_rownames("human_symbol") %>% 
+    select(all_of(human_metadata$geo_sample)) %>%
+    #Check if expression is log2 transformed
+    as.matrix(),
+  phenoData = AnnotatedDataFrame(human_metadata %>% 
+                                   column_to_rownames("geo_sample") %>% 
+                                   mutate(condition = paste0(treatment, "_", timepoints_new))))
+```
+
+
+```{r}
+#Check if expression is log2 transformed
+exprs(eset_human) #values must be in the 0-16 range typically
+
+# Keeping only genes with intensity > 6 (log2) in at least 5 samples
+genes_to_keep <- exprs(eset_human) %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), ~ . > 6)) %>% 
+  rowSums() %>% 
+  { . >= 5 }
+
+eset_filtered <- eset_human[genes_to_keep, ]
+
+#Create model matrix
+design <- model.matrix(~ sex + condition + 0, # 0 defines the way we compare the samples
+                       eset_filtered) 
+
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+# aw <- arrayWeights(eset_filtered, design)
+# 
+# barplot(aw, 
+#         names.arg = eset_filtered$condition, 
+#         main = "Sample Weights Diagnostic", 
+#         ylab = "Weight", 
+#         las = 2,           
+#         cex.names = 0.7,  
+#         col = "skyblue")
+
+#Fit Limma model
+fit <- lmFit(eset_filtered, 
+             design, 
+             # weights = aw
+             ) 
+
+#Get conditions
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+#Get contrasts 
+colnames(design) <- make.names(colnames(design))
+
+cont_matrix <- makeContrasts(
+  # --- Trauma Comparisons ---
+  Trauma_Early = conditionTrauma_Early_Hours - conditionControl_Early_Hours,
+  Trauma_D1 = conditionTrauma_Day_1  - conditionControl_Early_Hours,
+  Trauma_D3 = conditionTrauma_Day_3  - conditionControl_Early_Hours,
+  Trauma_D7 = conditionTrauma_Day_7  - conditionControl_Early_Hours,
+  levels = design
+)
+
+fit2 <- contrasts.fit(fit, cont_matrix)
+fit2 <- eBayes(fit2, trend = T, 
+               # robust = T
+               )
 
 # Veja se os genes com esses pesos altos estão distorcendo a curva
 plotSA(fit2, main = "Sigma vs Abundance (Weights Applied)")
@@ -1144,28 +1298,26 @@ all_degs_human %>%
 
 
 
-###### T test
+#### T test
 ```{r}
 #Import
 human_exprs = readRDS(file = here("tables", "burn_human_exprs_hgnc_symbol.rds"))
 human_metadata = read_csv(file = here("tables", "burn_human_metadata.csv"))
-log2fc_sample = readRDS(here("tables", "burn_human_log2fc_sample_clean_long.rds"))
+burn_human_log2fc_sample = readRDS(here("tables", "burn_human_log2fc_sample_clean_long.rds"))
 
-log2fc_sample_symbol = log2fc_sample %>% 
+log2fc_sample_symbol = burn_human_log2fc_sample %>% 
   inner_join(human_exprs %>% 
                select(human_symbol, probe_id = probe),
              by = "probe_id") %>% 
   select(-probe_id) %>% 
-  distinct() %>% 
-  filter(treatment == "Trauma")
+  distinct() 
 
 log2fc_unpaired_ttest = log2fc_sample_symbol %>%
-  group_by(human_symbol, timepoint) %>%
+  group_by(human_symbol, timepoints_new) %>%
   summarise(
-    # row_ttests é muito rápido dentro de grupos pequenos ou se usado em matrizes
     res = list(t.test(value_raw, value_raw_ref, paired = F, alternative = "two.sided", var.equal = F)),
     p_val = res[[1]]$p.value,
-    diff = res[[1]]$estimate[1] - res[[1]]$estimate[2],
+    diff = res[[1]]$estimate[1] -  res[[1]]$estimate[2],
     .groups = "drop"
   ) %>%
   mutate(p_adj = p.adjust(p_val, method = "BH"),
@@ -1174,11 +1326,9 @@ log2fc_unpaired_ttest = log2fc_sample_symbol %>%
          )
 
 log2fc_unpaired_ttest %>% 
-  saveRDS(file = here("tables", "trauma_human_log2fc_paired_unpaired_ttest.rds"))
+  saveRDS(file = here("tables", "burn_human_log2fc_unpaired_ttest.rds"))
 
 ```
-
-
 
 
 
