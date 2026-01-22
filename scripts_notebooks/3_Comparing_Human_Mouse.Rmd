@@ -17730,7 +17730,7 @@ final_rrho_df <- bind_rows(all_rrho_results)
 # Save the processed data for visualization
 final_rrho_df %>% 
   saveRDS(file = here("tables", "all_human_mouse_rrho_df.rds"))
-
+ 
 
 ```
 
@@ -17746,63 +17746,17 @@ final_rrho_df_plot <- final_rrho_df %>%
   separate(timepoint, into = c("timepoint_mouse", "timepoint_human"), remove = F) %>% 
   mutate(timepoint_mouse = fct_relevel(timepoint_mouse, c("2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7"))) %>% 
   arrange(timepoint_mouse) %>%
-  mutate(timepoint = fct_inorder(timepoint))
-
-# # Find exact coordinates for the Max LogP in each quadrant ---
-# exact_labels_data <- final_rrho_df_plot %>%
-#   group_by(pathogen, timepoint) %>%
-#   mutate(
-#     mid_human = max(Human_Rank, na.rm = TRUE) / 2,
-#     mid_mouse = max(Mouse_Rank, na.rm = TRUE) / 2,
-#     
-#     # Corrected Biological Mapping:
-#     # Low Rank (1, 2, 3...) = Up-regulated
-#     # High Rank (90, 100...) = Down-regulated
-#     quadrant = case_when(
-#       Human_Rank <= mid_human & Mouse_Rank <= mid_mouse ~ "Up_Up",     # Top-Right area
-#       Human_Rank > mid_human  & Mouse_Rank > mid_mouse  ~ "Down_Down", # Bottom-Left area
-#       Human_Rank <= mid_human & Mouse_Rank > mid_mouse  ~ "Up_Down",   # Human Up / Mouse Down
-#       Human_Rank > mid_human  & Mouse_Rank <= mid_mouse ~ "Down_Up"    # Human Down / Mouse Up
-#     )
-#   ) %>%
-#   group_by(pathogen, timepoint, quadrant) %>%
-#   # Keep only the peak signal for each biological quadrant
-#   filter(LogP == max(LogP, na.rm = TRUE)) %>%
-#   slice(1) %>%
-#   ungroup()
-# 
-# #Get limits for each quadrant
-# facet_limits <- final_rrho_df_plot %>%
-#   group_by(pathogen, timepoint) %>%
-#   summarise(
-#     mid_h = max(Human_Rank, na.rm = TRUE) / 2,
-#     mid_m = max(Mouse_Rank, na.rm = TRUE) / 2,
-#     .groups = "drop"
-#   )
+  mutate(timepoint = fct_inorder(timepoint)) %>% 
+  mutate(
+    LogP_Final = ifelse(LogP > 50, 50, LogP)
+  )
     
 
 # --- Step 2: Generate the Visualization ---
 rrho_plot <- ggplot() +
-  # A. Heatmap Layer: Essential to use the FULL dataframe (final_rrho_df)
     geom_raster(data = final_rrho_df_plot, 
-              aes(x = Human_Rank, y = Mouse_Rank, fill = LogP),
+              aes(x = Human_Rank, y = Mouse_Rank, fill = LogP_Final),
               interpolate = T) +
-  # # Separate quadrants
-  # geom_hline(data = facet_limits, aes(yintercept = mid_m), 
-  #            linetype = "dashed", color = "grey50", alpha = 1) +
-  # geom_vline(data = facet_limits, aes(xintercept = mid_h), 
-  #            linetype = "dashed", color = "grey50", alpha = 1) +
-
-  # # LABELS: Pointing to the exact location with a line
-  # geom_text_repel(data = exact_labels_data, 
-  #                 aes(x = Human_Rank, y = Mouse_Rank, label = round(LogP, 1)), 
-  #                 size = 3, 
-  #                 fontface = "bold", 
-  #                 bg.color = "white",
-  #                 # This creates a line from the text to the exact pixel
-  #                 segment.color = "black", 
-  #                 segment.size = 0.5,
-  #                 min.segment.length = 0) +
   
   # C. Faceting: Using ggh4x for nested labels
   facet_nested_wrap(~pathogen + timepoint,
@@ -17814,13 +17768,24 @@ rrho_plot <- ggplot() +
   scale_y_reverse(expand = c(0,0)) +
   
   # E. Color Mapping
-  scale_fill_gradientn(
-    colors = c("white", "#4361ee", "#a480cf", "#46eec6"),
-    values = c(0, 0.1, 0.5, 1), 
-    na.value = "white", 
-    name =  "-log10(p-value)"
-  ) +
+  # scale_fill_gradientn(
+  #   colors = c("white", "#4361ee", "#a480cf", "#46eec6"),
+  #   values = c(0, 0.1, 0.5, 1), 
+  #   na.value = "white", 
+  #   name =  "-log10(p-value)"
+  # ) +
   
+scale_fill_gradientn(
+    colors = c("white", "#4361ee", "#a480cf", "#46eec6"),
+    # O valor 0.02 (2% de 50 = 1) garante que o azul apareça já no LogP = 1.
+    # O valor 0.2 (20% de 50 = 10) mantém tons intermediários visíveis.
+    values = c(0, 0.02, 0.2, 1), 
+    limits = c(0, 50),
+    name = "-log10(p-value)",
+    # Definindo quebras em 0, 25 e 50 para clareza visual
+    breaks = c(0, 25, 50),
+    labels = c("0", "25", "≥50")
+  ) +
   # F. Labels and Styling
   labs(
     title = "Comparative RRHO2 Analysis",
@@ -17936,98 +17901,6 @@ rank_density_heatmap %>%
 ```
 
 
-Immune genes
-```{r fig.height=8, fig.width=12}
-# 1. Preparar os dados (mantendo sua lógica de rank)
-rank_data_immune <- human_mouse_log2fc_avg_wide %>%
-    filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique())) %>%
-  filter(!is.na(mean_log2fc_human) | !is.na(mean_log2fc_mouse),
-         !is.na(p_adj_human), !is.na(p_adj_mouse)) %>%
-  group_by(pathogen, timepoint) %>%
-  mutate(
-    score_human = -log10(p_adj_human) * sign(mean_log2fc_human),
-    score_mouse = -log10(p_adj_mouse) * sign(mean_log2fc_mouse),
-    Human_Rank_Val = rank(score_human),
-    Mouse_Rank_Val = rank(score_mouse),
-  ) %>%
-  ungroup() %>% 
-  mutate(pathogen = as.character(pathogen),
-    pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli"))
-
-# Calcular os limites por grupo
-thresholds <- rank_data_immune %>%
-  group_by(pathogen, timepoint) %>%
-  summarise(
-    # Encontra o maior rank entre os genes com log2fc negativo
-    v_line = max(Human_Rank_Val[mean_log2fc_human < 0], na.rm = TRUE),
-    h_line = max(Mouse_Rank_Val[mean_log2fc_mouse < 0], na.rm = TRUE),
-    .groups = "drop"
-  )
-
-# 2. Plotar como Heatmap de Densidade (Raster)
-rank_immune_density_heatmap = rank_data_immune %>% 
-  ggplot() + 
-  aes(x = Human_Rank_Val, y = Mouse_Rank_Val) +
-  facet_nested_wrap(~pathogen + timepoint,
-                    scales = "free", 
-                    nrow = 3,
-                    strip = strip_nested(size = "variable"), 
-                    axes = "all") +
- stat_density_2d(aes(fill = after_stat(density / sum(density))), 
-                  geom = "raster", 
-                  contour = F, 
-                  n = 50) +    
-  scale_fill_gradientn(
-  colors = c("white", "#4361ee", "#4DBBD5FF", "#46eec6"),
-  na.value = "white", 
-  labels = scales::label_percent(), 
-  name = "Density (%)",
-  guide = guide_colorbar(
-    barwidth = 1, 
-    barheight = 8, 
-    title.position = "top", 
-    title.hjust = 0.5,
-    ticks.colour = "black",
-    frame.colour = "black"
-  )
-) +
-  scale_x_reverse(expand = c(0,0)) +
-  scale_y_reverse(expand = c(0,0)) +
-  # Divide by threshold
-  geom_vline(data = thresholds, aes(xintercept = v_line), 
-             linetype = "solid", color = "white", alpha = 1, linewidth = 2) +
-  geom_hline(data = thresholds, aes(yintercept = h_line), 
-             linetype = "solid", color = "white", alpha = 1, linewidth = 2) +
-  labs(
-    title = "Rank-Rank Density Heatmap",
-    subtitle = "Normalized density per condition",
-    x = "Human Gene Rank",
-    y = "Mouse Gene Rank"
-  ) +
-  theme_vaxgo() + 
-  theme(aspect.ratio = 1,
-        axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5, size =10),
-        axis.text.y = element_text(size = 10),
-        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
-        legend.position = "right",
-        legend.direction = "vertical",
-        legend.key.width = unit(1, "cm"),
-        legend.text = element_text(size = 8, 
-                                   # hjust = 1, vjust = 1, 
-                                   angle = 0),
-        legend.title = element_text(size = 8),
-        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1))
-
-
-rank_immune_density_heatmap
-
-
-rank_immune_density_heatmap %>% 
-  ggsave(filename = here("Figures", "all_human_mouse_immunegenes_rankrank_heatmap.png"),
-         width = 12,
-         height = 8)
-```
-
 
 
 ### Correlation: Genes, samples
@@ -18126,7 +17999,9 @@ human_mouse = bind_rows(
 filename = "all_human_mouse"
 gene_set_name = "Immune"
 human_mouse_log2fc_samples = log2fc_samples_annotated  %>%
-  filter(human_symbol %in% c(btm_annotation_genes %>%                                                     filter(module_category == "immune") %>%                                                     pull(symbol)) %>% unique()))
+  filter(human_symbol %in% c(btm_annotation_genes %>%                                                     
+                               filter(module_category == "immune") %>%                                                     
+                               pull(symbol)) %>% unique()))
 
 
 # #Input
@@ -18425,41 +18300,16 @@ Import
 ```{r}
 #Import datasets ------
 #Import DGE output
-all_degs_human_mouse = readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds")) 
+dge_long_genes_matched = readRDS(here("tables", "all_human_mouse_dge_limma_degs_matched.rds")) 
 #Import BTMs annotation table
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
 
 filename = "all_human_mouse"
 
 #Clean metadata 
-annotation_conditions = all_degs_human_mouse %>% 
+annotation_conditions = dge_long_genes_matched %>% 
   select(condition, timepoint, model = organism) %>% 
   distinct() 
-
-#Merge
-
-#Duplicate human
-dge_long_genes_matched = all_degs_human_mouse %>% 
-  select(pathogen, organism, human_symbol, timepoint, mean_log2fc = mean_l2fc, adj_p_val) %>% 
-  bind_rows(
-  #Duplcate Human
-  all_degs_human_mouse %>% 
-  filter(organism == "Human",
-         treatment == "Infection") %>% 
-  select(pathogen, organism, human_symbol, mean_log2fc = mean_l2fc, adj_p_val) %>% 
-  inner_join(all_degs_human_mouse %>% 
-               filter(organism == "Mouse",
-                      treatment == "Infection") %>% 
-               select(pathogen, timepoint) %>% 
-               distinct(),
-             by = "pathogen")
-  ) %>% 
-  distinct() %>% 
-  mutate(timepoint_num = readr::parse_number(timepoint),
-    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) %>% 
-  mutate(timepoint_comparison = if_else(pathogen %in% c("Escherichia coli", "Staphylococcus aureus"),
-                                        paste0(timepoint, "-", "24h"), 
-                                        paste0(timepoint, "-", timepoint)))
 
 ```
 
