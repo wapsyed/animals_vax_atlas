@@ -8817,8 +8817,9 @@ human_log2_filtered_probes = human_exprs %>%
   rownames_to_column("probe") %>% 
   inner_join(human_log2summary, by = "probe") %>%   #214,396
   select(human_symbol, probe,
-         c(human_metadata$geo_sample))
-#14395
+         c(human_metadata$geo_sample)) %>% 
+  drop_na()
+#18124
 human_log2_filtered_probes %>% dim()
 
 human_log2_filtered_probes = human_log2_filtered_probes 
@@ -9467,6 +9468,7 @@ human_metadata = read_csv(file = here("tables", "trauma_human_metadata.csv")) %>
 #Create Expression Set
 eset_human <- ExpressionSet(
   assayData = human_log2_hgnc_symbol %>% 
+    select(-probe) %>% 
     column_to_rownames("human_symbol") %>% 
     select(all_of(human_metadata$geo_sample)) %>%
     #Check if expression is log2 transformed
@@ -10156,6 +10158,49 @@ all_degs_human_mouse = bind_rows(all_degs_human_mouse_saureus,
 #Save
 all_degs_human_mouse %>% 
   saveRDS(here("tables", "all_human_mouse_dge_limma_degs.rds"))
+
+
+
+
+#Match
+all_degs_human_mouse =
+  readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds"))
+
+all_degs_human_mouse_matched = 
+  readRDS(file = here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
+  select(pathogen, treatment, organism, human_symbol, timepoint, mean_log2fc = mean_l2fc, adj_p_val, everything()) %>% 
+  bind_rows(
+  #Duplicate Human infection timepoints with mouse
+  all_degs_human_mouse %>% 
+  filter(organism == "Human",
+         treatment == "Infection") %>% 
+  select(-timepoint) %>% rename(mean_log2fc = mean_l2fc) %>% 
+  inner_join(all_degs_human_mouse %>% 
+               filter(organism == "Mouse",
+                      treatment == "Infection") %>% 
+               select(pathogen, timepoint) %>% 
+               distinct(),
+             by = "pathogen")
+  ) %>% 
+  distinct() %>% 
+  
+  #Annotate timepoints
+  mutate(timepoint = case_when(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours")~"Early hours", 
+                               pathogen %in% c("Influenza", "Hepatitis B") ~ paste0("Day ", timepoint),
+                               pathogen %in% c("Escherichia coli", "Staphylococcus aureus") ~ paste0(timepoint, "h"),
+                               T ~timepoint),
+         timepoint = factor(timepoint, levels = unique(timepoint[order(readr::parse_number(timepoint))])),
+         timepoint_comparison = if_else(pathogen %in% c("Escherichia coli", "Staphylococcus aureus"),
+                                        paste0(timepoint, "-", "24h"), 
+                                        paste0(timepoint, "-", timepoint)) %>% 
+                                str_replace(., "Early hours-Early hours", "2h-Early"))
+
+all_degs_human_mouse_matched %>% 
+  select(timepoint, treatment, pathogen) %>% 
+  distinct()
+
+all_degs_human_mouse_matched %>% 
+  saveRDS(here("tables", "all_human_mouse_dge_limma_degs_matched.rds"))
 
 ```
 
