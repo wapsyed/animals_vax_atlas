@@ -16903,7 +16903,7 @@ btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"
 dge_long_genes_matched = all_degs_human_mouse %>% 
   select(pathogen, organism, human_symbol, timepoint, mean_log2fc = mean_l2fc, adj_p_val) %>% 
   bind_rows(
-  #Duplcate Human
+  #Duplicate Human infection
   all_degs_human_mouse %>% 
   filter(organism == "Human",
          treatment == "Infection") %>% 
@@ -16916,12 +16916,23 @@ dge_long_genes_matched = all_degs_human_mouse %>%
              by = "pathogen")
   ) %>% 
   distinct() %>% 
-  mutate(timepoint_num = readr::parse_number(timepoint),
-    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) %>% 
-  mutate(timepoint_comparison = if_else(pathogen %in% c("Escherichia coli", "Staphylococcus aureus"),
+  
+  #Annotate timepoints
+  mutate(timepoint = case_when(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours")~"Early hours", 
+                               pathogen %in% c("Influenza", "Hepatitis B") ~ paste0("Day ", timepoint),
+                               T ~timepoint),
+         timepoint = factor(timepoint, levels = unique(timepoint[order(readr::parse_number(timepoint))])),
+         timepoint_comparison = if_else(pathogen %in% c("Escherichia coli", "Staphylococcus aureus"),
                                         paste0(timepoint, "-", "24h"), 
-                                        paste0(timepoint, "-", timepoint)))
+                                        paste0(timepoint, "-", timepoint)) %>% 
+                                str_replace(., "Early hours-Early hours", "2h-Early"))
 
+dge_long_genes_matched %>% 
+  dplyr::count(pathogen, organism, timepoint_comparison)
+```
+
+
+```{r fig.width=10, fig.height=4}
 #Get total genes by each condition
 degs_mouse = dge_long_genes_matched %>% 
   filter(adj_p_val <= 0.05,
@@ -16932,7 +16943,7 @@ degs_human = dge_long_genes_matched %>%
 
 degs_mouse_summarize = dge_long_genes_matched %>% 
   filter(adj_p_val <= 0.05) %>% 
-  group_by(organism, pathogen, timepoint) %>% 
+  group_by(organism, pathogen, timepoint_comparison) %>% 
   summarise(n_genes = n()) 
 
 #Print
@@ -16941,11 +16952,11 @@ degs_mouse_summarize
 #Get overlap -----
 #Get symbols
 degs_mouse_genes = degs_mouse %>% 
-  select(human_symbol, timepoint, pathogen) %>% 
+  select(human_symbol, timepoint_comparison, pathogen) %>% 
   distinct()
 
 degs_human_genes = degs_human %>% 
-  select(human_symbol, timepoint, pathogen) %>% 
+  select(human_symbol, timepoint_comparison, pathogen) %>% 
   distinct()
 
 #Inner join, Mouse and Human ------
@@ -16953,7 +16964,7 @@ degs_human_genes = degs_human %>%
 #Mouse
 degs_human_and_mouse_genes = degs_human_genes %>% 
   inner_join(degs_mouse_genes, 
-             by = join_by("pathogen", "human_symbol", "timepoint")) %>% 
+             by = join_by("pathogen", "human_symbol", "timepoint_comparison")) %>% 
   mutate(condition = "Mouse AND Human",
          comparison = "Mouse vs Human",
          organism = "Mouse",
@@ -16969,7 +16980,7 @@ degs_human_and_mouse_genes_human = degs_human_and_mouse_genes %>%
 #Human vs Mouse
 degs_human_Not_mouse_genes = degs_human_genes %>% 
   anti_join(degs_mouse_genes, 
-             by = join_by("pathogen", "human_symbol", "timepoint")) %>% 
+             by = join_by("pathogen", "human_symbol", "timepoint_comparison")) %>% 
   mutate(condition = "Human NOT Mouse", 
          comparison = "Mouse vs Human",
          organism = "Human",
@@ -16979,7 +16990,7 @@ degs_human_Not_mouse_genes = degs_human_genes %>%
 #Mouse vs Human
 degs_mouse_Not_human_genes = degs_mouse_genes %>% 
   anti_join(degs_human_genes, 
-             by = join_by("pathogen", "human_symbol", "timepoint")) %>% 
+             by = join_by("pathogen", "human_symbol", "timepoint_comparison")) %>% 
   mutate(condition = "Mouse NOT Human",
          organism = "Mouse",
          comparison = "Mouse vs Human",
@@ -16996,32 +17007,42 @@ degs_human_mouse_overlap_genes =
 
 #Classify by same and exclusive DEGs -----
 degs_human_mouse_overlap_genes_summary = degs_human_mouse_overlap_genes %>% 
-  group_by(pathogen, condition, timepoint) %>% 
+  group_by(pathogen, condition, timepoint_comparison) %>% 
   summarise(n = n(),
             organism,
             comparison,
             group) %>% 
-  distinct()
+  distinct() %>% 
+  separate(timepoint_comparison, into = c("timepoint_mouse", "timepoint_human"), sep = "-") %>% 
+  mutate(timepoint_mouse = if_else(pathogen %in% c("Staphylococcus aureus", "Escherichia coli"), 
+                                   paste0(timepoint_mouse, "h"), 
+                                   timepoint_mouse)) %>% 
+  filter(!(timepoint_mouse == "24h" & pathogen == "Staphylococcus aureus"))
 
-#Print
 degs_human_mouse_overlap_genes_summary
+
+ranges_y = degs_human_mouse_overlap_genes_summary %>%
+  group_by(pathogen) %>%
+  summarise(limit_max = max(n))
+
+
 ```
 
 Plot overlap (bars)
 
-```{r fig.height=10, fig.width=3}
+```{r fig.height=12, fig.width=4}
 #Plot overlap
 degs_human_mouse_overlap_common_plot = degs_human_mouse_overlap_genes_summary %>%
-  mutate(timepoint = as.character(timepoint),
-         timepoint = if_else(pathogen == "Staphylococcus aureus" & timepoint == "1", "24", timepoint)) %>% 
+  mutate(timepoint = as.character(timepoint_mouse)) %>% 
   ungroup() %>% 
-  mutate(pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli")) %>% 
-  filter(!c(pathogen == "Hepatitis B" & timepoint %in% c(1, 3)),
-         !c(pathogen == "Staphylococcus aureus" & timepoint == "24")) %>% 
-  mutate(timepoint = if_else(pathogen %in% c("Escherichia coli", 
-                                                 "Staphylococcus aureus"), 
-                                 paste0(timepoint, "h"),
-                                 paste0("Day ", timepoint))) %>% 
+  mutate(pathogen = str_replace(pathogen, "Staphylococcus aureus", "S. aureus") %>% 
+           str_replace("Escherichia coli", "E. coli") %>% 
+           str_replace("Hepatitis B", "HepB"),
+         pathogen = fct_relevel(pathogen, "Influenza", "HepB", 
+                                "S. aureus", "E. coli", 
+                                "Burn", "Trauma")) %>% 
+  #Filter out hepatitis b timepoints without DEGs
+  filter(!c(pathogen == "HepB" & parse_number(timepoint) %in% c(1, 3))) %>%
   mutate(timepoint = fct_reorder(timepoint, parse_number(timepoint))) %>% 
   mutate(organism = if_else(organism == "Human", "H", "M")) %>% 
   ggplot() +
@@ -17029,12 +17050,66 @@ degs_human_mouse_overlap_common_plot = degs_human_mouse_overlap_genes_summary %>
       y = n,
       fill = fct_rev(group)) + 
   geom_col(alpha = 1) +
-  facet_nested_wrap(~pathogen+timepoint, axes = "x",
-               nest_line = element_line(linetype = 1, color = "black", size = 1), ) +
+  facet_nested_wrap(~pathogen+timepoint, 
+                    axes = "x",
+                    ncol = 4, 
+                    scales = "free_y", 
+                    remove_labels = "all",
+                    # independent = "y",
+               nest_line = element_line(linetype = 1, color = "black", size = 1)) +
 
-
+  #Manual scales
   scale_y_continuous(n.breaks = 5,
                      expand = c(0.01, 0.01)) +
+  facetted_pos_scales(y = list(
+    #Influenza
+    scale_y_continuous(limits = c(0, 6027), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),  
+    scale_y_continuous(limits = c(0, 6027), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    scale_y_continuous(limits = c(0, 6027), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    #Hepatitis B
+    scale_y_continuous(limits = c(0, 2939), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    #Staphylococcus aureus
+    scale_y_continuous(limits = c(0, 3515), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    scale_y_continuous(limits = c(0, 3515), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    scale_y_continuous(limits = c(0, 3515), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    scale_y_continuous(limits = c(0, 3515), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    #E. coli
+    scale_y_continuous(limits = c(0, 4934), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    scale_y_continuous(limits = c(0, 4934), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    scale_y_continuous(limits = c(0, 4934), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    scale_y_continuous(limits = c(0, 4934), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    #Burn
+    scale_y_continuous(limits = c(0, 10302), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    scale_y_continuous(limits = c(0, 10302), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    scale_y_continuous(limits = c(0, 10302), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    scale_y_continuous(limits = c(0, 10302), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    #Trauma
+    scale_y_continuous(limits = c(0, 9873), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    scale_y_continuous(limits = c(0, 9873), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    scale_y_continuous(limits = c(0, 9873), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale())),
+    scale_y_continuous(limits = c(0, 9873), expand = c(0, 0),
+                       labels = label_number(scale_cut = cut_short_scale()))
+    
+  )) +
   scale_fill_manual(values = c("Common" = "#175289",
                                "Not common" = "gray90"))    +
   scale_color_manual(values = c("Common" = "#175289",
@@ -17045,7 +17120,7 @@ degs_human_mouse_overlap_common_plot = degs_human_mouse_overlap_genes_summary %>
     strip.text.y = element_text(hjust = 0.5, size = 10),
     axis.text.x = element_text(angle = 0),
     axis.text.y = element_text(size = 10),
-    panel.spacing.x = unit(0, "lines"), 
+    panel.spacing.x = unit(0, "cm"), 
     panel.grid.major.x = element_blank(),
     panel.grid.major.y = element_blank(),
     legend.position = "top",
@@ -17062,6 +17137,7 @@ degs_human_mouse_overlap_common_plot = degs_human_mouse_overlap_genes_summary %>
     color = ""
     ) 
 
+degs_human_mouse_overlap_common_plot
 
 #Save
 degs_human_mouse_overlap_common_plot %>%
@@ -17089,8 +17165,16 @@ all_human_mouse_metadata =
 #DEGs
 all_degs_human_mouse = 
   readRDS(file = here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
-  mutate(timepoint = as.numeric(timepoint),
-         timepoint = if_else(treatment != "Infection", paste0("Day ", timepoint), paste0(timepoint, "h")))
+   #Annotate timepoints
+  mutate(timepoint = case_when(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours")~"Early hours", 
+                               pathogen %in% c("Influenza", "Hepatitis B") ~ paste0("Day ", timepoint),
+                               pathogen %in% c("Escherichia coli", "Staphylococcus aureus") ~ paste0(timepoint, "h"),
+                               T ~timepoint),
+         timepoint = factor(timepoint, levels = unique(timepoint[order(readr::parse_number(timepoint))])),
+         timepoint_comparison = if_else(pathogen %in% c("Escherichia coli", "Staphylococcus aureus"),
+                                        paste0(timepoint, "-", "24h"), 
+                                        paste0(timepoint, "-", timepoint)) %>% 
+                                str_replace(., "Early hours-Early hours", "2h-Early"))
 
 #Functional modules
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
@@ -17107,7 +17191,7 @@ all_degs_human_mouse %>%
 human_mouse_log2fc_avg_wide = all_degs_human_mouse %>% 
   select(pathogen, organism, human_symbol, timepoint, mean_log2fc = mean_l2fc, p_adj = adj_p_val, tstatistic = t) %>% 
   bind_rows(
-  #Duplcate Human
+  #Duplicate Human infection
   all_degs_human_mouse %>% 
   filter(organism == "Human",
          treatment == "Infection") %>% 
@@ -17123,13 +17207,7 @@ human_mouse_log2fc_avg_wide = all_degs_human_mouse %>%
   pivot_wider(names_from = c("organism"),
               values_from = c(mean_log2fc, p_adj, tstatistic),
               names_sep = "_") %>% 
-  clean_names() %>% 
-  drop_na() %>% 
-  mutate(timepoint_num = readr::parse_number(timepoint),
-    timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))) %>% 
-  mutate(timepoint_comparison = if_else(pathogen %in% c("Escherichia coli", "Staphylococcus aureus"),
-                                        paste0(timepoint, "-", "24h"), 
-                                        paste0(timepoint, "-", timepoint)))
+  clean_names() 
 
   
 # Calculate the correlation
@@ -17209,9 +17287,6 @@ cor_data <- human_mouse_log2fc_avg_wide_degs_immune_nonimmune %>%
   drop_na(cor_value_spearman,
           cor_value_pearson) %>% 
   mutate(
-    timepoint_comparison = if_else(pathogen %in% c("Escherichia coli", "Staphylococcus aureus"),
-                                        paste0(timepoint, "-", "24h"), 
-                                        paste0(timepoint, "-", timepoint)),
     gene_type = factor(gene_type, levels = c("All genes", "DEGs", "Not-immune", "Immune")),
     facet_label = paste0(gene_type, ": ", label_spearman))
 
