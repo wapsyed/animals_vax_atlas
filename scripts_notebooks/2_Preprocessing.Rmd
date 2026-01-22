@@ -8243,138 +8243,1380 @@ degs_ttest_limma_summary_plot_gg %>%
          height = 5)
 ```
 
+#====================
 
-#===================
+#5. Burn and Trauma 
 
-# Combine all datasets
 
-## Metadata
+##Download datasets
+
+### Human
+
+#### Trauma, Human (GSE36809)
+Clinical metadata were curated and standardized to ensure consistency across the dataset. The time elapsed since injury, originally recorded in hours, was converted to days and rounded to one decimal place. To account for the irregular temporal distribution of samples, timepoints were discretized into seven categorical bins: <1 day (Early Hours), 1–2 days, 2–5 days, 5–10 days, 10–18 days, 18–25 days, and >25 days. Samples were stratified into 'Trauma' and 'Control' groups based on subject identifiers. Rigorous quality control was applied by excluding samples explicitly flagged in the metadata for low RNA quality or incomplete temporal data. Finally, temporal bins were treated as ordered factors to facilitate downstream differential expression modeling.
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
+#Download datasets
+filename = "trauma_human"
+GSE_matrix <- getGEO(filename = here("tables", "GSE36809_series_matrix.txt.gz"), 
+                     GSEMatrix = T)
+
+#Get Expression Set
+eset <- GSE_matrix
+
+#Get metadata -------
+GSE_metadata = eset %>% Biobase::pData()
+
+#Select, clean, and standardize attributes
+GSE_metadata_annotated = GSE_metadata %>% 
+  select(geo_sample = "geo_accession",
+         sample_id = "source_name_ch1",
+         description = title,
+         tissue = `tissue:ch1`,
+         sex = `Sex:ch1`,
+         age = "age:ch1",
+         timepoint = `hours_since_injury:ch1`,
+         platform_id
+         ) %>% 
+  separate(sample_id, sep = ", ", into = c("subject_id", "delete")) %>% 
+  select(-delete) %>% 
+    mutate(timepoint = if_else(timepoint == "N/A", "0", timepoint),
+         timepoint = (as.numeric(timepoint)/24) %>% round(x = ., digits = 1),
+         subject_id = str_remove(subject_id, "Subject "),
+         geo = "GSE36809",
+         organism = "Human",
+         treatment = if_else(subject_id != "Control", "Trauma", "Control")) %>% 
+  filter(!description %in% c("Please notice that this sample with low RNA quality.", 
+                            "Sample from patients with incomplete time points.")) %>% 
+  mutate(
+    
+    # Binned timepoints
+    timepoints_new = case_when(
+      timepoint < 1            ~ "Early_Hours",
+      timepoint >= 1 & timepoint < 2  ~ "Day_1",
+      timepoint >= 2 & timepoint < 5  ~ "Day_3",
+      timepoint >= 5 & timepoint < 10 ~ "Day_7",
+      timepoint >= 10 & timepoint < 18 ~ "Day_14",
+      timepoint >= 18 & timepoint < 25 ~ "Day_21",
+      timepoint >= 25          ~ "Day_28",
+      TRUE                         ~ "Other"
+    ),
+    
+    #Explicit bins
+    timepoints_bin = case_when(
+      timepoint < 1            ~ "<Day_1",
+      timepoint >= 1 & timepoint < 2  ~ "Day_1_>=1 to <2",
+      timepoint >= 2 & timepoint < 5  ~ "Day_3_>=2 to <5",
+      timepoint >= 5 & timepoint < 10 ~ "Day_7_>=5 to <10",
+      timepoint >= 10 & timepoint < 18 ~ "Day_14_>=10 to <18",
+      timepoint >= 18 & timepoint < 25 ~ "Day_21_>=18 to <25",
+      timepoint >= 25          ~ "Day_28_>25",
+      TRUE                         ~ "Other"
+    ),
+    
+    timepoints_new = factor(timepoints_new, levels = c("Early_Hours", "Day_1", "Day_3", "Day_7", "Day_14", "Day_21", "Day_28"))
+  )
+
+
+
+GSE_metadata_annotated %>% 
+  group_by(subject_id)%>%
+  arrange(subject_id, timepoint) %>%
+  View()
+
+GSE_metadata_annotated %>% 
+  filter(subject_id != "Control") %>% 
+  group_by(subject_id)%>%
+  summarise(n_timepoints = n()) %>% 
+  arrange(subject_id, n_timepoints) %>% 
+  filter(n_timepoints > 1) # -10 participants
+
+
+GSE_metadata_annotated %>% 
+  group_by(timepoints_new, treatment)%>%
+  summarise(n_sample = n()) %>% 
+  arrange(timepoints_new) %>% 
+  ggplot() +
+  aes(x = timepoints_new,
+      size = n_sample,
+      y = treatment,
+      color = treatment) +
+  geom_point()
+
+GSE_metadata_annotated_filtered = GSE_metadata_annotated %>% 
+  filter(timepoints_new %in% c("Early_Hours", "Day_1", "Day_3", "Day_7"))
+
+
+#Save metadata
+write_csv(GSE_metadata_annotated_filtered, file = here("tables", paste0(filename, "_metadata.csv")))
+
+#Get counts matrix ------
+GSE_exprs <- eset %>% exprs()
+
+#Save as RDS
+GSE_exprs %>% as.data.frame() %>% 
+  select(GSE_metadata_annotated_filtered$geo_sample) %>% 
+  saveRDS(here("tables", paste0(filename, "_exprs.rds")))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+#### Burn, Human (GSE37069)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
+#Download datasets
+filename = "burn_human"
+GSE_matrix <- getGEO(filename = here("tables", "GSE37069_series_matrix.txt.gz"), 
+                     GSEMatrix = T)
+
+#Get Expression Set
+eset <- GSE_matrix
+
+#Get metadata -------
+GSE_metadata = eset %>% Biobase::pData()
+
+#Select, clean, and standardize attributes
+GSE_metadata_annotated = GSE_metadata %>% 
+  select(geo_sample = "geo_accession",
+         treatment = "source_name_ch1",
+         organism = organism_ch1,
+         age = `age:ch1`,
+         tissue = `tissue:ch1`,
+         sex = `Sex:ch1`,
+         timepoint = `hours_since_injury:ch1`,
+         platform_id,
+         ) %>% 
+  separate(treatment, sep = ", ", into = c("subject_id", "delete")) %>% 
+  select(-delete) %>% 
+    mutate(subject_id = str_remove(subject_id, "Subject "),
+           timepoint = if_else(timepoint == "N/A", "0", timepoint),
+         timepoint = (as.numeric(timepoint)/24) %>% round(x = ., digits = 1),
+         geo = "GSE37069",
+         treatment = if_else(subject_id != "Control", "Burn", "Control")) %>% 
+  mutate(
+    
+    # Binned timepoints
+    timepoints_new = case_when(
+      timepoint < 1            ~ "Early_Hours",
+      timepoint >= 1 & timepoint < 2  ~ "Day_1",
+      timepoint >= 2 & timepoint < 5  ~ "Day_3",
+      timepoint >= 5 & timepoint < 10 ~ "Day_7",
+      timepoint >= 10 & timepoint < 18 ~ "Day_14",
+      timepoint >= 18 & timepoint < 25 ~ "Day_21",
+      timepoint >= 25          ~ "Day_28",
+      TRUE                         ~ "Other"
+    ),
+    
+    #Explicit bins
+    timepoints_bin = case_when(
+      timepoint < 1            ~ "<Day_1",
+      timepoint >= 1 & timepoint < 2  ~ "Day_1_>=1 to <2",
+      timepoint >= 2 & timepoint < 5  ~ "Day_3_>=2 to <5",
+      timepoint >= 5 & timepoint < 10 ~ "Day_7_>=5 to <10",
+      timepoint >= 10 & timepoint < 18 ~ "Day_14_>=10 to <18",
+      timepoint >= 18 & timepoint < 25 ~ "Day_21_>=18 to <25",
+      timepoint >= 25          ~ "Day_28_>25",
+      TRUE                         ~ "Other"
+    ),
+    
+    timepoints_new = factor(timepoints_new, levels = c("Early_Hours", "Day_1", "Day_3", "Day_7", "Day_14", "Day_21", "Day_28"))
+  )
+
+
+GSE_metadata_annotated %>% 
+  group_by(timepoints_new, treatment)%>%
+  summarise(n_sample = n()) %>% 
+  arrange(timepoints_new) %>% 
+  ggplot() +
+  aes(x = timepoints_new,
+      size = n_sample,
+      y = treatment,
+      color = treatment) +
+  geom_point()
+
+GSE_metadata_annotated %>%
+  group_by(timepoint, treatment)%>%
+  summarise(n_sample = n()) %>%
+  arrange(timepoint) %>%
+  ggplot() +
+  aes(x = timepoint,
+      color = treatment) +
+  geom_histogram()
+
+GSE_metadata_annotated_filtered = GSE_metadata_annotated %>% 
+  filter(timepoints_new %in% c("Early_Hours", "Day_1", "Day_3", "Day_7"))
+  
+
+#Save metadata
+write_csv(GSE_metadata_annotated_filtered, file = here("tables", paste0(filename, "_metadata.csv")))
+
+#Get counts matrix ------
+GSE_exprs <- eset %>% exprs()
+
+#Save as RDS
+GSE_exprs %>% 
+  as.data.frame() %>% 
+  select(GSE_metadata_annotated_filtered$geo_sample) %>% 
+  saveRDS(here("tables", paste0(filename, "_exprs.rds")))
+
+```
+
+### Mouse
+#### Trauma and Burn, Mouse (GSE7404)
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
+#Download datasets
+filename = "trauma_burn_mouse"
+GSE_matrix <- getGEO(filename = here("tables", "GSE7404_series_matrix.txt.gz"), 
+                     GSEMatrix = T)
+
+#Get Expression Set
+eset <- GSE_matrix
+
+#Get metadata -------
+GSE_metadata = eset %>% Biobase::pData()
+
+#Select, clean, and standardize attributes
+GSE_metadata_annotated = GSE_metadata %>% 
+  select(geo_sample = "geo_accession",
+         sample_id = "source_name_ch1",
+         participant_description = title,
+         characteristics = characteristics_ch1,
+         timepoint = `time:ch1`,
+         genetic = `genetic background:ch1`,
+         tissue = `source_name_ch1`,
+         organism = organism_ch1,
+         description = description,
+         # sex = `Sex:ch1`,
+         platform_id
+         ) %>% 
+  filter(tissue == "mouse leukocytes") %>% 
+  fill(genetic, .direction = "up") %>% 
+  mutate(treatment = case_when(str_detect(description, "burn") ~ "Burn", 
+                               str_detect(description, "trauma") ~ "Trauma", 
+                               str_detect(description, "LPS") ~ "LPS",
+                               T~description),
+         treatment = if_else(str_detect(participant_description, "Sham"), paste0(treatment, "_", "Control"), treatment),
+         tissue = str_remove(tissue, "mouse "), 
+         sex = "male",
+         geo = "GSE7404") %>% 
+  extract(
+    col = participant_description, 
+    into = c("timepoint", "participant_id"), 
+    regex = "(\\d+\\s?(?:day|Day|hr))\\s+(rep\\s?\\d+)", 
+    remove = T 
+  ) %>% 
+  mutate(timepoint = str_replace(timepoint, "hr", "Hour") %>% str_replace("day", "Day"),
+         timepoint = fct_reorder(timepoint, parse_number(timepoint))) %>% 
+  select(geo_sample, participant_id, timepoint, sex, 
+         strain = genetic, tissue, organism, treatment, platform_id) 
+
+
+GSE_metadata_annotated %>% 
+  group_by(timepoint, treatment)%>%
+  summarise(n_sample = n()) %>% 
+  arrange(timepoint) %>% 
+  ggplot() +
+  aes(x = timepoint,
+      size = n_sample,
+      y = treatment,
+      color = treatment) +
+  geom_point()
+  
+
+#Save metadata
+write_csv(GSE_metadata_annotated, file = here("tables", paste0(filename, "_metadata.csv")))
+
+#Get counts matrix ------
+GSE_exprs <- eset %>% exprs()
+
+#Save as RDS
+GSE_exprs %>% as.data.frame() %>% 
+  saveRDS(here("tables", paste0(filename, "_exprs.rds")))
+
+```
+
+
+##Annotate genes
+
+#### Mouse datasets
+
+##### Trauman and Burn
+
 ```{r}
-#Merge results =====================
-#Metadata
-human_mouse_metadata_saureus = readRDS(file = here("tables", "saureus_infection_human_mouse_metadata.rds")) %>% 
-  select(geo_sample, participant_id, organism, timepoint, time_unit, pathogen, treatment, age, sex, ethnicity, strain, tissue, tissue_infection, batch = batch_experimental) %>% 
-  mutate(pathogen = "Staphylococcus aureus",
-         tissue = "Blood",
-         timepoint = as.numeric(timepoint),
-         age = as.character(age)) %>% 
-  mutate(timepoint = if_else(timepoint == 1, 24, timepoint),
-         time_unit = "Hour") 
+#Import datasets
+mouse_exprs = readRDS(here("tables", "trauma_burn_mouse_exprs.rds")) %>% 
+  as.matrix() %>%
+  { log2(. + 1) } %>% 
+  as.data.frame()
+mouse_metadata = read_csv(file = here("tables", "trauma_burn_mouse_metadata.csv")) %>% 
+  mutate(status = if_else(str_detect(treatment, "_Control"), "Control", "Treated"),
+         treatment = str_remove(treatment, "_Control"))
 
-human_mouse_metadata_ecoli = readRDS(here("tables", "ecoli_infection_human_mouse_metadata.rds")) %>% 
-  filter(host_strain == "C57BL/6J" | organism == "Human",
-         !batch %in% c("1", "2")) %>% 
-  mutate(timepoint = as.numeric(timepoint), 
-         time_unit = "Hour", 
-         pathogen = "Escherichia coli", 
-         tissue = "Blood", tissue_infection = site_infection, 
-         age = str_remove(age, "0.50-0.66"),
-         organism = if_else(organism == "Mus musculus", "Mouse", organism)) %>% 
-  select(geo_sample, participant_id = subject_id, organism, timepoint, time_unit, pathogen, treatment = status, age, sex, ethnicity, strain = host_strain,
-         tissue, tissue_infection, batch) %>% 
-  arrange(organism, timepoint)
+#Inputs
+filename = "trauma_burn_mouse"
 
-human_mouse_engerix_metadata = readRDS(file = here("tables", "hepatitisb_engerixb_human_mouse_metadata.rds")) %>% 
-  mutate(pathogen = "Hepatitis B",
-         vaccine = "Engerix B",
-       treatment = "Engerix B", 
-       type = "VLP",
-       timepoint = as.numeric(timepoint),
-       age = as.character(age)) %>% 
-  select(geo_sample, participant_id, organism, timepoint, time_unit, pathogen, vaccine, type, treatment, age, sex, ethnicity = race, strain, tissue)
+#Annotate genes ------
+#Mouse -----
+#Annotate data and calculate log2fc
+mouse_exprs_metadata  = mouse_exprs %>% 
+  rownames_to_column("probe_id") %>% 
+  pivot_longer(cols = 2:145,
+               names_to = "geo_sample",
+               values_to = "value_raw") %>% 
+  inner_join(mouse_metadata, 
+             by = "geo_sample") 
 
-fluad_human_mouse_metadata = readRDS(here("tables", "fluad_human_mouse_metadata.rds"))  %>% 
-  mutate(time_unit = "Day", timepoint = as.numeric(timepoint), age = as.character(age)) %>% 
-  select(geo_sample, participant_id, organism, timepoint, time_unit, pathogen, vaccine, type, treatment, age, sex, ethnicity, strain, tissue)
+#Get value from day 0 and calculate Log2FC (non-paired)
+mouse_exprs_log2fc_sample = mouse_exprs_metadata %>% 
+  filter(status == "Control") %>% 
+  select(probe_id, treatment, timepoint, subject_num = participant_id, value_raw_ref = value_raw) %>% 
+  distinct() %>% 
+  group_by(timepoint, treatment, probe_id) %>% 
+  summarise(value_raw_ref = mean(value_raw_ref)) %>% 
+  ungroup() %>% 
+  inner_join(mouse_exprs_metadata %>% 
+               filter(status != "Control"),
+             by = join_by("probe_id", "treatment", "timepoint")) %>% 
+  mutate(log2fc = value_raw - value_raw_ref) %>% 
+  distinct() 
 
-all_human_mouse_metadata = bind_rows(
-  human_mouse_metadata_saureus,
-  human_mouse_metadata_ecoli,
-  human_mouse_engerix_metadata,
-  fluad_human_mouse_metadata
+#Check duplicates
+mouse_exprs_log2fc_sample %>% 
+  filter(participant_id == "rep 1",
+         treatment == "Burn",
+         probe_id == "1415670_at")
+```
+
+
+```{r}
+########### Filter and annotate probes -----
+## Set up biomart
+ensembl_mart <- useMart("ensembl")
+ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
+
+## Get the MGI symbol
+gene_id <- rownames(mouse_exprs) %>% unique()
+
+# listAttributes(ensembl_mart) %>% View()
+#Annotate
+annot <- getBM(
+  attributes = c("affy_mouse430_2",
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "mgi_symbol",
+                 "description"),
+  filters = "affy_mouse430_2", #Probes
+  values = gene_id,
+  mart = ensembl_mart)
+
+#Get lookup table from FIT
+#Install model package
+# library(devtools)
+# devtools::install_github('shenorrLabTRDF/FIT.mouse2man')
+library(FIT.mouse2man)
+HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez %>% 
+  clean_names() %>% 
+  rename(mouse_entrez = mouse_ortholog)
+
+#Get annotations for each probe 
+### Filter probes with highest median expression
+mouse_log2summary = mouse_exprs %>% #20,845 probes
+  as.data.frame() %>% 
+  rownames_to_column("probe_id") %>% 
+  rename(probe = probe_id) %>% 
+  pivot_longer(cols = -probe,
+               names_to = "sample",
+               values_to = "expression") %>% 
+  group_by(probe) %>% 
+  summarise(median = median(expression, na.rm = T)) %>%  
+  inner_join(annot %>% 
+              rename(probe = affy_mouse430_2), 
+            by = "probe") %>%  #24.009 rows
+  #Filter ensembl id
+  group_by(ensembl_gene_id) %>% 
+  slice_max(median, n = 1) %>%
+  ungroup() %>% 
+  select(-ensembl_gene_id) %>% 
+  distinct() %>% 
+  
+  #Filter entrez id
+  group_by(entrezgene_id) %>% 
+  slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
+  ungroup() %>% 
+  rename(mouse_entrez = entrezgene_id) %>% 
+  
+  #Filter hgnc symbol
+  inner_join(HS_MM_Symbol_Entrez, by = c("mouse_entrez", "mgi_symbol")) %>% 
+  group_by(hgnc_symbol) %>% 
+  slice_max(median, n = 1)  %>% #14.396
+  ungroup()
+
+#Filter out genes with multiple mgi_symbols
+hgnc_symbol_dupes = mouse_log2summary %>% 
+  #filter out ensembl id with multiple mgi_symbols
+  get_dupes(hgnc_symbol)
+
+mouse_log2summary = mouse_log2summary %>% 
+  select(probe, hgnc_symbol) %>% 
+  filter(!hgnc_symbol %in% c(hgnc_symbol_dupes$hgnc_symbol %>% unique())) 
+
+#Modify expression matrix
+
+#Filtered probes
+mouse_log2_filtered_probes = mouse_exprs %>% 
+  rownames_to_column("probe_id") %>% 
+  as.data.frame() %>% 
+  rename(probe = probe_id) %>% 
+  inner_join(mouse_log2summary, by = "probe") %>%   #214,396
+  select(human_symbol = hgnc_symbol,
+         probe,
+         c(mouse_metadata %>% 
+             pull(geo_sample)))
+#Check
+mouse_log2_filtered_probes %>% dim()
+mouse_log2_hgnc_symbol = mouse_log2_filtered_probes 
+mouse_log2_hgnc_symbol %>% get_dupes(human_symbol)
+
+#Save
+mouse_log2_hgnc_symbol %>% saveRDS(file = here("tables", paste0(filename, "_exprs_hgnc_symbol.rds")))
+
+mouse_log2_hgnc_symbol = readRDS(file = here("tables", paste0(filename, "_exprs_hgnc_symbol.rds")))
+
+mouse_exprs_log2fc_sample = mouse_exprs_log2fc_sample %>% 
+  rename(probe = probe_id) %>% 
+  inner_join(mouse_log2_hgnc_symbol %>% 
+               select(human_symbol, probe),
+             by = join_by(probe))
+
+mouse_exprs_log2fc_sample %>% 
+  saveRDS(here("tables", "trauma_burn_mouse_log2fc_sample_clean_long.rds"))
+
+```
+
+
+
+
+####Human datasets
+##### Trauma
+
+```{r}
+#Import datasets
+human_exprs = readRDS(here("tables", "trauma_human_exprs.rds"))
+human_metadata = read_csv(file = here("tables", "trauma_human_metadata.csv"))
+
+#Inputs
+filename = "trauma_human"
+
+#Annotate genes ------
+#Mouse -----
+#Annotate data and calculate log2fc
+human_exprs_metadata  = human_exprs %>% 
+  rownames_to_column("probe_id") %>% 
+  pivot_longer(cols = 2:681,
+               names_to = "geo_sample",
+               values_to = "value_raw") %>% 
+  inner_join(human_metadata, 
+             by = "geo_sample")
+
+#Get value from day 0 and calculate Log2FC (non-paired)
+human_exprs_log2fc_sample = human_exprs_metadata %>% 
+  filter(treatment == "Control") %>% 
+  select(probe_id, treatment, value_raw_ref = value_raw) %>% 
+  distinct() %>% 
+  group_by(probe_id) %>% 
+  summarise(value_raw_ref = mean(value_raw_ref)) %>% 
+  ungroup() %>% 
+  inner_join(human_exprs_metadata %>% 
+               filter(treatment != "Control"),
+             by = join_by("probe_id")) %>% 
+  mutate(log2fc = value_raw - value_raw_ref) %>% 
+  distinct() 
+
+human_trauma_log2fc_sample = human_exprs_log2fc_sample
+
+#Save
+human_exprs_log2fc_sample =
+ readRDS(here("tables", "trauma_human_log2fc_sample_clean_long.rds"))
+
+#Check for duplicates
+human_exprs_log2fc_sample %>% 
+  filter(description == "Blood, subject 15429976, hours since injury 5.8",
+         probe_id == "1007_s_at")
+```
+
+
+```{r}
+########### Filter and annotate probes -----
+## Set up biomart
+ensembl_mart <- useMart("ensembl")
+ensembl_mart <- useDataset("hsapiens_gene_ensembl", mart = ensembl_mart)
+
+## Get the MGI symbol
+gene_id <- rownames(human_exprs) %>% unique()
+
+# listAttributes(ensembl_mart) %>% View()
+#Annotate
+annot <- getBM(
+  attributes = c("affy_hg_u133_plus_2",
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "hgnc_symbol",
+                 "description"),
+  filters = "affy_hg_u133_plus_2", #Probes
+  values = gene_id,
+  mart = ensembl_mart) %>% #Standardize
+  rename(probe = affy_hg_u133_plus_2,
+                     entrezgene_id = entrezgene_id,
+                     human_symbol = hgnc_symbol,
+                     ensembl_id = ensembl_gene_id)
+
+#Filter genes with highest median expression
+human_log2summary = human_exprs %>% 
+  rownames_to_column("probe") %>% 
+  pivot_longer(cols = -probe,
+               names_to = "sample",
+               values_to = "expression") %>% 
+  group_by(probe) %>% 
+  summarise(median = median(expression, na.rm = T)) %>%  
+  inner_join(annot, 
+            by = "probe") %>% 
+  
+  #Filter ensembl id
+  group_by(ensembl_id) %>% 
+  slice_max(median, n = 1) %>%
+  ungroup() %>% 
+  select(-ensembl_id) %>% 
+  distinct() %>% 
+  
+  #Filter entrez id
+  group_by(entrezgene_id) %>% 
+  slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
+  ungroup()  
+
+
+#Filter out genes with multiple hgnc_symbols
+hgnc_symbol_dupes = human_log2summary %>% 
+  #filter ensembl id with multiple hgnc_symbols
+  get_dupes(human_symbol)
+
+human_log2summary = human_log2summary %>% 
+  filter(!human_symbol %in% c(hgnc_symbol_dupes$human_symbol %>% unique())) 
+
+#Modify expression matrix
+
+#Filtered probes
+human_log2_filtered_probes = human_exprs %>% 
+  as.data.frame() %>% 
+  rownames_to_column("probe") %>% 
+  inner_join(human_log2summary, by = "probe") %>%   #214,396
+  select(human_symbol, probe,
+         c(human_metadata$geo_sample))
+#14395
+human_log2_filtered_probes %>% dim()
+
+human_log2_filtered_probes = human_log2_filtered_probes 
+
+human_log2_filtered_probes %>% 
+  get_dupes(human_symbol)
+
+#Save 
+human_log2_filtered_probes %>% 
+  saveRDS(here("tables", "trauma_human_exprs_hgnc_symbol.rds"))
+
+#Annotate probes from log2fc table
+human_exprs_log2fc_sample = human_exprs_log2fc_sample %>% 
+  rename(probe = probe_id) %>% 
+  inner_join(human_log2_filtered_probes %>% 
+               select(probe,
+                      human_symbol),
+             by = "probe")
+
+human_exprs_log2fc_sample %>% 
+saveRDS(here("tables", "trauma_human_log2fc_sample_clean_long.rds"))
+
+
+```
+
+
+
+##### Burn
+
+```{r}
+#Import datasets
+human_exprs = readRDS(here("tables", "burn_human_exprs.rds")) #Log2 values
+human_metadata = read_csv(file = here("tables", "burn_human_metadata.csv"))
+
+#Inputs
+filename = "burn_human"
+
+#Annotate genes ------
+#Mouse -----
+#Annotate data and calculate log2fc
+human_exprs_metadata  = human_exprs %>% 
+  rownames_to_column("probe_id") %>% 
+  pivot_longer(cols = 2:329,
+               names_to = "geo_sample",
+               values_to = "value_raw") %>% 
+  inner_join(human_metadata, 
+             by = "geo_sample")
+
+#Get value from day 0 and calculate Log2FC (non-paired)
+human_exprs_log2fc_sample = human_exprs_metadata %>% 
+  filter(treatment == "Control") %>% 
+  select(probe_id, treatment, value_raw_ref = value_raw) %>% 
+  distinct() %>% 
+  group_by(probe_id) %>% 
+  summarise(value_raw_ref = mean(value_raw_ref)) %>% 
+  ungroup() %>% 
+  inner_join(human_exprs_metadata %>% 
+               filter(treatment != "Control"),
+             by = join_by("probe_id")) %>% 
+  mutate(log2fc = value_raw - value_raw_ref) %>% 
+  distinct() 
+
+#Save
+human_burn_log2fc_sample = human_exprs_log2fc_sample
+
+#Check for duplicates
+human_exprs_log2fc_sample %>% 
+  filter(subject_id == "11710452",
+         probe_id == "1007_s_at")
+```
+
+
+```{r}
+########### Filter and annotate probes -----
+## Set up biomart
+ensembl_mart <- useMart("ensembl")
+ensembl_mart <- useDataset("hsapiens_gene_ensembl", mart = ensembl_mart)
+
+## Get the MGI symbol
+gene_id <- rownames(human_exprs) %>% unique()
+
+# listAttributes(ensembl_mart) %>% View()
+#Annotate
+annot <- getBM(
+  attributes = c("affy_hg_u133_plus_2",
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "hgnc_symbol",
+                 "description"),
+  filters = "affy_hg_u133_plus_2", #Probes
+  values = gene_id,
+  mart = ensembl_mart) %>% #Standardize
+  rename(probe = affy_hg_u133_plus_2,
+                     entrezgene_id = entrezgene_id,
+                     human_symbol = hgnc_symbol,
+                     ensembl_id = ensembl_gene_id)
+
+#Filter genes with highest median expression
+human_log2summary = human_exprs %>% 
+  rownames_to_column("probe") %>% 
+  pivot_longer(cols = -probe,
+               names_to = "sample",
+               values_to = "expression") %>% 
+  group_by(probe) %>% 
+  summarise(median = median(expression, na.rm = T)) %>%  
+  inner_join(annot, 
+            by = "probe") %>% 
+  
+  #Filter ensembl id
+  group_by(ensembl_id) %>% 
+  slice_max(median, n = 1) %>%
+  ungroup() %>% 
+  select(-ensembl_id) %>% 
+  distinct() %>% 
+  
+  #Filter entrez id
+  group_by(entrezgene_id) %>% 
+  slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
+  ungroup()  
+
+
+#Filter out genes with multiple hgnc_symbols
+hgnc_symbol_dupes = human_log2summary %>% 
+  #filter ensembl id with multiple hgnc_symbols
+  get_dupes(human_symbol)
+
+human_log2summary = human_log2summary %>% 
+  filter(!human_symbol %in% c(hgnc_symbol_dupes$human_symbol %>% unique())) 
+
+#Modify expression matrix
+
+#Filtered probes
+human_log2_filtered_probes = human_exprs %>% 
+  as.data.frame() %>% 
+  rownames_to_column("probe") %>% 
+  inner_join(human_log2summary, by = "probe") %>%   #214,396
+  select(human_symbol, probe,
+         c(human_metadata$geo_sample))
+#18196
+human_log2_filtered_probes %>% dim()
+
+human_log2_filtered_probes = human_log2_filtered_probes 
+
+human_log2_filtered_probes %>% 
+  get_dupes(human_symbol)
+
+#Save 
+human_log2_filtered_probes %>% 
+  saveRDS(here("tables", "burn_human_exprs_hgnc_symbol.rds"))
+
+
+#Annotate probes
+human_exprs_log2fc_sample = 
+readRDS(here("tables", "burn_human_log2fc_sample_clean_long.rds"))
+
+human_log2_filtered_probes =
+  readRDS(here("tables", "burn_human_exprs_hgnc_symbol.rds"))
+
+
+human_exprs_log2fc_sample = human_exprs_log2fc_sample %>% 
+  rename(probe = probe_id) %>% 
+  inner_join(human_log2_filtered_probes %>% 
+               select(probe,
+                      human_symbol),
+             by = "probe")
+
+human_exprs_log2fc_sample %>% 
+saveRDS(here("tables", "burn_human_log2fc_sample_clean_long.rds"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Differential expression
+
+### Mouse
+#### Burn
+##### Limma
+Unpaired samples design
+```{r}
+#Import
+#Import
+mouse_log2_hgnc_symbol = readRDS(file = here("tables", "trauma_burn_mouse_exprs_hgnc_symbol.rds"))
+mouse_metadata = read_csv(file = here("tables", "trauma_burn_mouse_metadata.csv")) %>% 
+  filter(str_detect(treatment, "Burn"))
+
+#Create Expression Set
+eset_mouse <- ExpressionSet(
+  assayData = mouse_log2_hgnc_symbol %>% 
+    column_to_rownames("human_symbol") %>% 
+    select(all_of(mouse_metadata$geo_sample)) %>%
+    as.matrix(),
+  phenoData = AnnotatedDataFrame(mouse_metadata %>% 
+                                   column_to_rownames("geo_sample") %>% 
+                                   mutate(condition = paste0(treatment, "_", timepoint))))
+
+# Keeping only genes with intensity > 6 (log2) in at least 5 samples
+genes_to_keep <- exprs(eset_mouse) %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), ~ . > 6)) %>% 
+  rowSums() %>% 
+  { . >= 5 }
+
+eset_filtered <- eset_mouse[genes_to_keep, ]
+
+#Create model matrix
+design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
+                       eset_filtered) 
+
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+aw <- arrayWeights(eset_filtered, design)
+barplot(aw, 
+        names.arg = eset_filtered$condition, # Define os nomes no eixo X
+        main = "Sample Weights Diagnostic", 
+        ylab = "Weight", 
+        las = 2,           # Rotaciona os nomes em 90 graus
+        cex.names = 0.7,   # Diminui o tamanho da fonte se houver muitos nomes
+        col = "skyblue")
+
+#Fit Limma model
+fit <- lmFit(eset_filtered, 
+             design, 
+             weights = aw
+             ) 
+
+#Get conditions
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+#Get contrasts 
+colnames(design) <- make.names(colnames(design))
+
+cont_matrix <- makeContrasts(
+  # --- Burn Comparisons ---
+  Burn_2h = conditionBurn_2.Hour - conditionBurn_Control_2.Hour,
+  Burn_D1 = conditionBurn_1.Day  - conditionBurn_Control_1.Day,
+  Burn_D3 = conditionBurn_3.Day  - conditionBurn_Control_3.Day,
+  Burn_D7 = conditionBurn_7.Day  - conditionBurn_Control_7.Day,
+  levels = design
 )
-all_human_mouse_metadata %>% 
-  saveRDS(here("tables", "all_human_mouse_metadata.rds"))
+
+fit2 <- contrasts.fit(fit, cont_matrix)
+fit2 <- eBayes(fit2, 
+               trend = T, 
+               robust = T
+               )
+plotSA(fit2, main = "Sigma vs Abundance (Weights Applied)")
+
+#Get DEGs
+
+## For every contrast
+results_list <- lapply(1:ncol(fit2), function(i) {
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+  })
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs and clean dataset
+all_degs_mouse_burn = all_contrasts_degs %>% 
+  select(comparison, everything()) %>% 
+  mutate(organism = "Mouse") %>% 
+  select(condition = comparison, everything()) %>% 
+  clean_names() %>% 
+  rename(human_symbol = symbol,
+         mean_l2fc = log_fc,
+         ci_upper = ci_r,
+         ci_lower = ci_l)
+
+all_degs_mouse_burn$condition %>% unique()
+	
+# #Save
+all_degs_mouse_burn %>% saveRDS(file = here("tables", "burn_mouse_dge_limma_degs.rds"))
+
+all_degs_mouse_burn %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarise(n_degs = n())
+
 ```
 
-## Sample log2FC
+
+
+##### T test
 ```{r}
-# Sample log2fc
 #Import
-human_mouse_log2fc_samples_ecoli = readRDS(here("tables", "ecoli_infection_human_mouse_samples_log2fc.rds"))  %>% 
-  select(human_symbol, participant_id = subject_id, geo_sample, log2fc, value_raw, day0_value_raw, timepoint) %>% 
-  mutate(timepoint = as.character(timepoint),
-         pathogen = "Escherichia coli")
-human_mouse_log2fc_samples_saureus = readRDS(here("tables", "saureus_infection_human_mouse_samples_log2fc.rds"))  %>% 
-  select(human_symbol, participant_id, geo_sample, log2fc, value_raw, day0_value_raw, timepoint) %>% 
-  mutate(timepoint = as.character(timepoint),
-         pathogen = "Staphylococcus aureus")
+mouse_exprs = readRDS(file = here("tables", "trauma_burn_mouse_exprs_hgnc_symbol.rds"))
+mouse_metadata = read_csv(file = here("tables", "trauma_burn_mouse_metadata.csv"))
+log2fc_sample = readRDS(here("tables", "trauma_burn_mouse_log2fc_sample_clean_long.rds"))
 
-human_mouse_log2fc_samples_engerixb = readRDS(file = here("tables", "hepatitisb_engerixb_human_mouse_exprs_samples_log2fc.rds"))  %>% 
-   mutate(timepoint = as.numeric(timepoint)) %>% 
-  inner_join(human_mouse_engerix_metadata,
-             by = join_by("participant_id", "timepoint", "organism")) %>% 
-  select(human_symbol, participant_id, geo_sample, log2fc, value_raw = value, day0_value_raw = day0, timepoint) %>% 
-  mutate(timepoint = as.character(timepoint))
+log2fc_sample_symbol = log2fc_sample %>% 
+  inner_join(mouse_exprs %>% 
+               select(human_symbol, probe_id = probe),
+             by = "probe_id") %>% 
+  select(-probe_id) %>% 
+  distinct() %>% 
+  filter(treatment == "Burn")
 
-human_mouse_log2fc_samples_fluad = readRDS(file = here("tables", "influenza_fluad_human_mouse_log2fc_samples.rds")) %>% 
-  mutate(timepoint = as.numeric(timepoint)) %>% 
-  inner_join(fluad_human_mouse_metadata,
-             by = join_by("participant_id", "timepoint", "organism")) %>% 
-  select(human_symbol, participant_id, geo_sample, log2fc, value_raw = value, day0_value_raw = day0, timepoint) %>% 
-  mutate(timepoint = as.character(timepoint))
+log2fc_unpaired_ttest = log2fc_sample_symbol %>%
+  group_by(human_symbol, timepoint) %>%
+  summarise(
+    res = list(t.test(value_raw, value_raw_ref, paired = F, alternative = "two.sided", var.equal = F)),
+    p_val = res[[1]]$p.value,
+    diff = res[[1]]$estimate[1] - res[[1]]$estimate[2],
+    .groups = "drop"
+  ) %>%
+  mutate(p_adj = p.adjust(p_val, method = "BH"),
+         test = "t-Test",
+         paired = "Unpaired"
+         )
 
-#Unite
-all_human_mouse_samples_log2fc = bind_rows(
-  human_mouse_log2fc_samples_saureus,
-  human_mouse_log2fc_samples_ecoli,
-  human_mouse_log2fc_samples_engerixb,
-  human_mouse_log2fc_samples_fluad
-) %>% 
-  select(human_symbol, geo_sample, timepoint, log2fc, value_raw, day0_value_raw) 
+log2fc_unpaired_ttest %>% 
+  saveRDS(file = here("tables", "burn_mouse_log2fc_paired_unpaired_ttest.rds"))
 
-#Save
-all_human_mouse_samples_log2fc %>% 
-  saveRDS(here("tables", "all_human_mouse_samples_log2fc.rds"))
-
-all_human_mouse_samples_log2fc %>%
-  inner_join(all_human_mouse_metadata %>% 
-               mutate(timepoint = as.character(timepoint)), 
-             by = join_by("geo_sample", "timepoint")) %>% 
-  filter(organism == "Human",
-         pathogen == "Staphylococcus aureus")
 ```
 
-## DGE results
+
+####Trauma
+
+##### Limma
+Unpaired
 ```{r}
-# DGE results
 #Import
-all_degs_human_mouse_engerixb = readRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds")) %>% 
-  mutate(pathogen = "Hepatitis B", treatment = "Engerix B",
-         timepoint = as.character(timepoint))
-all_degs_human_mouse_saureus = readRDS(here("tables", "saureus_infection_human_mouse_dge_limma_degs.rds")) %>% 
-  mutate(pathogen = "Staphylococcus aureus", treatment = "Infection")
-all_degs_human_mouse_ecoli = readRDS(here("tables", "ecoli_infection_human_mouse_dge_limma_degs.rds")) %>% 
-  mutate(pathogen = "Escherichia coli", treatment = "Infection")
-all_degs_human_mouse_fluad = readRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds")) %>% 
-  mutate(pathogen = "Influenza", treatment = "Fluad") %>% 
-  rename(mean_l2fc = mean, ci_lower = lower, ci_upper = upper)
+#Import
+mouse_log2_hgnc_symbol = readRDS(file = here("tables", "trauma_burn_mouse_exprs_hgnc_symbol.rds"))
+mouse_metadata = read_csv(file = here("tables", "trauma_burn_mouse_metadata.csv")) %>% 
+  filter(str_detect(treatment, "Trauma"))
 
-#Unite
-all_degs_human_mouse = bind_rows(all_degs_human_mouse_saureus, 
-                                 all_degs_human_mouse_ecoli, 
-                                 all_degs_human_mouse_fluad, 
-                                 all_degs_human_mouse_engerixb
-                                 ) %>% 
-  select(organism, pathogen, treatment, timepoint, condition, human_symbol, everything()) %>% 
-  mutate(timepoint = if_else(pathogen == "Staphylococcus aureus" & timepoint == "1", "24", timepoint))
-#Save
-all_degs_human_mouse %>% 
-  saveRDS(here("tables", "all_human_mouse_dge_limma_degs.rds"))
+#Create Expression Set
+eset_mouse <- ExpressionSet(
+  assayData = mouse_log2_hgnc_symbol %>% 
+    column_to_rownames("human_symbol") %>% 
+    select(all_of(mouse_metadata$geo_sample)) %>%
+    #Check if expression is log2 transformed
+    as.matrix(),
+  phenoData = AnnotatedDataFrame(mouse_metadata %>% 
+                                   column_to_rownames("geo_sample") %>% 
+                                   mutate(condition = paste0(treatment, "_", timepoint))))
+
+#Check if expression is log2 transformed
+exprs(eset_mouse) #values must be in the 0-16 range typically
+
+# Keeping only genes with intensity > 6 (log2) in at least 5 samples
+genes_to_keep <- exprs(eset_mouse) %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), ~ . > 6)) %>% 
+  rowSums() %>% 
+  { . >= 5 }
+
+eset_filtered <- eset_mouse[genes_to_keep, ]
+
+#Create model matrix
+design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
+                       eset_filtered) 
+
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+aw <- arrayWeights(eset_filtered, design)
+barplot(aw, 
+        names.arg = eset_filtered$condition, # Define os nomes no eixo X
+        main = "Sample Weights Diagnostic", 
+        ylab = "Weight", 
+        las = 2,           # Rotaciona os nomes em 90 graus
+        cex.names = 0.7,   # Diminui o tamanho da fonte se houver muitos nomes
+        col = "skyblue")
+
+#Fit Limma model
+fit <- lmFit(eset_filtered, 
+             design, weights = aw) 
+
+#Get conditions
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+#Get contrasts 
+colnames(design) <- make.names(colnames(design))
+
+cont_matrix <- makeContrasts(
+  # --- Trauma Comparisons ---
+  Trauma_2h = conditionTrauma_2.Hour - conditionTrauma_Control_2.Hour,
+  Trauma_D1 = conditionTrauma_1.Day  - conditionTrauma_Control_1.Day,
+  Trauma_D3 = conditionTrauma_3.Day  - conditionTrauma_Control_3.Day,
+  Trauma_D7 = conditionTrauma_7.Day  - conditionTrauma_Control_7.Day,
+  levels = design
+)
+
+fit2 <- contrasts.fit(fit, cont_matrix)
+fit2 <- eBayes(fit2, trend = T, robust = T)
+
+# Veja se os genes com esses pesos altos estão distorcendo a curva
+plotSA(fit2, main = "Sigma vs Abundance (Weights Applied)")
+
+#Get DEGs
+
+## For every contrast
+results_list <- lapply(1:ncol(fit2), function(i) {
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+  })
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs and clean dataset
+all_degs_mouse = all_contrasts_degs %>% 
+  select(comparison, everything()) %>% 
+  mutate(organism = "Mouse") %>% 
+  select(condition = comparison, everything()) %>% 
+  clean_names() %>% 
+  rename(human_symbol = symbol,
+         mean_l2fc = log_fc,
+         ci_upper = ci_r,
+         ci_lower = ci_l)
+
+all_degs_mouse$condition %>% unique()
+	
+# #Save
+all_degs_mouse %>% saveRDS(file = here("tables", "trauma_mouse_dge_limma_degs.rds"))
+
+all_degs_mouse %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarise(n_degs = n())
 
 ```
 
-## FIT
+
+
+##### T test
+```{r}
+#Import
+mouse_exprs = readRDS(file = here("tables", "trauma_burn_mouse_exprs_hgnc_symbol.rds"))
+mouse_metadata = read_csv(file = here("tables", "trauma_burn_mouse_metadata.csv"))
+log2fc_sample = readRDS(here("tables", "trauma_burn_mouse_log2fc_sample_clean_long.rds"))
+
+log2fc_sample_symbol = log2fc_sample %>% 
+  inner_join(mouse_exprs %>% 
+               select(human_symbol, probe_id = probe),
+             by = "probe_id") %>% 
+  select(-probe_id) %>% 
+  distinct() %>% 
+  filter(treatment == "Trauma")
+
+log2fc_unpaired_ttest = log2fc_sample_symbol %>%
+  group_by(human_symbol, timepoint) %>%
+  summarise(
+    # row_ttests é muito rápido dentro de grupos pequenos ou se usado em matrizes
+    res = list(t.test(value_raw, value_raw_ref, paired = F, alternative = "two.sided", var.equal = F)),
+    p_val = res[[1]]$p.value,
+    diff = res[[1]]$estimate[1] - res[[1]]$estimate[2],
+    .groups = "drop"
+  ) %>%
+  mutate(p_adj = p.adjust(p_val, method = "BH"),
+         test = "t-Test",
+         paired = "Unpaired"
+         )
+
+log2fc_unpaired_ttest %>% 
+  saveRDS(file = here("tables", "trauma_mouse_log2fc_paired_unpaired_ttest.rds"))
+
+```
+
+
+
+
+### Human
+#### Burn
+##### Limma
+Unpaired
+```{r}
+#Import
+human_log2_hgnc_symbol = readRDS(file = here("tables", "burn_human_exprs_hgnc_symbol.rds"))
+human_metadata = read_csv(file = here("tables", "burn_human_metadata.csv")) %>% 
+      mutate(
+        condition = paste0(treatment, "_", timepoints_new),
+        condition = fct_relevel(condition, "Control_Early_Hours"),
+        sex = fct_relevel(sex, "F"),
+        age = scale(age)
+      )
+    
+#Create Expression Set
+eset_human <- ExpressionSet(
+  assayData = human_log2_hgnc_symbol %>% 
+    column_to_rownames("human_symbol") %>% 
+    select(all_of(human_metadata$geo_sample)) %>%
+    #Check if expression is log2 transformed
+    as.matrix(),
+  phenoData = AnnotatedDataFrame(human_metadata %>% 
+                                   column_to_rownames("geo_sample")))
+
+#Check if expression is log2 transformed
+exprs(eset_human) #values must be in the 0-16 range typically
+
+# Keeping only genes with intensity > 6 (log2) in at least 5 samples
+genes_to_keep <- exprs(eset_human) %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), ~ . > 6)) %>% 
+  rowSums() %>% 
+  { . >= 5 }
+
+eset_filtered <- eset_human[genes_to_keep, ]
+
+#Create model matrix
+design <- model.matrix(~ condition + age + sex + 0, # 0 defines the way we compare the samples
+                       eset_filtered) 
+
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+aw <- arrayWeights(eset_filtered, design)
+barplot(aw, 
+        names.arg = eset_filtered$condition, 
+        main = "Sample Weights Diagnostic", 
+        ylab = "Weight", 
+        las = 2,          
+        cex.names = 0.7,   
+        col = "skyblue")
+
+#Fit Limma model
+fit <- lmFit(eset_filtered, 
+             design, weights = aw) 
+
+#Get conditions
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+#Get contrasts 
+colnames(design) <- make.names(colnames(design))
+
+cont_matrix <- makeContrasts(
+  # --- Burn Comparisons ---
+  Burn_Early = conditionBurn_Early_Hours - conditionControl_Early_Hours,
+  Burn_D1 = conditionBurn_Day_1  - conditionControl_Early_Hours,
+  Burn_D3 = conditionBurn_Day_3  - conditionControl_Early_Hours,
+  Burn_D7 = conditionBurn_Day_7  - conditionControl_Early_Hours,
+  levels = design
+)
+
+fit2 <- contrasts.fit(fit, cont_matrix)
+fit2 <- eBayes(fit2, trend = T, robust = T)
+
+plotSA(fit2, main = "Sigma vs Abundance (Weights Applied)")
+
+#Get DEGs
+## For every contrast
+results_list <- lapply(1:ncol(fit2), function(i) {
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+  })
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs and clean dataset
+all_degs_human = all_contrasts_degs %>% 
+  select(comparison, everything()) %>% 
+  mutate(organism = "Human") %>% 
+  select(condition = comparison, everything()) %>% 
+  clean_names() %>% 
+  rename(human_symbol = symbol,
+         mean_l2fc = log_fc,
+         ci_upper = ci_r,
+         ci_lower = ci_l)
+
+all_degs_human$condition %>% unique()
+	
+# #Save
+all_degs_human %>% saveRDS(file = here("tables", "burn_human_dge_limma_degs.rds"))
+
+all_degs_human %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarise(n_degs = n())
+
+```
+
+
+
+##### T test
+```{r}
+#Import
+human_exprs = readRDS(file = here("tables", "burn_human_exprs_hgnc_symbol.rds"))
+human_metadata = read_csv(file = here("tables", "burn_human_metadata.csv"))
+burn_human_log2fc_sample = readRDS(here("tables", "burn_human_log2fc_sample_clean_long.rds"))
+
+log2fc_sample_symbol = burn_human_log2fc_sample %>% 
+  inner_join(human_exprs %>% 
+               select(human_symbol, probe_id = probe),
+             by = "probe_id") %>% 
+  select(-probe_id) %>% 
+  distinct() 
+
+log2fc_unpaired_ttest = log2fc_sample_symbol %>%
+  group_by(human_symbol, timepoints_new) %>%
+  summarise(
+    res = list(t.test(value_raw, value_raw_ref, paired = F, alternative = "two.sided", var.equal = F)),
+    p_val = res[[1]]$p.value,
+    diff = res[[1]]$estimate[1] -  res[[1]]$estimate[2],
+    .groups = "drop"
+  ) %>%
+  mutate(p_adj = p.adjust(p_val, method = "BH"),
+         test = "t-Test",
+         paired = "Unpaired"
+         )
+
+log2fc_unpaired_ttest %>% 
+  saveRDS(file = here("tables", "burn_human_log2fc_unpaired_ttest.rds"))
+
+```
+
+####Trauma
+##### Limma
+Unpaired
+```{r}
+#Import
+human_log2_hgnc_symbol = readRDS(file = here("tables", "trauma_human_exprs_hgnc_symbol.rds"))
+human_metadata = read_csv(file = here("tables", "trauma_human_metadata.csv")) %>% 
+  mutate(
+        condition = paste0(treatment, "_", timepoints_new),
+        condition = fct_relevel(condition, "Control_Early_Hours"),
+        sex = fct_relevel(sex, "F"),
+        age = scale(age)
+      )
+
+#Create Expression Set
+eset_human <- ExpressionSet(
+  assayData = human_log2_hgnc_symbol %>% 
+    column_to_rownames("human_symbol") %>% 
+    select(all_of(human_metadata$geo_sample)) %>%
+    #Check if expression is log2 transformed
+    as.matrix(),
+  phenoData = AnnotatedDataFrame(human_metadata %>% 
+                                   column_to_rownames("geo_sample")))
+```
+
+
+```{r}
+#Check if expression is log2 transformed
+exprs(eset_human) #values must be in the 0-16 range typically
+
+# Keeping only genes with intensity > 6 (log2) in at least 5 samples
+genes_to_keep <- exprs(eset_human) %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), ~ . > 6)) %>% 
+  rowSums() %>% 
+  { . >= 5 }
+
+eset_filtered <- eset_human[genes_to_keep, ]
+
+#Create model matrix
+design <- model.matrix(~ condition + age + sex + 0,
+                       eset_filtered) 
+
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+# aw <- arrayWeights(eset_filtered, design)
+# 
+# barplot(aw, 
+#         names.arg = eset_filtered$condition, 
+#         main = "Sample Weights Diagnostic", 
+#         ylab = "Weight", 
+#         las = 2,           
+#         cex.names = 0.7,  
+#         col = "skyblue")
+
+#Fit Limma model
+fit <- lmFit(eset_filtered, 
+             design, 
+             # weights = aw
+             ) 
+
+#Get conditions
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+#Get contrasts 
+colnames(design) <- make.names(colnames(design))
+
+cont_matrix <- makeContrasts(
+  # --- Trauma Comparisons ---
+  Trauma_Early = conditionTrauma_Early_Hours - conditionControl_Early_Hours,
+  Trauma_D1 = conditionTrauma_Day_1  - conditionControl_Early_Hours,
+  Trauma_D3 = conditionTrauma_Day_3  - conditionControl_Early_Hours,
+  Trauma_D7 = conditionTrauma_Day_7  - conditionControl_Early_Hours,
+  levels = design
+)
+
+fit2 <- contrasts.fit(fit, cont_matrix)
+fit2 <- eBayes(fit2, 
+               # trend = T, #Does not need trend
+               robust = T
+               )
+
+# Veja se os genes com esses pesos altos estão distorcendo a curva
+plotSA(fit2, main = "Sigma vs Abundance (Weights Applied)")
+
+#Get DEGs
+
+## For every contrast
+results_list <- lapply(1:ncol(fit2), function(i) {
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+  })
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs and clean dataset
+all_degs_human = all_contrasts_degs %>% 
+  select(comparison, everything()) %>% 
+  mutate(organism = "Human") %>% 
+  select(condition = comparison, everything()) %>% 
+  clean_names() %>% 
+  rename(human_symbol = symbol,
+         mean_l2fc = log_fc,
+         ci_upper = ci_r,
+         ci_lower = ci_l)
+
+all_degs_human$condition %>% unique()
+	
+# #Save
+all_degs_human %>% saveRDS(file = here("tables", "trauma_human_dge_limma_degs.rds"))
+
+all_degs_human %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarise(n_degs = n())
+
+```
+
+
+
+##### T test
+```{r}
+#Import
+human_exprs = readRDS(file = here("tables", "trauma_human_exprs_hgnc_symbol.rds"))
+human_metadata = read_csv(file = here("tables", "trauma_human_metadata.csv"))
+trauma_human_log2fc_sample = readRDS(here("tables", "trauma_human_log2fc_sample_clean_long.rds"))
+
+log2fc_sample_symbol = trauma_human_log2fc_sample %>% 
+  inner_join(human_exprs %>% 
+               select(human_symbol, probe_id = probe),
+             by = "probe_id") %>% 
+  select(-probe_id) %>% 
+  distinct() 
+
+log2fc_unpaired_ttest = log2fc_sample_symbol %>%
+  drop_na(.) %>% 
+  group_by(human_symbol, timepoints_new) %>%
+  select(human_symbol, timepoints_new, value_raw, value_raw_ref, log2fc) %>% 
+
+  summarise(
+    res = list(t.test(value_raw, value_raw_ref, paired = F, alternative = "two.sided", var.equal = F)),
+    p_val = res[[1]]$p.value,
+    diff = res[[1]]$estimate[1] -  res[[1]]$estimate[2],
+    .groups = "drop"
+  ) %>%
+  mutate(p_adj = p.adjust(p_val, method = "BH"),
+         test = "t-Test",
+         paired = "Unpaired"
+         )
+
+log2fc_unpaired_ttest %>% 
+  saveRDS(file = here("tables", "trauma_human_log2fc_unpaired_ttest.rds"))
+
+```
+
+
+
+# ===================
+# 6. FIT
 Ref: Normand, R., Du, W., Briller, M. et al. Found In Translation: a machine learning model for mouse-to-human inference. Nat Methods 15, 1067–1073 (2018). https://doi.org/10.1038/s41592-018-0214-9
 Github: https://github.com/shenorrLabTRDF/FIT.mouse2man 
 
@@ -8698,10 +9940,237 @@ fit_ecoli_results %>%
 ```
 
 
+#===================
+
+# 7. Combine all datasets
+
+## Metadata
+```{r}
+#Merge results =====================
+#Metadata
+human_mouse_metadata_saureus = readRDS(file = here("tables", "saureus_infection_human_mouse_metadata.rds")) %>% 
+  select(geo_sample, participant_id, organism, timepoint, time_unit, pathogen, treatment, age, sex, ethnicity, strain, tissue, tissue_infection, batch = batch_experimental) %>% 
+  mutate(pathogen = "Staphylococcus aureus",
+         tissue = "Blood",
+         timepoint = as.numeric(timepoint),
+         age = as.character(age)) %>% 
+  mutate(timepoint = if_else(timepoint == 1, 24, timepoint),
+         time_unit = "Hour") 
+
+human_mouse_metadata_ecoli = readRDS(here("tables", "ecoli_infection_human_mouse_metadata.rds")) %>% 
+  filter(host_strain == "C57BL/6J" | organism == "Human",
+         !batch %in% c("1", "2")) %>% 
+  mutate(timepoint = as.numeric(timepoint), 
+         time_unit = "Hour", 
+         pathogen = "Escherichia coli", 
+         tissue = "Blood", tissue_infection = site_infection, 
+         age = str_remove(age, "0.50-0.66"),
+         organism = if_else(organism == "Mus musculus", "Mouse", organism)) %>% 
+  select(geo_sample, participant_id = subject_id, organism, timepoint, time_unit, pathogen, treatment = status, age, sex, ethnicity, strain = host_strain,
+         tissue, tissue_infection, batch) %>% 
+  arrange(organism, timepoint)
+
+human_mouse_engerix_metadata = readRDS(file = here("tables", "hepatitisb_engerixb_human_mouse_metadata.rds")) %>% 
+  mutate(pathogen = "Hepatitis B",
+         vaccine = "Engerix B",
+       treatment = "Engerix B", 
+       type = "VLP",
+       timepoint = as.numeric(timepoint),
+       age = as.character(age)) %>% 
+  select(geo_sample, participant_id, organism, timepoint, time_unit, pathogen, vaccine, type, treatment, age, sex, ethnicity = race, strain, tissue)
+
+fluad_human_mouse_metadata = readRDS(here("tables", "fluad_human_mouse_metadata.rds"))  %>% 
+  mutate(time_unit = "Day", timepoint = as.numeric(timepoint), age = as.character(age)) %>% 
+  select(geo_sample, participant_id, organism, timepoint, time_unit, pathogen, vaccine, type, treatment, age, sex, ethnicity, strain, tissue)
+
+mouse_metadata_burn_trauma = read_csv(file = here("tables", "trauma_burn_mouse_metadata.csv")) %>% 
+  filter(!str_detect(treatment, "LPS")) %>% 
+  separate(timepoint, into = c("timepoint", "time_unit")) %>% 
+  separate(treatment, into = c("pathogen", "treatment")) %>% 
+  mutate(tissue = "Leukocytes",
+         organism = "Mouse",
+         treatment = if_else(is.na(treatment), pathogen, treatment),
+         timepoint = as.numeric(timepoint)) %>% 
+  select(geo_sample, participant_id, organism, timepoint, time_unit, pathogen, treatment, sex, strain, tissue)
+  
+
+human_burn_metadata = read_csv(file = here("tables", "burn_human_metadata.csv")) %>% 
+  rename(timepoint_original = timepoint,
+         timepoint = timepoints_new) %>% 
+  mutate(pathogen = "Burn", 
+         organism = "Human",
+         subject_id = if_else(subject_id == "Control", paste0(subject_id, "_", geo_sample), subject_id),
+         timepoint = str_replace(timepoint, "_", " "),
+         time_unit = if_else(str_detect(timepoint, "Day"), "Day", "Hour"),
+         timepoint = str_remove(timepoint, "Day ")) %>% 
+  select(geo_sample, participant_id = subject_id, organism, timepoint_original, timepoint, time_unit, pathogen, treatment, age, sex, tissue)
+
+human_trauma_metadata = read_csv(file = here("tables", "trauma_human_metadata.csv")) %>% 
+  rename(timepoint_original = timepoint,
+         timepoint = timepoints_new) %>% 
+  mutate(pathogen = "Trauma", 
+         organism = "Human",
+         subject_id = if_else(subject_id == "Control", paste0(subject_id, "_", geo_sample), subject_id),
+         timepoint = str_replace(timepoint, "_", " "),
+         time_unit = if_else(str_detect(timepoint, "Day"), "Day", "Hour"),
+         timepoint = str_remove(timepoint, "Day ")) %>% 
+  select(geo_sample, participant_id = subject_id, organism, timepoint_original, timepoint, time_unit, pathogen, treatment, age, sex, tissue)
+
+
+all_human_mouse_metadata = bind_rows(
+  human_mouse_metadata_saureus %>% 
+    mutate(timepoint = as.character(timepoint),
+           age = as.numeric(age)),
+  human_mouse_metadata_ecoli %>% 
+    mutate(timepoint = as.character(timepoint),
+           age = as.numeric(age)),
+  human_mouse_engerix_metadata %>% 
+    mutate(timepoint = as.character(timepoint),
+           age = as.numeric(age)),
+  fluad_human_mouse_metadata %>% 
+    mutate(timepoint = as.character(timepoint),
+           age = as.numeric(age)),
+  mouse_metadata_burn_trauma %>% 
+    mutate(timepoint = as.character(timepoint)),
+  human_burn_metadata,
+  human_trauma_metadata
+)
+
+all_human_mouse_metadata %>% 
+  saveRDS(here("tables", "all_human_mouse_metadata.rds"))
+```
+
+## Sample log2FC
+```{r}
+# Sample log2fc
+#Import
+human_mouse_log2fc_samples_ecoli = readRDS(here("tables", "ecoli_infection_human_mouse_samples_log2fc.rds"))  %>% 
+  select(human_symbol, participant_id = subject_id, geo_sample, log2fc, value_raw, day0_value_raw, timepoint) %>% 
+  mutate(timepoint = as.character(timepoint),
+         pathogen = "Escherichia coli")
+human_mouse_log2fc_samples_saureus = readRDS(here("tables", "saureus_infection_human_mouse_samples_log2fc.rds"))  %>% 
+  select(human_symbol, participant_id, geo_sample, log2fc, value_raw, day0_value_raw, timepoint) %>% 
+  mutate(timepoint = as.character(timepoint),
+         pathogen = "Staphylococcus aureus")
+
+human_mouse_log2fc_samples_engerixb = readRDS(file = here("tables", "hepatitisb_engerixb_human_mouse_exprs_samples_log2fc.rds"))  %>% 
+   mutate(timepoint = as.numeric(timepoint)) %>% 
+  inner_join(human_mouse_engerix_metadata,
+             by = join_by("participant_id", "timepoint", "organism")) %>% 
+  select(human_symbol, participant_id, geo_sample, log2fc, value_raw = value, day0_value_raw = day0, timepoint) %>% 
+  mutate(timepoint = as.character(timepoint))
+
+human_mouse_log2fc_samples_fluad = readRDS(file = here("tables", "influenza_fluad_human_mouse_log2fc_samples.rds")) %>% 
+  mutate(timepoint = as.numeric(timepoint)) %>% 
+  inner_join(fluad_human_mouse_metadata,
+             by = join_by("participant_id", "timepoint", "organism")) %>% 
+  select(human_symbol, participant_id, geo_sample, log2fc, value_raw = value, day0_value_raw = day0, timepoint) %>% 
+  mutate(timepoint = as.character(timepoint))
+
+mouse_log2fc_samples_trauma_burn = readRDS(here("tables", "trauma_burn_mouse_log2fc_sample_clean_long.rds"))  %>% 
+  select(human_symbol, participant_id, geo_sample, log2fc, day0_value_raw = value_raw, value_raw_ref, timepoint) %>% 
+  mutate(timepoint = as.character(timepoint))
+
+human_log2fc_samples_trauma = readRDS(here("tables", "trauma_human_log2fc_sample_clean_long.rds"))  %>% 
+  select(human_symbol, geo_sample, log2fc, value_raw, day0_value_raw = value_raw_ref, timepoint = timepoints_new) %>% 
+  mutate(timepoint = as.character(timepoint))
+
+human_log2fc_samples_burn = readRDS(here("tables", "burn_human_log2fc_sample_clean_long.rds"))  %>% 
+  select(human_symbol, geo_sample, log2fc, value_raw, day0_value_raw = value_raw_ref, timepoint = timepoints_new) %>% 
+  mutate(timepoint = as.character(timepoint))
+
+
+#Unite
+all_human_mouse_samples_log2fc = bind_rows(
+  human_mouse_log2fc_samples_saureus,
+  human_mouse_log2fc_samples_ecoli,
+  human_mouse_log2fc_samples_engerixb,
+  human_mouse_log2fc_samples_fluad,
+  human_log2fc_samples_trauma,
+  human_log2fc_samples_burn,
+  mouse_log2fc_samples_trauma_burn
+) %>% 
+  select(human_symbol, geo_sample, timepoint, log2fc, value_raw, day0_value_raw) 
+
+#Save
+all_human_mouse_samples_log2fc %>% 
+  saveRDS(here("tables", "all_human_mouse_samples_log2fc.rds"))
+
+all_human_mouse_samples_log2fc %>%
+  inner_join(all_human_mouse_metadata %>% 
+               mutate(timepoint = as.character(timepoint)), 
+             by = join_by("geo_sample", "timepoint")) %>% 
+  filter(organism == "Human",
+         pathogen == "Staphylococcus aureus")
+```
+
+## DGE results
+```{r}
+# DGE results
+#Import
+all_degs_human_mouse_engerixb = readRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Hepatitis B", treatment = "Engerix B",
+         timepoint = as.character(timepoint))
+all_degs_human_mouse_saureus = readRDS(here("tables", "saureus_infection_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Staphylococcus aureus", treatment = "Infection")
+all_degs_human_mouse_ecoli = readRDS(here("tables", "ecoli_infection_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Escherichia coli", treatment = "Infection")
+all_degs_human_mouse_fluad = readRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Influenza", treatment = "Fluad") %>% 
+  rename(mean_l2fc = mean, ci_lower = lower, ci_upper = upper)
+
+all_degs_human_burn = readRDS(here("tables", "burn_human_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Burn", treatment = "Burn",
+         timepoint = str_remove(condition, "Burn_") %>% 
+           str_replace("Early", "Early hours") %>% 
+           str_replace("D", "Day "))
+
+
+all_degs_mouse_burn = readRDS(here("tables", "burn_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Burn", treatment = "Burn",
+         timepoint = str_remove(condition, "Burn_") %>% 
+           str_replace("D", "Day "))
+
+all_degs_human_trauma = readRDS(here("tables", "trauma_human_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Trauma", treatment = "Trauma",
+         timepoint = str_remove(condition, "Trauma_") %>% 
+           str_replace("Early", "Early hours") %>% 
+           str_replace("D", "Day "))
+
+all_degs_mouse_trauma = readRDS(here("tables", "trauma_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Trauma", treatment = "Trauma",
+         timepoint = str_remove(condition, "Trauma_") %>% 
+           str_replace("D", "Day "))
+
+#Unite
+all_degs_human_mouse = bind_rows(all_degs_human_mouse_saureus, 
+                                 all_degs_human_mouse_ecoli, 
+                                 all_degs_human_mouse_fluad, 
+                                 all_degs_human_mouse_engerixb,
+                                 all_degs_human_burn, 
+                                 all_degs_mouse_burn, 
+                                 all_degs_human_trauma, 
+                                 all_degs_mouse_trauma
+                                 ) %>% 
+  select(organism, pathogen, treatment, timepoint, condition, human_symbol, everything()) %>% 
+  mutate(timepoint = if_else(pathogen == "Staphylococcus aureus" & timepoint == "1", "24", timepoint))
+
+#Save
+all_degs_human_mouse %>% 
+  saveRDS(here("tables", "all_human_mouse_dge_limma_degs.rds"))
+
+```
 
 
 
-#### Unite results from FIT
+
+
+
+
+
+
+
+## FIT
 ```{r}
 fit_saureus_results = readRDS(file = here("tables", "saureus_mouse_fit_prediction_results_12h.rds"))
 fit_ecoli_results = readRDS(file = here("tables", "ecoli_mouse_fit_prediction_results_12h.rds"))
