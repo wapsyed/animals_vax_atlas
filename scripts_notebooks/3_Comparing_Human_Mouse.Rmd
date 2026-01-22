@@ -17241,7 +17241,12 @@ cor_data <- human_mouse_log2fc_avg_wide_degs_immune_nonimmune %>%
           cor_value_pearson) %>% 
   mutate(
     gene_type = factor(gene_type, levels = c("All genes", "DEGs", "Not-immune", "Immune")),
-    facet_label = paste0(gene_type, ": ", label_spearman))
+    facet_label = paste0(gene_type, ": ", label_spearman)) %>% 
+    #Reorder timepoints
+  separate(timepoint_comparison, into = c("timepoint_mouse", "timepoint_human"), remove = F) %>% 
+  mutate(timepoint_mouse = fct_relevel(timepoint_mouse, c("2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7"))) %>% 
+  arrange(timepoint_mouse) %>%
+  mutate(timepoint_comparison = fct_inorder(timepoint_comparison))
 
 cor_data_facetted = cor_data %>% 
   arrange(gene_type) %>% 
@@ -17250,8 +17255,10 @@ cor_data_facetted = cor_data %>%
     facet_label = paste(facet_label, collapse = "\n"),
     .groups = "drop"
   )  %>% 
-  mutate(facet_label = paste0(timepoint_comparison, "\n", facet_label),
-         facet_label = fct_relevel(facet_label, c("2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")))
+  mutate(facet_label = paste0(timepoint_comparison, "\n", facet_label)) %>% 
+  arrange(timepoint_comparison) %>% 
+  mutate(facet_label = fct_inorder(facet_label))
+
 cor_data
 cor_data_facetted
 
@@ -17262,8 +17269,8 @@ human_mouse_log2fc_avg_wide_labels = human_mouse_log2fc_avg_wide %>%
   mutate(pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli", "Burn", "Trauma")) %>% 
   distinct() 
 
-
-human_mouse_log2fc_avg_wide_labels_filters <- 
+#Unite gene data and correlation/facets
+human_mouse_log2fc_avg_wide_labels_filters = 
   bind_rows(
     #All genes
     human_mouse_log2fc_avg_wide_labels %>% 
@@ -17374,14 +17381,13 @@ human_mouse_t_avg_wide_labels_filters <-
   ) %>% 
   mutate(color_group = fct_relevel(color_group, "All genes", "All DEGs", "Shared DEGs", "Immune"))
 
+human_mouse_t_avg_wide_labels_filters$timepoint_comparison
 
 ```
 
 
 Log2FC vs Log2fc
 ```{r fig.height=12, fig.width=16}
-
-
 # Log2FC vs Log2fc
 human_mouse_log2fc_log2fc_avg_wide_scatterplot = human_mouse_log2fc_avg_wide_labels_filters %>% 
   
@@ -17474,7 +17480,7 @@ human_mouse_t_t_avg_wide_scatterplot = human_mouse_t_avg_wide_labels_filters %>%
   #Facet
   facet_nested_wrap(vars(pathogen, facet_label),
                     scales = "free",
-                    nrow = 3,
+                    nrow = 4,
                     strip = strip_nested(size = "variable")) +
   
   geom_point(aes(fill = color_group),
@@ -17566,7 +17572,7 @@ human_mouse_rank_rank_avg_wide_scatterplot = human_mouse_log2fc_avg_wide_labels_
   #Facet
   facet_nested_wrap(vars(pathogen, facet_label),
                     scales = "free",
-                    nrow = 3,
+                    nrow = 4,
                     strip = strip_nested(size = "variable")) +
   
   geom_point(aes(color = color_group,
@@ -17603,7 +17609,9 @@ human_mouse_rank_rank_avg_wide_scatterplot = human_mouse_log2fc_avg_wide_labels_
              size = 1.5,
              pch = 21,
              data = human_mouse_log2fc_avg_wide_labels_ranked %>%
-               filter(human_symbol %in% c(btm_annotation_genes %>%                                                     filter(module_category == "immune") %>%                                                     pull(symbol))),
+               filter(human_symbol %in% c(btm_annotation_genes %>%                                                
+                                            filter(module_category == "immune") %>%
+                                            pull(symbol)),
                       p_adj_human <= 0.05 & p_adj_mouse <= 0.05) %>% 
                mutate(color_group = "Immune")) +
   guides(color = "none",
@@ -17644,62 +17652,86 @@ human_mouse_rank_rank_avg_wide_scatterplot %>%
 
 ##### All genes
 ```{r}
-# 1. Identificar todas as combinações
+# 1. Identify all unique pathogen and timepoint combinations
 combinations <- human_mouse_log2fc_avg_wide %>%
-  distinct(pathogen, timepoint)
+  distinct(pathogen, timepoint_comparison)
 
-# 2. Criar uma lista para armazenar os resultados de cada iteração
+# 2. Initialize a list to store results from each iteration
 all_rrho_results <- list()
 
 for(i in 1:nrow(combinations)) {
   
   curr_pathogen <- combinations$pathogen[i]
-  curr_timepoint <- combinations$timepoint[i]
+  curr_timepoint <- combinations$timepoint_comparison[i]
   
-  # A. Filtrar e Preparar Scores
+  # A. Filter and Prepare Differential Expression (DDE) Scores
   rrho_input_data <- human_mouse_log2fc_avg_wide %>% 
-    filter(pathogen == curr_pathogen, timepoint == curr_timepoint) %>%
+    filter(pathogen == curr_pathogen, timepoint_comparison == curr_timepoint) %>%
     filter(!is.na(p_adj_human), !is.na(p_adj_mouse), 
            !is.na(mean_log2fc_human), !is.na(mean_log2fc_mouse)) %>%
     mutate(
+      # Handle p-values of 0 to avoid infinite logs
       p_adj_human = ifelse(p_adj_human == 0, .Machine$double.xmin, p_adj_human),
       p_adj_mouse = ifelse(p_adj_mouse == 0, .Machine$double.xmin, p_adj_mouse),
+      # Calculate DDE score: -log10(p-value) * sign of Fold Change
       score_human = -log10(p_adj_human) * sign(mean_log2fc_human),
       score_mouse = -log10(p_adj_mouse) * sign(mean_log2fc_mouse)
     )
 
-  # Pular se houver poucos genes (o RRHO2 precisa de uma lista mínima)
+  # Skip if the gene list is too small (RRHO2 requires a minimum set)
   if(nrow(rrho_input_data) < 100) next 
 
-  # B. Criar Listas para o RRHO2
-  gene_list1 <- rrho_input_data %>% select(Genes = human_symbol, DDE = score_human) %>% as.data.frame()
-  gene_list2 <- rrho_input_data %>% select(Genes = human_symbol, DDE = score_mouse) %>% as.data.frame()
+  # B. Prepare Sorted Gene Lists for RRHO2
+  # Sorting from highest to lowest DDE score is mandatory for RRHO analysis
+  gene_list1 <- rrho_input_data %>% 
+    arrange(desc(score_human)) %>%
+    select(Genes = human_symbol, DDE = score_human) %>% 
+    as.data.frame()
+    
+  gene_list2 <- rrho_input_data %>% 
+    arrange(desc(score_mouse)) %>%
+    select(Genes = human_symbol, DDE = score_mouse) %>% 
+    as.data.frame()
 
-  # C. Executar RRHO2 (usando try para ignorar erros pontuais)
-  rrho_obj <- try(RRHO2_initialize(gene_list2, gene_list1, labels = c("Mouse", "Human"), 
-                                   log10.ind = TRUE, method = "hyper"), silent = TRUE)
+  # Identify the Biological Split Point (where DDE score crosses zero)
+  # This marks the boundary between Up-regulated and Down-regulated genes
+  split_h_val <- sum(gene_list1$DDE > 0)
+  split_m_val <- sum(gene_list2$DDE > 0)
+
+  # C. Execute RRHO2
+  # Using 'try' to skip iterations that might encounter mathematical errors
+  rrho_obj <- try(RRHO2_initialize(gene_list2, gene_list1, 
+                                   labels = c("Mouse", "Human"), 
+                                   boundary = 0.01,
+                                   log10.ind = TRUE, 
+                                   method = "hyper"), silent = TRUE)
   
   if(inherits(rrho_obj, "try-error")) next
 
-  # D. Extrair a matriz e transformar em formato longo
+  # Transform the hypermat (matrix) into a long format dataframe for ggplot2
   temp_df <- as.data.frame(rrho_obj$hypermat) %>%
     mutate(Mouse_Rank = row_number()) %>%
     pivot_longer(cols = -Mouse_Rank, names_to = "Human_Rank", values_to = "LogP") %>%
     mutate(
       Human_Rank = as.numeric(gsub("V", "", Human_Rank)),
-      pathogen = curr_pathogen,       # Adiciona etiqueta do patógeno
-      timepoint = curr_timepoint      # Adiciona etiqueta do tempo
+      pathogen = curr_pathogen,       
+      timepoint = curr_timepoint,
+      # Store the split points to draw exact quadrant boundaries later
+      split_h = split_h_val,
+      split_m = split_m_val
     )
 
-  # Armazenar na lista
   all_rrho_results[[i]] <- temp_df
 }
 
-# 3. Consolidar tudo em um único Data Frame gigante
+# Combine all results into a single final dataframe
 final_rrho_df <- bind_rows(all_rrho_results)
 
+# Save the processed data for visualization
 final_rrho_df %>% 
   saveRDS(file = here("tables", "all_human_mouse_rrho_df.rds"))
+
+
 ```
 
 
@@ -17707,90 +17739,93 @@ final_rrho_df %>%
 library(tidyverse)
 library(ggh4x)
 
-library(tidyverse)
-library(ggh4x)
+final_rrho_df_plot <- final_rrho_df %>%
+  mutate(pathogen = as.character(pathogen),
+    pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli", "Burn", "Trauma")) %>%
+    #Reorder timepoints
+  separate(timepoint, into = c("timepoint_mouse", "timepoint_human"), remove = F) %>% 
+  mutate(timepoint_mouse = fct_relevel(timepoint_mouse, c("2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7"))) %>% 
+  arrange(timepoint_mouse) %>%
+  mutate(timepoint = fct_inorder(timepoint))
 
-# --- Step 1: Calculate quadrant boundaries and extract Max LogP ---
-final_rrho_quadrants <- final_rrho_df_norm %>%
-  group_by(pathogen, timepoint) %>%
-  mutate(
-    # Explicitly use dplyr::n_distinct or max to find the center
-    mid_human = max(Human_Rank, na.rm = TRUE) / 2,
-    mid_mouse = max(Mouse_Rank, na.rm = TRUE) / 2,
+# # Find exact coordinates for the Max LogP in each quadrant ---
+# exact_labels_data <- final_rrho_df_plot %>%
+#   group_by(pathogen, timepoint) %>%
+#   mutate(
+#     mid_human = max(Human_Rank, na.rm = TRUE) / 2,
+#     mid_mouse = max(Mouse_Rank, na.rm = TRUE) / 2,
+#     
+#     # Corrected Biological Mapping:
+#     # Low Rank (1, 2, 3...) = Up-regulated
+#     # High Rank (90, 100...) = Down-regulated
+#     quadrant = case_when(
+#       Human_Rank <= mid_human & Mouse_Rank <= mid_mouse ~ "Up_Up",     # Top-Right area
+#       Human_Rank > mid_human  & Mouse_Rank > mid_mouse  ~ "Down_Down", # Bottom-Left area
+#       Human_Rank <= mid_human & Mouse_Rank > mid_mouse  ~ "Up_Down",   # Human Up / Mouse Down
+#       Human_Rank > mid_human  & Mouse_Rank <= mid_mouse ~ "Down_Up"    # Human Down / Mouse Up
+#     )
+#   ) %>%
+#   group_by(pathogen, timepoint, quadrant) %>%
+#   # Keep only the peak signal for each biological quadrant
+#   filter(LogP == max(LogP, na.rm = TRUE)) %>%
+#   slice(1) %>%
+#   ungroup()
+# 
+# #Get limits for each quadrant
+# facet_limits <- final_rrho_df_plot %>%
+#   group_by(pathogen, timepoint) %>%
+#   summarise(
+#     mid_h = max(Human_Rank, na.rm = TRUE) / 2,
+#     mid_m = max(Mouse_Rank, na.rm = TRUE) / 2,
+#     .groups = "drop"
+#   )
     
-    # Classify each pixel into one of the 4 quadrants
-    quadrant = case_when(
-      Human_Rank > mid_human  & Mouse_Rank > mid_mouse  ~ "Up_Up",
-      Human_Rank <= mid_human & Mouse_Rank <= mid_mouse ~ "Down_Down",
-      Human_Rank > mid_human  & Mouse_Rank <= mid_mouse ~ "Up_Down",
-      Human_Rank <= mid_human & Mouse_Rank > mid_mouse  ~ "Down_Up"
-    )
-  ) %>%
-  group_by(pathogen, timepoint, quadrant) %>%
-  summarise(
-    Max_LogP_Abs = max(LogP, na.rm = TRUE),
-    # Using [1] instead of first() to avoid S4 method errors
-    max_h = max(Human_Rank, na.rm = TRUE),
-    max_m = max(Mouse_Rank, na.rm = TRUE),
-    .groups = "drop_last"
-  ) %>%
-  mutate(
-    # Normalize LogP within each facet
-    Max_LogP_Norm = Max_LogP_Abs / max(Max_LogP_Abs, na.rm = TRUE)
-  ) %>%
-  ungroup()
 
-# --- Step 2: Prepare label positions ---
-# Because of scale_reverse, we place labels relative to the total rank size
-labels_data <- final_rrho_quadrants %>%
-  mutate(
-    x_pos = case_when(
-      grepl("^Up", quadrant)   ~ max_h * 0.85, # Top of the list (High Rank)
-      grepl("^Down", quadrant) ~ max_h * 0.15  # Bottom of the list (Low Rank)
-    ),
-    y_pos = case_when(
-      grepl("Up$", quadrant)   ~ max_m * 0.85,
-      grepl("Down$", quadrant) ~ max_m * 0.15
-    )
-  )
+# --- Step 2: Generate the Visualization ---
+rrho_plot <- ggplot() +
+  # A. Heatmap Layer: Essential to use the FULL dataframe (final_rrho_df)
+    geom_raster(data = final_rrho_df_plot, 
+              aes(x = Human_Rank, y = Mouse_Rank, fill = LogP),
+              interpolate = T) +
+  # # Separate quadrants
+  # geom_hline(data = facet_limits, aes(yintercept = mid_m), 
+  #            linetype = "dashed", color = "grey50", alpha = 1) +
+  # geom_vline(data = facet_limits, aes(xintercept = mid_h), 
+  #            linetype = "dashed", color = "grey50", alpha = 1) +
 
-# --- Step 3: Final Heatmap Plot ---
-
-
-rrho_plot = ggplot() +
-  # Heatmap layer
-  geom_raster(data = final_rrho_df_norm, 
-              aes(x = Human_Rank, y = Mouse_Rank, fill = LogP_Norm),
-              interpolate = TRUE) +
+  # # LABELS: Pointing to the exact location with a line
+  # geom_text_repel(data = exact_labels_data, 
+  #                 aes(x = Human_Rank, y = Mouse_Rank, label = round(LogP, 1)), 
+  #                 size = 3, 
+  #                 fontface = "bold", 
+  #                 bg.color = "white",
+  #                 # This creates a line from the text to the exact pixel
+  #                 segment.color = "black", 
+  #                 segment.size = 0.5,
+  #                 min.segment.length = 0) +
   
-  # Faceting
+  # C. Faceting: Using ggh4x for nested labels
   facet_nested_wrap(~pathogen + timepoint,
-                    scales = "free", nrow = 3,
-                    strip = strip_nested(size = "variable"), 
-                    axes = "all") +
+                    scales = "free", 
+                    nrow = 4) +
   
-  # Coordinate adjustment
+  # D. Scale Adjustments
   scale_x_reverse(expand = c(0,0)) + 
   scale_y_reverse(expand = c(0,0)) +
   
-  # Aesthetic mapping
+  # E. Color Mapping
   scale_fill_gradientn(
     colors = c("white", "#4361ee", "#a480cf", "#46eec6"),
-    values = c(0, 0.3, 0.6, 1), na.value = "white", 
-    name = "Normalized\nOverlap Intensity",
-    labels = scales::label_percent()
+    values = c(0, 0.1, 0.5, 1), 
+    na.value = "white", 
+    name =  "-log10(p-value)"
   ) +
   
-  # Quadrant Labels
-  geom_text_repel(data = labels_data, 
-            aes(x = x_pos, y = y_pos, label = round(Max_LogP_Abs, 1)), 
-            size = 3.2, color = "black", fontface = "bold") +
-  
+  # F. Labels and Styling
   labs(
     title = "Comparative RRHO2 Analysis",
-    subtitle = "Relative overlap intensity (Text: Max -log10 p-value per quadrant)",
-    x = "Human Gene Rank (Up to Down)",
-    y = "Mouse Gene Rank (Up to Down)"
+    x = "Human Gene Rank (Up-to-Down)",
+    y = "Mouse Gene Rank (Up-to-Down)"
   ) +
   theme_vaxgo() + 
   theme(aspect.ratio = 1,
@@ -17799,20 +17834,23 @@ rrho_plot = ggplot() +
         legend.position = "right",
         ggh4x.facet.nestline = element_line(colour = "black", linetype = 1))
 
+# Display and Save
 print(rrho_plot)
-rrho_plot %>%
-  ggsave(filename = here("Figures", "all_human_mouse_allgenes_rrho_heatmap_values.png"),
-         width = 12,
-         height = 8)
+
+ggsave(rrho_plot, 
+       filename = here("Figures", "all_human_mouse_rrho_heatmap.png"),
+       width = 12, height = 8)
 ```
+
+
 
 All genes
 ```{r fig.height=8, fig.width=12}
-# 1. Preparar os dados (mantendo sua lógica de rank)
+# Prepare data
 rank_data <- human_mouse_log2fc_avg_wide %>%
   filter(!is.na(mean_log2fc_human) | !is.na(mean_log2fc_mouse),
          !is.na(p_adj_human), !is.na(p_adj_mouse)) %>%
-  group_by(pathogen, timepoint) %>%
+  group_by(pathogen, timepoint_comparison) %>%
   mutate(
     score_human = -log10(p_adj_human) * sign(mean_log2fc_human),
     score_mouse = -log10(p_adj_mouse) * sign(mean_log2fc_mouse),
@@ -17821,11 +17859,11 @@ rank_data <- human_mouse_log2fc_avg_wide %>%
   ) %>%
   ungroup() %>% 
   mutate(pathogen = as.character(pathogen),
-    pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli"))
+    pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli", "Burn", "Trauma"))
 
 # Calcular os limites por grupo
 thresholds <- rank_data %>%
-  group_by(pathogen, timepoint) %>%
+  group_by(pathogen, timepoint_comparison) %>%
   summarise(
     # Encontra o maior rank entre os genes com log2fc negativo
     v_line = max(Human_Rank_Val[mean_log2fc_human < 0], na.rm = TRUE),
@@ -17837,9 +17875,9 @@ thresholds <- rank_data %>%
 rank_density_heatmap = rank_data %>% 
   ggplot() + 
   aes(x = Human_Rank_Val, y = Mouse_Rank_Val) +
-  facet_nested_wrap(~pathogen + timepoint,
+  facet_nested_wrap(~pathogen + timepoint_comparison,
                     scales = "free", 
-                    nrow = 3,
+                    nrow = 4,
                     strip = strip_nested(size = "variable"), 
                     axes = "all") +
  stat_density_2d(aes(fill = after_stat(density / sum(density))), 
@@ -17989,16 +18027,6 @@ rank_immune_density_heatmap %>%
          width = 12,
          height = 8)
 ```
-
-
-
-
-
-
-
-
-
-
 
 
 
