@@ -7023,6 +7023,271 @@ correlation_long_all_mouse_human_timepoints_summary_plot %>%
 
 
 ### Mean and GSEA
+
+#### Sample-wise analysis
+
+##### Immune: Summarize inter-individual correlation
+Annotate genes log2fc table with BTMs
+
+```{r}
+#Import BTMs annotation table
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+
+filename = "all_human_mouse"
+
+samples_log2fc = readRDS(file = here("tables", "all_human_mouse_samples_log2fc.rds")) 
+
+samples_annotation = readRDS(file = here("tables", "all_human_mouse_metadata.rds"))
+
+#Annotate genes by BTM 
+dge_btm_mean_process_samples = samples_log2fc %>% 
+  select(-timepoint) %>% 
+  inner_join(samples_annotation, by = "geo_sample") %>% 
+  ungroup() %>% 
+  select(symbol = human_symbol, participant_id, geo_sample, timepoint, log2fc, organism, pathogen, treatment) %>% 
+  inner_join(btm_annotation_genes, by = "symbol")
+
+#Duplicate infection timepoints in human to match the mouse
+dge_btm_mean_process_samples_matched = 
+  bind_rows(
+  dge_btm_mean_process_samples %>% 
+    filter(organism == "Mouse" | !(pathogen %in% c("Staphylococcus aureus", "Escherichia coli"))),
+  
+  dge_btm_mean_process_samples %>%
+    filter(organism == "Human", 
+           pathogen %in% c("Staphylococcus aureus", "Escherichia coli")) %>%
+    select(-timepoint) %>% 
+    inner_join(
+      dge_btm_mean_process_samples %>%
+        filter(organism == "Mouse",
+               pathogen %in% c("Staphylococcus aureus", "Escherichia coli")) %>%
+        select(pathogen, timepoint) %>%
+        distinct(),
+      by = "pathogen",
+      relationship = "many-to-many"
+    )
+)
+
+
+dge_btm_mean_process_samples_matched %>% 
+  filter(pathogen == "Staphylococcus aureus",
+         timepoint == "2h",
+         organism == "Human")
+
+#Save
+# dge_btm_mean_process_samples %>% saveRDS(file = here("Tables", paste0(filename, "_dge_btm_samples_log2fc_long.rds")))
+
+#Pivot wider
+dge_btm_mean_process = dge_btm_mean_process_samples_matched %>%
+  mutate(condition = paste0(participant_id, "_Day", timepoint),
+         timepoint = as.character(timepoint)) %>% 
+  group_by(pathogen, participant_id, timepoint, process) %>% 
+  summarise(mean_log2fc = mean(log2fc, na.rm = T)) %>%
+  pivot_wider(names_from = "participant_id", values_from = "mean_log2fc") %>% 
+  inner_join(btm_annotation_genes %>% 
+               select(process, group, subgroup) %>% 
+               distinct(),
+             by = "process") %>% 
+  ungroup()
+
+#Print
+dge_btm_mean_process_samples_matched %>% 
+  dplyr::count(pathogen,  organism, timepoint)
+
+#Save
+# dge_btm_mean_process %>% saveRDS(file = here("Tables", paste0(filename, "_dge_btm_samples_log2fc.rds")))
+
+```
+
+Import data
+
+```{r}
+
+#Calculate the mean log2fc by module
+dge_btm_mean_process_sample_long = dge_btm_mean_process_samples_matched %>% 
+  group_by(pathogen, organism, participant_id, timepoint, process) %>% 
+  summarise(group,
+            mean_log2fc = mean(log2fc, na.rm = T)) %>% 
+  distinct() %>% 
+  ungroup()
+
+dge_btm_mean_process_sample_long %>% 
+  filter(pathogen == "Staphylococcus aureus") 
+
+#Check
+dge_btm_mean_process_sample_long %>% 
+  dplyr::count(pathogen, organism, timepoint) 
+  
+```
+
+1 individual vs 1 individual
+
+```{r}
+# Prepare long-format table of mean log2FC per sample and process
+btm_samples_long = dge_btm_mean_process_sample_long %>% 
+  select(pathogen, organism, process, participant_id, timepoint, mean_log2fc) %>% 
+  distinct() %>% 
+  mutate(condition = paste0(pathogen, "_", participant_id, "_", timepoint)) %>% 
+  drop_na()
+
+# Annotation table
+btm_samples_annotation = btm_samples_long %>% 
+  select(pathogen, organism, participant_id, timepoint, condition) %>% 
+  distinct()
+
+# Pivot to wide format
+btm_samples_wide_all = btm_samples_long %>% 
+  select(-pathogen, -timepoint, -organism, -participant_id) %>% 
+  pivot_wider(names_from = "condition",
+              values_from = "mean_log2fc") %>% 
+  column_to_rownames("process")
+
+# Compute Correlations and p-values between all conditions
+cor_btm_samples_wide_all = btm_samples_wide_all %>% 
+  as.matrix() %>% 
+  rcorr(type = "pearson")
+
+# Convert correlation matrix to long format
+cor_btm_samples_wide_all_r = cor_btm_samples_wide_all$r %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "correlation")
+
+# Convert p-value matrix to long format
+cor_btm_samples_wide_all_p = cor_btm_samples_wide_all$P %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "p_value")
+
+# Join correlations, p-values, and sample annotations
+correlation_long_all_btm_mouse_human_timepoints_summary = cor_btm_samples_wide_all_r %>% 
+  inner_join(cor_btm_samples_wide_all_p, 
+             by = join_by("condition1", "condition2")) %>% 
+  inner_join(btm_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition1")) %>% 
+               rename(condition1 = condition_condition1),
+             by = "condition1") %>% 
+  inner_join(btm_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition2")) %>% 
+               rename(condition2 = condition_condition2),
+             by = "condition2") %>% 
+  
+  mutate(pathogen1 = str_split_i(condition1, "_", 1),
+         pathogen2 = str_split_i(condition2, "_", 1)) %>% 
+
+  # Remove symmetric duplicates 
+  filter(condition1 < condition2,
+         pathogen1 == pathogen2) %>% 
+
+  # Keep Human as reference when comparing human and mouse
+  filter(!(organism_condition1 == "Mouse" & organism_condition2 == "Human")) %>% 
+
+  # Annotate comparison type and timepoints
+  mutate(comparison = paste0(organism_condition1, " vs. ", organism_condition2),
+         timepoint_comparison = paste0(timepoint_condition1, "-", timepoint_condition2),
+         pathogen = pathogen1) %>% 
+
+  # Compute summary statistics per comparison and timepoint
+  group_by(pathogen, comparison, timepoint_comparison) %>% 
+  mutate(
+    mean = mean(correlation, na.rm = T),
+    sd   = sd(correlation, na.rm = TRUE),
+    n = n(),
+    se   = sd / sqrt(n),
+    tval = qt(0.975, df = n - 1),
+    ci_low  = mean - tval * se,
+    ci_high = mean + tval * se
+  ) %>% 
+  ungroup() %>% 
+  select(comparison, pathogen, timepoint_condition1, timepoint_condition2, mean:ci_high) %>% 
+  distinct() %>% 
+  arrange(comparison) %>% 
+  #Filter only matching conditions
+  filter(timepoint_condition1 == timepoint_condition2) %>% 
+  mutate(timepoint = timepoint_condition1)
+
+# Save output
+# correlation_long_all_btm_mouse_human_timepoints_summary %>% 
+#   saveRDS(file = here("tables", paste0(filename, "_samples_btm_correlation_all_timepoints_summary.rds")))
+correlation_long_all_btm_mouse_human_timepoints_summary
+
+```
+
+Plot scatterplot
+
+```{r fig.height=2, fig.width=12}
+#Import
+
+#Scatterplot
+correlation_long_all_btm_mouse_human_timepoints_summary_plot = correlation_long_all_btm_mouse_human_timepoints_summary %>% 
+  mutate(pathogen = case_when(pathogen == "Staphylococcus aureus" ~ "S. aureus",
+                             pathogen == "Escherichia coli" ~ "E. coli", 
+                             T~pathogen),
+         pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "S. aureus", "E. coli", "Burn", "Trauma"),
+         timepoint = case_when(timepoint == "Early Hours"~"Early hr",
+                               T ~timepoint),
+         timepoint = fct_relevel(timepoint, c("Early hr", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7"))) %>% 
+  ggplot() +
+  aes(x = timepoint,
+      y = mean,
+      group = comparison,
+      color = comparison,
+      fill = comparison) +
+  geom_line(size = 1) +
+  facet_wrap(~pathogen, scales = "free_x",
+                    # space = "free_x",
+                    nrow = 1) +
+  geom_errorbar(aes(ymin = ci_low, 
+                  ymax = ci_high), width = 0.2,
+                 size = 0.5) +
+  geom_point(pch = 21, fill = "white", size = 1.5, stroke = 1) +
+  geom_hline(yintercept = 0, linetype = 2, color = "black") +
+  scale_x_discrete(expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01),
+                     limits = c(-0.2, 1)) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  scale_fill_manual(values = c("Human vs. Mouse" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  labs(
+      # title = "Correlation between organisms,\nBTMs, Means",
+       x = "Time",
+       y = "Correlation",
+       color = "Comparison") +
+   #Theme
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 0, size = 8),
+          axis.text.y = element_text(size = 8),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 8),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 8),
+          panel.spacing = unit(2, "lines"),
+          plot.margin = margin(0, 0.5, 0, 0.5, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 8, hjust = 0),
+          legend.title = element_text(size = 8)
+          ) +
+  guides(fill = "none") 
+
+correlation_long_all_btm_mouse_human_timepoints_summary_plot
+
+correlation_long_all_btm_mouse_human_timepoints_summary_plot %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_samples_btm_correlation_all_timepoints_summary_plot.png")),
+         width = 10,
+         height = 2)
+
+```
+
+
 #### Condition-wise analysis
 
 ##### Immune
@@ -7934,6 +8199,39 @@ leading_edges_plots %>%
   ggsave(filename = here("Figures", paste0("all_human_mouse_gsea_btm_results_leadingedge_core_", process_selected, ".png")),
          width = 20,
          height = 16)
+```
+
+
+```{r fig.height=12, fig.width=20}
+#Shortened version
+leading_edges_plots_short = (
+  (df_test_scatter + theme(legend.position = "top")) / 
+  plot_spacer() / 
+  (df_test_ranked_plot + theme(legend.position = "none"))
+) +
+plot_layout(
+  guides = "collect",
+  heights = c(1, -0.2, 1) 
+) +
+plot_annotation(
+  theme = theme(
+    legend.position = "top",
+    plot.margin = margin(1, 1,1,1, "pt")
+  )
+) & 
+theme(
+  panel.spacing = unit(0, "lines"),
+  # plot.margin = margin(0, 2, 0, 2, "pt"),
+   legend.margin=margin(0,0,0,0),
+   legend.box.margin=margin(1,0,-10,0),
+   plot.margin = margin(0.5, 0.5, 0.5, 0.5, unit = "cm")
+)
+leading_edges_plots_short
+
+leading_edges_plots_short %>%
+  ggsave(filename = here("Figures", paste0("all_human_mouse_gsea_btm_results_leadingedge_core_short_", process_selected, ".png")),
+         width = 20,
+         height = 12)
 
 
 ```
