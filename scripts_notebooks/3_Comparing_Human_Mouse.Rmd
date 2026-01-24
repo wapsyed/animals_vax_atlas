@@ -4408,8 +4408,1307 @@ correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot %>%
   
 ```
 
+#===========================
+#5. Burn
+
+## Functional analysis
+
+### Immune
+
+BTMs correlation, intra- and inter-species
+
+#### Mean Log2FC
+
+Compare means and NES Import
+
+```{r}
+#Import datasets ------
+#Import DGE output
+all_degs_human_mouse = readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
+  filter(pathogen == "Burn")
+
+#Import BTMs annotation table
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+
+filename = "burn_human_mouse"
+
+#Clean metadata 
+annotation_conditions = all_degs_human_mouse %>% 
+  select(condition, timepoint, model = organism) %>% 
+  distinct()
+
+#Get calculate means -----
+#Annotate genes by BTM 
+dge_btm_process_genes = all_degs_human_mouse %>% 
+  rename(symbol = human_symbol) %>% 
+  ungroup() %>% 
+  inner_join(btm_annotation_genes, by = "symbol") %>% 
+  filter(organism %in% c("Human", "Mouse")) 
+
+dge_btm_process_genes %>% 
+  saveRDS(file = here("tables", paste0(filename, "_dge_btm_process_genes.rds")))
+
+dge_btm_mean_process = dge_btm_process_genes %>% 
+  group_by(organism, timepoint, process) %>% 
+  summarise(mean_log2fc = mean(mean_l2fc),
+            median_log2fc = median(mean_l2fc), 
+            sd_log2fc = sd(mean_l2fc),
+            var_log2fc = var(mean_l2fc),
+            n_genes = n(),
+            organism, pathogen,
+            group, subgroup) %>%
+  distinct() %>% 
+  ungroup() %>% 
+  mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
+
+pvals_vs_zero <- dge_btm_process_genes %>%
+  group_by(organism, pathogen, timepoint, process) %>%
+  filter(n() >= 2) %>% 
+  rstatix::t_test(mean_l2fc ~ 1, mu = 0) %>%     
+  adjust_pvalue(method = "BH") %>%     
+  add_significance()
+
+dge_btm_process_genes %>%
+  dplyr::count(organism, pathogen, timepoint, process) %>%
+  filter(n < 2)
+
+dge_btm_mean_process <- dge_btm_mean_process %>%
+  left_join(
+    pvals_vs_zero %>% 
+      select(organism, pathogen, timepoint, process, p, p_adjust = p.adj),
+    by = c("organism", "pathogen", "timepoint", "process")
+  )  
+
+#Print
+dge_btm_mean_process %>% 
+  saveRDS(file = here("tables", paste0(filename, "_dge_btm_mean_process.rds")))
+```
+
+#### GSEA
+
+```{r message=FALSE, warning=FALSE}
+# Gene set enrichment analysis (GSEA) --------
+#Run GSEA for DGE outputs-----
+#Human ImmuneGO/BTMs
+term2gene = btm_annotation_genes %>% 
+  select(process, genes = symbol)
+
+#Clean table for GSEA standard
+df_genes2GSEA <- all_degs_human_mouse %>% 
+  distinct() %>% 
+  select(organism, pathogen, timepoint, 
+         genes = human_symbol, log2fold_change = mean_l2fc, adj_p_val)  %>% 
+  filter(!is.na(genes), !is.na(log2fold_change)) %>%
+   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint),
+          log2fold_change_logp = log2fold_change * -log(adj_p_val)) %>% 
+  select(condition, genes, rank = log2fold_change_logp)
 
 
+#Run multiple GSEA and unite means
+gsea_btm_output = autoGSEA(df = df_genes2GSEA,
+         TERM2GENE = term2gene,
+         geneset_name = "BTM")
+
+
+gsea_btm_results = gsea_btm_output$gsea %>% 
+  as.data.frame() %>% 
+  clean_names() %>% 
+  rename(process = id) %>%
+  #Unite means and GSEA
+  inner_join(dge_btm_mean_process %>% 
+              rename(p_adjust_mean = p_adjust), by = join_by("condition", "process"))
+  
+  
+#Save
+gsea_btm_results %>% 
+    saveRDS(here("tables", paste0(filename, "_gsea_btm_results.rds")))
+```
+
+
+### MSigDB Hallmarks
+
+#### Mean Log2FC
+
+```{r fig.width=10, fig.height= 8}
+#Import datasets ------
+#Import DGE output
+all_degs_human_mouse = readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
+  filter(pathogen == "Burn")
+
+#Import BTMs annotation table
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+
+filename = "burn_human_mouse"
+
+#Clean metadata 
+annotation_conditions = all_degs_human_mouse %>% 
+  select(condition, timepoint, model = organism) %>% 
+  distinct() 
+
+# Import Hallmarks -------
+
+msigdbr_grouped = read_csv(file = here("tables", "msigdb_hallmarks_grouped_genes.csv"))
+
+# Gene set enrichment analysis (GSEA) --------
+#Get calculate means -----
+#Annotate genes by BTM 
+
+dge_hallmarks_process_genes = all_degs_human_mouse %>% 
+  rename(symbol = human_symbol) %>% 
+  ungroup() %>% 
+  inner_join(msigdbr_grouped, by = "symbol")
+
+dge_hallmarks_process_genes %>% 
+  saveRDS(file = here("tables", paste0(filename, "_dge_hallmarks_process_genes.rds")))
+
+dge_hallmarks_mean_process = dge_hallmarks_process_genes %>% 
+  group_by(organism, timepoint, process) %>% 
+  summarise(mean_log2fc = mean(mean_l2fc),
+            median_log2fc = median(mean_l2fc),
+            sd_log2fc = sd(mean_l2fc),
+            var_log2fc = var(mean_l2fc),
+            n_genes = n(),
+            organism, pathogen) %>%
+  distinct() %>% 
+  ungroup() %>% 
+  mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
+
+pvals_vs_zero <- dge_hallmarks_process_genes %>%
+  group_by(organism, pathogen, timepoint, process) %>%
+  filter(n() >= 2) %>% 
+  rstatix::t_test(mean_l2fc ~ 1, mu = 0) %>%     
+  rstatix::adjust_pvalue(method = "BH") %>%     
+  rstatix::add_significance()
+
+dge_hallmarks_process_genes %>%
+  dplyr::count(organism, pathogen, timepoint, process) %>%
+  filter(n < 2)
+
+dge_hallmarks_mean_process <- dge_hallmarks_mean_process %>%
+  left_join(
+    pvals_vs_zero %>% 
+      select(organism, pathogen, timepoint, process, p, p_adjust = p.adj),
+    by = c("organism", "pathogen", "timepoint", "process")
+  ) %>% 
+  clean_names()
+
+#Print
+dge_hallmarks_mean_process %>% 
+  saveRDS(file = here("tables", paste0(filename, "_dge_hallmarks_mean_process.rds")))
+```
+
+#### GSEA
+
+```{r message=FALSE, warning=TRUE}
+#Run GSEA for DGE outputs-----
+#Human ImmuneGO/BTMs
+term2gene = msigdbr_grouped  %>% 
+  select(process, genes = symbol)
+
+#Clean table for GSEA standard
+df_genes2GSEA <- all_degs_human_mouse %>% 
+  distinct() %>% 
+  select(organism, pathogen, timepoint, 
+         genes = human_symbol, log2fold_change = mean_l2fc, adj_p_val)  %>% 
+  filter(!is.na(genes), !is.na(log2fold_change)) %>%
+   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint),
+          log2fold_change_logp = log2fold_change * -log(adj_p_val)) %>% 
+  select(condition, genes, rank = log2fold_change_logp)
+
+#Run multiple GSEA and unite means
+gsea_hallmarks_output = autoGSEA(df = df_genes2GSEA,
+         TERM2GENE = term2gene,
+         geneset_name = "MSigDB Hallmarks")
+
+
+gsea_hallmarks_results = gsea_hallmarks_output$gsea %>% 
+  as.data.frame() %>% 
+  clean_names() %>% 
+  rename(process = id) %>%
+  #Unite means and GSEA
+  full_join(dge_hallmarks_mean_process %>% 
+              rename(p_adjust_mean = p_adjust), by = join_by("condition", "process"))
+  
+  
+#Save
+gsea_hallmarks_results %>% 
+    saveRDS(here("tables", paste0(filename, "_gsea_hallmarks_results.rds")))
+```
+
+
+### Sample-wise analysis
+
+#### Means (BTM)
+
+Annotate genes log2fc table with BTMs
+
+```{r}
+#Import BTMs annotation table
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+
+filename = "burn_human_mouse"
+
+samples_log2fc = readRDS(file = here("tables", "all_human_mouse_samples_log2fc.rds")) 
+
+samples_annotation = readRDS(file = here("tables", "all_human_mouse_metadata.rds")) %>% 
+  filter(pathogen == "Burn")
+
+#Annotate genes by BTM 
+results_genes_btm_df = samples_log2fc %>% 
+  select(-timepoint) %>% 
+  inner_join(samples_annotation, by = "geo_sample") %>% 
+  ungroup() %>% 
+  select(symbol = human_symbol, participant_id, geo_sample, timepoint, log2fc, organism) %>% 
+  inner_join(btm_annotation_genes, by = "symbol")
+
+#Save
+results_genes_btm_df %>% saveRDS(file = here("Tables", paste0(filename, "_dge_btm_samples_log2fc_long.rds")))
+
+#Pivot wider
+dge_btm_mean_process = results_genes_btm_df %>%
+  mutate(condition = paste0(participant_id, "_Day", timepoint),
+         timepoint = as.character(timepoint)) %>% 
+  group_by(participant_id, timepoint, process) %>% 
+  summarise(mean_log2fc = mean(log2fc)) %>%
+  pivot_wider(names_from = "participant_id", values_from = "mean_log2fc") %>% 
+  inner_join(btm_annotation_genes %>% 
+               select(process, group, subgroup) %>% 
+               distinct(),
+             by = "process") %>% 
+  ungroup()
+
+#Print
+dge_btm_mean_process
+
+#Save
+dge_btm_mean_process %>% saveRDS(file = here("Tables", paste0(filename, "_dge_btm_samples_log2fc.rds")))
+
+```
+
+Import data
+
+```{r}
+#Genes L2FC table annotated with BTMs
+dge_btm_mean_process_samples = readRDS(file = here("tables", "burn_human_mouse_dge_btm_samples_log2fc_long.rds")) 
+
+#Import metadata
+mouse_human_metadata = readRDS(file = here("tables", "all_human_mouse_metadata.rds")) %>% 
+  filter(pathogen == "Burn")
+
+#Calculate the mean log2fc by module
+dge_btm_mean_process_sample_long = dge_btm_mean_process_samples %>% 
+  group_by(organism, participant_id, timepoint, process) %>% 
+  summarise(group,
+            mean_log2fc = mean(log2fc, na.rm = T)) %>% 
+  distinct() %>% 
+  ungroup()
+
+#Check
+dge_btm_mean_process_sample_long %>% 
+  dplyr::count(timepoint)
+  
+```
+
+
+
+##### Summarize inter-individual correlation
+
+1 individual vs 1 individual
+
+```{r}
+# Prepare long-format table of mean log2FC per sample and process
+btm_samples_long = dge_btm_mean_process_sample_long %>% 
+  select(organism, process, participant_id, timepoint, mean_log2fc) %>% 
+  distinct() %>% 
+  mutate(condition = paste0(participant_id, "_", timepoint)) 
+
+# Annotation table
+btm_samples_annotation = btm_samples_long %>% 
+  select(organism, participant_id, timepoint, condition) %>% 
+  distinct()
+
+# Pivot to wide format
+btm_samples_wide_all = btm_samples_long %>% 
+  select(-timepoint, -organism, -participant_id) %>% 
+  pivot_wider(names_from = "condition",
+              values_from = "mean_log2fc") %>% 
+  column_to_rownames("process")
+
+# Compute Correlations and p-values between all conditions
+cor_btm_samples_wide_all = btm_samples_wide_all %>% 
+  as.matrix() %>% 
+  rcorr(type = "spearman")
+
+# Convert correlation matrix to long format
+cor_btm_samples_wide_all_r = cor_btm_samples_wide_all$r %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "correlation")
+
+# Convert p-value matrix to long format
+cor_btm_samples_wide_all_p = cor_btm_samples_wide_all$P %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "p_value")
+
+# Join correlations, p-values, and sample annotations
+correlation_long_all_btm_mouse_human_timepoints_summary = cor_btm_samples_wide_all_r %>% 
+  inner_join(cor_btm_samples_wide_all_p, 
+             by = join_by("condition1", "condition2")) %>% 
+  inner_join(btm_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition1")) %>% 
+               rename(condition1 = condition_condition1),
+             by = "condition1") %>% 
+  inner_join(btm_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition2")) %>% 
+               rename(condition2 = condition_condition2),
+             by = "condition2") %>% 
+
+  # Remove symmetric duplicates 
+  filter(condition1 < condition2) %>% 
+
+  # Keep Human as reference when comparing human and mouse
+  filter(!(organism_condition1 == "Mouse" & organism_condition2 == "Human")) %>% 
+
+  # Annotate comparison type and timepoints
+  mutate(comparison = paste0(organism_condition1, " vs. ", organism_condition2),
+         timepoint_comparison = paste0(timepoint_condition1, "-", timepoint_condition2)) %>% 
+
+  # Compute summary statistics per comparison and timepoint
+  group_by(comparison, timepoint_comparison) %>% 
+  mutate(
+    mean = mean(correlation, na.rm = T),
+    sd   = sd(correlation, na.rm = TRUE),
+    n = n(),
+    se   = sd / sqrt(n),
+    tval = qt(0.975, df = n - 1),
+    ci_low  = mean - tval * se,
+    ci_high = mean + tval * se
+  ) %>% 
+  ungroup() %>% 
+  select(comparison, timepoint_condition1, timepoint_condition2, mean:ci_high) %>% 
+  distinct() %>% 
+  arrange(comparison) %>% 
+  #Filter only matching conditions
+  filter(timepoint_condition1 == timepoint_condition2) %>% 
+  mutate(timepoint = timepoint_condition1)
+
+# Save output
+correlation_long_all_btm_mouse_human_timepoints_summary %>% 
+  saveRDS(file = here("tables", paste0(filename, "_samples_btm_correlation_all_timepoints_summary.rds")))
+correlation_long_all_btm_mouse_human_timepoints_summary
+
+```
+
+Plot scatterplot
+
+```{r fig.height=3, fig.width=5}
+#Import
+
+#Scatterplot
+correlation_long_all_btm_mouse_human_timepoints_summary_plot = correlation_long_all_btm_mouse_human_timepoints_summary %>% 
+  ggplot() +
+  aes(x = timepoint,
+      y = mean,
+      group = comparison,
+      color = comparison,
+      fill = comparison) +
+  geom_line(size = 1) +
+
+  geom_errorbar(aes(ymin = ci_low, 
+                  ymax = ci_high), width = 0.2,
+                 size = 0.5) +
+  geom_point(pch = 21, fill = "white", size = 2, stroke = 1.5) +
+  scale_x_discrete(expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01),
+                     limits = c(0, 1)) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  scale_fill_manual(values = c("Human vs. Mouse" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  labs(title = "Correlation between organisms,\nBTMs, Means",
+       x = "Hour",
+       y = "Correlation",
+       color = "Comparison") +
+  theme(legend.position = "right") +
+  guides(fill = "none") 
+
+correlation_long_all_btm_mouse_human_timepoints_summary_plot
+
+correlation_long_all_btm_mouse_human_timepoints_summary_plot %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_samples_btm_correlation_all_timepoints_summary_plot.png")),
+         width = 5,
+         height = 3)
+
+```
+
+#### Means (Hallmarks)
+
+Annotate genes log2fc table with Hallmarks
+
+```{r}
+#Get annotated processes
+msigdbr_grouped = read_csv(file = here("tables", "msigdb_hallmarks_grouped_genes.csv"))
+
+filename = "burn_human_mouse"
+
+samples_log2fc = readRDS(file = here("tables", "all_human_mouse_samples_log2fc.rds")) 
+
+samples_annotation = readRDS(file = here("tables", "all_human_mouse_metadata.rds")) %>% 
+  filter(pathogen == "Burn")
+
+#Annotate genes by hallmarks 
+results_genes_hallmarks_df = samples_log2fc %>% 
+  select(-timepoint) %>% 
+  inner_join(samples_annotation, by = "geo_sample") %>% 
+  ungroup() %>% 
+  select(symbol = human_symbol, participant_id, geo_sample, timepoint, log2fc, organism) %>% 
+  inner_join(msigdbr_grouped, by = "symbol")
+
+#Save
+results_genes_hallmarks_df %>% saveRDS(file = here("Tables", paste0(filename, "_dge_hallmarks_samples_log2fc_long.rds")))
+
+#Pivot wider
+dge_hallmarks_mean_process = results_genes_hallmarks_df %>%
+  mutate(condition = paste0(participant_id, "_Day", timepoint),
+         timepoint = as.character(timepoint)) %>% 
+  group_by(participant_id, timepoint, process) %>% 
+  summarise(mean_log2fc = mean(log2fc)) %>%
+  pivot_wider(names_from = "participant_id", values_from = "mean_log2fc") %>% 
+  inner_join(msigdbr_grouped %>% 
+               select(process, group) %>% 
+               distinct(),
+             by = "process") %>% 
+  ungroup()
+
+#Print
+dge_hallmarks_mean_process
+
+#Save
+dge_hallmarks_mean_process %>% saveRDS(file = here("Tables", paste0(filename, "_dge_hallmarks_samples_log2fc.rds")))
+
+```
+
+Import data
+
+```{r}
+#Genes L2FC table annotated with hallmarks
+dge_hallmarks_mean_process_samples = readRDS(file = here("tables", "burn_human_mouse_dge_hallmarks_samples_log2fc_long.rds")) 
+
+#Import metadata
+mouse_human_metadata = readRDS(file = here("tables", "all_human_mouse_metadata.rds")) %>% 
+  filter(pathogen == "Burn")
+
+#Calculate the mean log2fc by module
+dge_hallmarks_mean_process_sample_long = dge_hallmarks_mean_process_samples %>% 
+  group_by(organism, participant_id, timepoint, process) %>% 
+  summarise(group,
+            mean_log2fc = mean(log2fc, na.rm = T)) %>% 
+  distinct() %>% 
+  ungroup()
+
+#Check
+dge_hallmarks_mean_process_sample_long %>% 
+  dplyr::count(timepoint)
+  
+```
+
+
+##### Summarize inter-individual correlation
+
+1 individual vs 1 individual
+
+```{r}
+# Prepare long-format table of mean log2FC per sample and process
+hallmarks_samples_long = dge_hallmarks_mean_process_sample_long %>% 
+  select(organism, process, participant_id, timepoint, mean_log2fc) %>% 
+  distinct() %>% 
+  mutate(condition = paste0(participant_id, "_", timepoint)) 
+
+# Annotation table
+hallmarks_samples_annotation = hallmarks_samples_long %>% 
+  select(organism, participant_id, timepoint, condition) %>% 
+  distinct()
+
+# Pivot to wide format
+hallmarks_samples_wide_all = hallmarks_samples_long %>% 
+  select(-timepoint, -organism, -participant_id) %>% 
+  pivot_wider(names_from = "condition",
+              values_from = "mean_log2fc") %>% 
+  column_to_rownames("process")
+
+# Compute Correlations and p-values between all conditions
+cor_hallmarks_samples_wide_all = hallmarks_samples_wide_all %>% 
+  as.matrix() %>% 
+  rcorr(type = "spearman")
+
+# Convert correlation matrix to long format
+cor_hallmarks_samples_wide_all_r = cor_hallmarks_samples_wide_all$r %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "correlation")
+
+# Convert p-value matrix to long format
+cor_hallmarks_samples_wide_all_p = cor_hallmarks_samples_wide_all$P %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "p_value")
+
+# Join correlations, p-values, and sample annotations
+correlation_long_all_hallmarks_mouse_human_timepoints_summary = cor_hallmarks_samples_wide_all_r %>% 
+  inner_join(cor_hallmarks_samples_wide_all_p, 
+             by = join_by("condition1", "condition2")) %>% 
+  inner_join(hallmarks_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition1")) %>% 
+               rename(condition1 = condition_condition1),
+             by = "condition1") %>% 
+  inner_join(hallmarks_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition2")) %>% 
+               rename(condition2 = condition_condition2),
+             by = "condition2") %>% 
+
+  # Remove symmetric duplicates 
+  filter(condition1 < condition2) %>% 
+
+  # Keep Human as reference when comparing human and mouse
+  filter(!(organism_condition1 == "Mouse" & organism_condition2 == "Human")) %>% 
+
+  # Annotate comparison type and timepoints
+  mutate(comparison = paste0(organism_condition1, " vs. ", organism_condition2),
+         timepoint_comparison = paste0(timepoint_condition1, "-", timepoint_condition2)) %>% 
+
+  # Compute summary statistics per comparison and timepoint
+  group_by(comparison, timepoint_comparison) %>% 
+  mutate(
+    mean = mean(correlation, na.rm = T),
+    sd   = sd(correlation, na.rm = TRUE),
+    n = n(),
+    se   = sd / sqrt(n),
+    tval = qt(0.975, df = n - 1),
+    ci_low  = mean - tval * se,
+    ci_high = mean + tval * se
+  ) %>% 
+  ungroup() %>% 
+  select(comparison, timepoint_condition1, timepoint_condition2, mean:ci_high) %>% 
+  distinct() %>% 
+  arrange(comparison) %>% 
+  #Filter only matching conditions
+  filter(timepoint_condition1 == timepoint_condition2) %>% 
+  mutate(timepoint = timepoint_condition1)
+
+# Save output
+correlation_long_all_hallmarks_mouse_human_timepoints_summary %>% 
+  saveRDS(file = here("tables", paste0(filename, "_samples_hallmarks_correlation_all_timepoints_summary.rds")))
+correlation_long_all_hallmarks_mouse_human_timepoints_summary
+
+```
+
+Plot scatterplot
+
+```{r fig.height=3, fig.width=5}
+#Import
+
+#Scatterplot
+correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot = correlation_long_all_hallmarks_mouse_human_timepoints_summary %>% 
+  ggplot() +
+  aes(x = timepoint,
+      y = mean,
+      group = comparison,
+      color = comparison,
+      fill = comparison) +
+  geom_line(size = 1) +
+
+  geom_errorbar(aes(ymin = ci_low, 
+                  ymax = ci_high), width = 0.2,
+                 size = 0.5) +
+  geom_point(pch = 21, fill = "white", size = 2, stroke = 1.5) +
+  scale_x_discrete(expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01),
+                     limits = c(0, 1)) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  scale_fill_manual(values = c("Human vs. Mouse" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  labs(title = "Correlation between organisms,\nHallmarks, Means",
+       x = "Hour",
+       y = "Correlation",
+       color = "Comparison") +
+  theme(legend.position = "right") +
+  guides(fill = "none") 
+
+correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot
+
+correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_samples_hallmarks_correlation_all_timepoints_summary_plot.png")),
+         width = 5,
+         height = 3)
+
+```
+
+#===========================
+#6. Trauma
+
+## Functional analysis
+
+### Immune
+
+BTMs correlation, intra- and inter-species
+
+#### Mean Log2FC
+
+Compare means and NES Import
+
+```{r}
+#Import datasets ------
+#Import DGE output
+all_degs_human_mouse = readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
+  filter(pathogen == "Trauma")
+
+#Import BTMs annotation table
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+
+filename = "trauma_human_mouse"
+
+#Clean metadata 
+annotation_conditions = all_degs_human_mouse %>% 
+  select(condition, timepoint, model = organism) %>% 
+  distinct()
+
+#Get calculate means -----
+#Annotate genes by BTM 
+dge_btm_process_genes = all_degs_human_mouse %>% 
+  rename(symbol = human_symbol) %>% 
+  ungroup() %>% 
+  inner_join(btm_annotation_genes, by = "symbol") %>% 
+  filter(organism %in% c("Human", "Mouse")) 
+
+dge_btm_process_genes %>% 
+  saveRDS(file = here("tables", paste0(filename, "_dge_btm_process_genes.rds")))
+
+dge_btm_mean_process = dge_btm_process_genes %>% 
+  group_by(organism, timepoint, process) %>% 
+  summarise(mean_log2fc = mean(mean_l2fc),
+            median_log2fc = median(mean_l2fc), 
+            sd_log2fc = sd(mean_l2fc),
+            var_log2fc = var(mean_l2fc),
+            n_genes = n(),
+            organism, pathogen,
+            group, subgroup) %>%
+  distinct() %>% 
+  ungroup() %>% 
+  mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
+
+pvals_vs_zero <- dge_btm_process_genes %>%
+  group_by(organism, pathogen, timepoint, process) %>%
+  filter(n() >= 2) %>% 
+  rstatix::t_test(mean_l2fc ~ 1, mu = 0) %>%     
+  adjust_pvalue(method = "BH") %>%     
+  add_significance()
+
+dge_btm_process_genes %>%
+  dplyr::count(organism, pathogen, timepoint, process) %>%
+  filter(n < 2)
+
+dge_btm_mean_process <- dge_btm_mean_process %>%
+  left_join(
+    pvals_vs_zero %>% 
+      select(organism, pathogen, timepoint, process, p, p_adjust = p.adj),
+    by = c("organism", "pathogen", "timepoint", "process")
+  )  
+
+#Print
+dge_btm_mean_process %>% 
+  saveRDS(file = here("tables", paste0(filename, "_dge_btm_mean_process.rds")))
+```
+
+#### GSEA
+
+```{r message=FALSE, warning=FALSE}
+# Gene set enrichment analysis (GSEA) --------
+#Run GSEA for DGE outputs-----
+#Human ImmuneGO/BTMs
+term2gene = btm_annotation_genes %>% 
+  select(process, genes = symbol)
+
+#Clean table for GSEA standard
+df_genes2GSEA <- all_degs_human_mouse %>% 
+  distinct() %>% 
+  select(organism, pathogen, timepoint, 
+         genes = human_symbol, log2fold_change = mean_l2fc, adj_p_val)  %>% 
+  filter(!is.na(genes), !is.na(log2fold_change)) %>%
+   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint),
+          log2fold_change_logp = log2fold_change * -log(adj_p_val)) %>% 
+  select(condition, genes, rank = log2fold_change_logp)
+
+
+#Run multiple GSEA and unite means
+gsea_btm_output = autoGSEA(df = df_genes2GSEA,
+         TERM2GENE = term2gene,
+         geneset_name = "BTM")
+
+
+gsea_btm_results = gsea_btm_output$gsea %>% 
+  as.data.frame() %>% 
+  clean_names() %>% 
+  rename(process = id) %>%
+  #Unite means and GSEA
+  inner_join(dge_btm_mean_process %>% 
+              rename(p_adjust_mean = p_adjust), by = join_by("condition", "process"))
+  
+  
+#Save
+gsea_btm_results %>% 
+    saveRDS(here("tables", paste0(filename, "_gsea_btm_results.rds")))
+```
+
+
+### MSigDB Hallmarks
+
+#### Mean Log2FC
+
+```{r fig.width=10, fig.height= 8}
+#Import datasets ------
+#Import DGE output
+all_degs_human_mouse = readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
+  filter(pathogen == "Trauma")
+
+#Import BTMs annotation table
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+
+filename = "trauma_human_mouse"
+
+#Clean metadata 
+annotation_conditions = all_degs_human_mouse %>% 
+  select(condition, timepoint, model = organism) %>% 
+  distinct() 
+
+# Import Hallmarks -------
+
+msigdbr_grouped = read_csv(file = here("tables", "msigdb_hallmarks_grouped_genes.csv"))
+
+# Gene set enrichment analysis (GSEA) --------
+#Get calculate means -----
+#Annotate genes by BTM 
+
+dge_hallmarks_process_genes = all_degs_human_mouse %>% 
+  rename(symbol = human_symbol) %>% 
+  ungroup() %>% 
+  inner_join(msigdbr_grouped, by = "symbol")
+
+dge_hallmarks_process_genes %>% 
+  saveRDS(file = here("tables", paste0(filename, "_dge_hallmarks_process_genes.rds")))
+
+dge_hallmarks_mean_process = dge_hallmarks_process_genes %>% 
+  group_by(organism, timepoint, process) %>% 
+  summarise(mean_log2fc = mean(mean_l2fc),
+            median_log2fc = median(mean_l2fc),
+            sd_log2fc = sd(mean_l2fc),
+            var_log2fc = var(mean_l2fc),
+            n_genes = n(),
+            organism, pathogen) %>%
+  distinct() %>% 
+  ungroup() %>% 
+  mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
+
+pvals_vs_zero <- dge_hallmarks_process_genes %>%
+  group_by(organism, pathogen, timepoint, process) %>%
+  filter(n() >= 2) %>% 
+  rstatix::t_test(mean_l2fc ~ 1, mu = 0) %>%     
+  rstatix::adjust_pvalue(method = "BH") %>%     
+  rstatix::add_significance()
+
+dge_hallmarks_process_genes %>%
+  dplyr::count(organism, pathogen, timepoint, process) %>%
+  filter(n < 2)
+
+dge_hallmarks_mean_process <- dge_hallmarks_mean_process %>%
+  left_join(
+    pvals_vs_zero %>% 
+      select(organism, pathogen, timepoint, process, p, p_adjust = p.adj),
+    by = c("organism", "pathogen", "timepoint", "process")
+  ) %>% 
+  clean_names()
+
+#Print
+dge_hallmarks_mean_process %>% 
+  saveRDS(file = here("tables", paste0(filename, "_dge_hallmarks_mean_process.rds")))
+```
+
+#### GSEA
+
+```{r message=FALSE, warning=TRUE}
+#Run GSEA for DGE outputs-----
+#Human ImmuneGO/BTMs
+term2gene = msigdbr_grouped  %>% 
+  select(process, genes = symbol)
+
+#Clean table for GSEA standard
+df_genes2GSEA <- all_degs_human_mouse %>% 
+  distinct() %>% 
+  select(organism, pathogen, timepoint, 
+         genes = human_symbol, log2fold_change = mean_l2fc, adj_p_val)  %>% 
+  filter(!is.na(genes), !is.na(log2fold_change)) %>%
+   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint),
+          log2fold_change_logp = log2fold_change * -log(adj_p_val)) %>% 
+  select(condition, genes, rank = log2fold_change_logp)
+
+#Run multiple GSEA and unite means
+gsea_hallmarks_output = autoGSEA(df = df_genes2GSEA,
+         TERM2GENE = term2gene,
+         geneset_name = "MSigDB Hallmarks")
+
+
+gsea_hallmarks_results = gsea_hallmarks_output$gsea %>% 
+  as.data.frame() %>% 
+  clean_names() %>% 
+  rename(process = id) %>%
+  #Unite means and GSEA
+  full_join(dge_hallmarks_mean_process %>% 
+              rename(p_adjust_mean = p_adjust), by = join_by("condition", "process"))
+  
+  
+#Save
+gsea_hallmarks_results %>% 
+    saveRDS(here("tables", paste0(filename, "_gsea_hallmarks_results.rds")))
+```
+
+
+### Sample-wise analysis
+
+#### Means (BTM)
+
+Annotate genes log2fc table with BTMs
+
+```{r}
+#Import BTMs annotation table
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+
+filename = "burn_human_mouse"
+
+samples_log2fc = readRDS(file = here("tables", "all_human_mouse_samples_log2fc.rds")) 
+
+samples_annotation = readRDS(file = here("tables", "all_human_mouse_metadata.rds")) %>% 
+  filter(pathogen == "Burn")
+
+#Annotate genes by BTM 
+results_genes_btm_df = samples_log2fc %>% 
+  select(-timepoint) %>% 
+  inner_join(samples_annotation, by = "geo_sample") %>% 
+  ungroup() %>% 
+  select(symbol = human_symbol, participant_id, geo_sample, timepoint, log2fc, organism) %>% 
+  inner_join(btm_annotation_genes, by = "symbol")
+
+#Save
+results_genes_btm_df %>% saveRDS(file = here("Tables", paste0(filename, "_dge_btm_samples_log2fc_long.rds")))
+
+#Pivot wider
+dge_btm_mean_process = results_genes_btm_df %>%
+  mutate(condition = paste0(participant_id, "_Day", timepoint),
+         timepoint = as.character(timepoint)) %>% 
+  group_by(participant_id, timepoint, process) %>% 
+  summarise(mean_log2fc = mean(log2fc)) %>%
+  pivot_wider(names_from = "participant_id", values_from = "mean_log2fc") %>% 
+  inner_join(btm_annotation_genes %>% 
+               select(process, group, subgroup) %>% 
+               distinct(),
+             by = "process") %>% 
+  ungroup()
+
+#Print
+dge_btm_mean_process
+
+#Save
+dge_btm_mean_process %>% saveRDS(file = here("Tables", paste0(filename, "_dge_btm_samples_log2fc.rds")))
+
+```
+
+Import data
+
+```{r}
+#Genes L2FC table annotated with BTMs
+dge_btm_mean_process_samples = readRDS(file = here("tables", "burn_human_mouse_dge_btm_samples_log2fc_long.rds")) 
+
+#Import metadata
+mouse_human_metadata = readRDS(file = here("tables", "all_human_mouse_metadata.rds")) %>% 
+  filter(pathogen == "Burn")
+
+#Calculate the mean log2fc by module
+dge_btm_mean_process_sample_long = dge_btm_mean_process_samples %>% 
+  group_by(organism, participant_id, timepoint, process) %>% 
+  summarise(group,
+            mean_log2fc = mean(log2fc, na.rm = T)) %>% 
+  distinct() %>% 
+  ungroup()
+
+#Check
+dge_btm_mean_process_sample_long %>% 
+  dplyr::count(timepoint)
+  
+```
+
+
+
+##### Summarize inter-individual correlation
+
+1 individual vs 1 individual
+
+```{r}
+# Prepare long-format table of mean log2FC per sample and process
+btm_samples_long = dge_btm_mean_process_sample_long %>% 
+  select(organism, process, participant_id, timepoint, mean_log2fc) %>% 
+  distinct() %>% 
+  mutate(condition = paste0(participant_id, "_", timepoint)) 
+
+# Annotation table
+btm_samples_annotation = btm_samples_long %>% 
+  select(organism, participant_id, timepoint, condition) %>% 
+  distinct()
+
+# Pivot to wide format
+btm_samples_wide_all = btm_samples_long %>% 
+  select(-timepoint, -organism, -participant_id) %>% 
+  pivot_wider(names_from = "condition",
+              values_from = "mean_log2fc") %>% 
+  column_to_rownames("process")
+
+# Compute Correlations and p-values between all conditions
+cor_btm_samples_wide_all = btm_samples_wide_all %>% 
+  as.matrix() %>% 
+  rcorr(type = "spearman")
+
+# Convert correlation matrix to long format
+cor_btm_samples_wide_all_r = cor_btm_samples_wide_all$r %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "correlation")
+
+# Convert p-value matrix to long format
+cor_btm_samples_wide_all_p = cor_btm_samples_wide_all$P %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "p_value")
+
+# Join correlations, p-values, and sample annotations
+correlation_long_all_btm_mouse_human_timepoints_summary = cor_btm_samples_wide_all_r %>% 
+  inner_join(cor_btm_samples_wide_all_p, 
+             by = join_by("condition1", "condition2")) %>% 
+  inner_join(btm_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition1")) %>% 
+               rename(condition1 = condition_condition1),
+             by = "condition1") %>% 
+  inner_join(btm_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition2")) %>% 
+               rename(condition2 = condition_condition2),
+             by = "condition2") %>% 
+
+  # Remove symmetric duplicates 
+  filter(condition1 < condition2) %>% 
+
+  # Keep Human as reference when comparing human and mouse
+  filter(!(organism_condition1 == "Mouse" & organism_condition2 == "Human")) %>% 
+
+  # Annotate comparison type and timepoints
+  mutate(comparison = paste0(organism_condition1, " vs. ", organism_condition2),
+         timepoint_comparison = paste0(timepoint_condition1, "-", timepoint_condition2)) %>% 
+
+  # Compute summary statistics per comparison and timepoint
+  group_by(comparison, timepoint_comparison) %>% 
+  mutate(
+    mean = mean(correlation, na.rm = T),
+    sd   = sd(correlation, na.rm = TRUE),
+    n = n(),
+    se   = sd / sqrt(n),
+    tval = qt(0.975, df = n - 1),
+    ci_low  = mean - tval * se,
+    ci_high = mean + tval * se
+  ) %>% 
+  ungroup() %>% 
+  select(comparison, timepoint_condition1, timepoint_condition2, mean:ci_high) %>% 
+  distinct() %>% 
+  arrange(comparison) %>% 
+  #Filter only matching conditions
+  filter(timepoint_condition1 == timepoint_condition2) %>% 
+  mutate(timepoint = timepoint_condition1)
+
+# Save output
+correlation_long_all_btm_mouse_human_timepoints_summary %>% 
+  saveRDS(file = here("tables", paste0(filename, "_samples_btm_correlation_all_timepoints_summary.rds")))
+correlation_long_all_btm_mouse_human_timepoints_summary
+
+```
+
+Plot scatterplot
+
+```{r fig.height=3, fig.width=5}
+#Import
+
+#Scatterplot
+correlation_long_all_btm_mouse_human_timepoints_summary_plot = correlation_long_all_btm_mouse_human_timepoints_summary %>% 
+  ggplot() +
+  aes(x = timepoint,
+      y = mean,
+      group = comparison,
+      color = comparison,
+      fill = comparison) +
+  geom_line(size = 1) +
+
+  geom_errorbar(aes(ymin = ci_low, 
+                  ymax = ci_high), width = 0.2,
+                 size = 0.5) +
+  geom_point(pch = 21, fill = "white", size = 2, stroke = 1.5) +
+  scale_x_discrete(expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01),
+                     limits = c(0, 1)) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  scale_fill_manual(values = c("Human vs. Mouse" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  labs(title = "Correlation between organisms,\nBTMs, Means",
+       x = "Hour",
+       y = "Correlation",
+       color = "Comparison") +
+  theme(legend.position = "right") +
+  guides(fill = "none") 
+
+correlation_long_all_btm_mouse_human_timepoints_summary_plot
+
+correlation_long_all_btm_mouse_human_timepoints_summary_plot %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_samples_btm_correlation_all_timepoints_summary_plot.png")),
+         width = 5,
+         height = 3)
+
+```
+
+#### Means (Hallmarks)
+
+Annotate genes log2fc table with Hallmarks
+
+```{r}
+#Get annotated processes
+msigdbr_grouped = read_csv(file = here("tables", "msigdb_hallmarks_grouped_genes.csv"))
+
+filename = "burn_human_mouse"
+
+samples_log2fc = readRDS(file = here("tables", "all_human_mouse_samples_log2fc.rds")) 
+
+samples_annotation = readRDS(file = here("tables", "all_human_mouse_metadata.rds")) %>% 
+  filter(pathogen == "Burn")
+
+#Annotate genes by hallmarks 
+results_genes_hallmarks_df = samples_log2fc %>% 
+  select(-timepoint) %>% 
+  inner_join(samples_annotation, by = "geo_sample") %>% 
+  ungroup() %>% 
+  select(symbol = human_symbol, participant_id, geo_sample, timepoint, log2fc, organism) %>% 
+  inner_join(msigdbr_grouped, by = "symbol")
+
+#Save
+results_genes_hallmarks_df %>% saveRDS(file = here("Tables", paste0(filename, "_dge_hallmarks_samples_log2fc_long.rds")))
+
+#Pivot wider
+dge_hallmarks_mean_process = results_genes_hallmarks_df %>%
+  mutate(condition = paste0(participant_id, "_Day", timepoint),
+         timepoint = as.character(timepoint)) %>% 
+  group_by(participant_id, timepoint, process) %>% 
+  summarise(mean_log2fc = mean(log2fc)) %>%
+  pivot_wider(names_from = "participant_id", values_from = "mean_log2fc") %>% 
+  inner_join(msigdbr_grouped %>% 
+               select(process, group) %>% 
+               distinct(),
+             by = "process") %>% 
+  ungroup()
+
+#Print
+dge_hallmarks_mean_process
+
+#Save
+dge_hallmarks_mean_process %>% saveRDS(file = here("Tables", paste0(filename, "_dge_hallmarks_samples_log2fc.rds")))
+
+```
+
+Import data
+
+```{r}
+#Genes L2FC table annotated with hallmarks
+dge_hallmarks_mean_process_samples = readRDS(file = here("tables", "burn_human_mouse_dge_hallmarks_samples_log2fc_long.rds")) 
+
+#Import metadata
+mouse_human_metadata = readRDS(file = here("tables", "all_human_mouse_metadata.rds")) %>% 
+  filter(pathogen == "Burn")
+
+#Calculate the mean log2fc by module
+dge_hallmarks_mean_process_sample_long = dge_hallmarks_mean_process_samples %>% 
+  group_by(organism, participant_id, timepoint, process) %>% 
+  summarise(group,
+            mean_log2fc = mean(log2fc, na.rm = T)) %>% 
+  distinct() %>% 
+  ungroup()
+
+#Check
+dge_hallmarks_mean_process_sample_long %>% 
+  dplyr::count(timepoint)
+  
+```
+
+
+##### Summarize inter-individual correlation
+
+1 individual vs 1 individual
+
+```{r}
+# Prepare long-format table of mean log2FC per sample and process
+hallmarks_samples_long = dge_hallmarks_mean_process_sample_long %>% 
+  select(organism, process, participant_id, timepoint, mean_log2fc) %>% 
+  distinct() %>% 
+  mutate(condition = paste0(participant_id, "_", timepoint)) 
+
+# Annotation table
+hallmarks_samples_annotation = hallmarks_samples_long %>% 
+  select(organism, participant_id, timepoint, condition) %>% 
+  distinct()
+
+# Pivot to wide format
+hallmarks_samples_wide_all = hallmarks_samples_long %>% 
+  select(-timepoint, -organism, -participant_id) %>% 
+  pivot_wider(names_from = "condition",
+              values_from = "mean_log2fc") %>% 
+  column_to_rownames("process")
+
+# Compute Correlations and p-values between all conditions
+cor_hallmarks_samples_wide_all = hallmarks_samples_wide_all %>% 
+  as.matrix() %>% 
+  rcorr(type = "spearman")
+
+# Convert correlation matrix to long format
+cor_hallmarks_samples_wide_all_r = cor_hallmarks_samples_wide_all$r %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "correlation")
+
+# Convert p-value matrix to long format
+cor_hallmarks_samples_wide_all_p = cor_hallmarks_samples_wide_all$P %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "p_value")
+
+# Join correlations, p-values, and sample annotations
+correlation_long_all_hallmarks_mouse_human_timepoints_summary = cor_hallmarks_samples_wide_all_r %>% 
+  inner_join(cor_hallmarks_samples_wide_all_p, 
+             by = join_by("condition1", "condition2")) %>% 
+  inner_join(hallmarks_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition1")) %>% 
+               rename(condition1 = condition_condition1),
+             by = "condition1") %>% 
+  inner_join(hallmarks_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition2")) %>% 
+               rename(condition2 = condition_condition2),
+             by = "condition2") %>% 
+
+  # Remove symmetric duplicates 
+  filter(condition1 < condition2) %>% 
+
+  # Keep Human as reference when comparing human and mouse
+  filter(!(organism_condition1 == "Mouse" & organism_condition2 == "Human")) %>% 
+
+  # Annotate comparison type and timepoints
+  mutate(comparison = paste0(organism_condition1, " vs. ", organism_condition2),
+         timepoint_comparison = paste0(timepoint_condition1, "-", timepoint_condition2)) %>% 
+
+  # Compute summary statistics per comparison and timepoint
+  group_by(comparison, timepoint_comparison) %>% 
+  mutate(
+    mean = mean(correlation, na.rm = T),
+    sd   = sd(correlation, na.rm = TRUE),
+    n = n(),
+    se   = sd / sqrt(n),
+    tval = qt(0.975, df = n - 1),
+    ci_low  = mean - tval * se,
+    ci_high = mean + tval * se
+  ) %>% 
+  ungroup() %>% 
+  select(comparison, timepoint_condition1, timepoint_condition2, mean:ci_high) %>% 
+  distinct() %>% 
+  arrange(comparison) %>% 
+  #Filter only matching conditions
+  filter(timepoint_condition1 == timepoint_condition2) %>% 
+  mutate(timepoint = timepoint_condition1)
+
+# Save output
+correlation_long_all_hallmarks_mouse_human_timepoints_summary %>% 
+  saveRDS(file = here("tables", paste0(filename, "_samples_hallmarks_correlation_all_timepoints_summary.rds")))
+correlation_long_all_hallmarks_mouse_human_timepoints_summary
+
+```
+
+Plot scatterplot
+
+```{r fig.height=3, fig.width=5}
+#Import
+
+#Scatterplot
+correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot = correlation_long_all_hallmarks_mouse_human_timepoints_summary %>% 
+  ggplot() +
+  aes(x = timepoint,
+      y = mean,
+      group = comparison,
+      color = comparison,
+      fill = comparison) +
+  geom_line(size = 1) +
+
+  geom_errorbar(aes(ymin = ci_low, 
+                  ymax = ci_high), width = 0.2,
+                 size = 0.5) +
+  geom_point(pch = 21, fill = "white", size = 2, stroke = 1.5) +
+  scale_x_discrete(expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01),
+                     limits = c(0, 1)) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  scale_fill_manual(values = c("Human vs. Mouse" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  labs(title = "Correlation between organisms,\nHallmarks, Means",
+       x = "Hour",
+       y = "Correlation",
+       color = "Comparison") +
+  theme(legend.position = "right") +
+  guides(fill = "none") 
+
+correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot
+
+correlation_long_all_hallmarks_mouse_human_timepoints_summary_plot %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_samples_hallmarks_correlation_all_timepoints_summary_plot.png")),
+         width = 5,
+         height = 3)
+
+```
 
 
 #===========================
@@ -5424,7 +6723,7 @@ rank_density_heatmap %>%
 
 
 
-### Correlation: Genes, samples
+### TERMINARRRRRRRRRRRR Correlation: Genes, samples
 
 ```{r}
 #Import
@@ -5433,15 +6732,15 @@ btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"
 all_human_mouse_metadata =
   readRDS(here("tables", "all_human_mouse_metadata.rds"))
 
-#Filter human samples with trauma to decrease computation time
+#Filter conditions with too many human samples to decrease computation time
 set.seed(420)
 all_human_mouse_metadata_filtered = all_human_mouse_metadata %>% 
-  filter(!(pathogen == "Trauma" & organism == "Human")) %>% 
+  filter(!(pathogen %in% c("Trauma", "Influenza") & organism == "Human")) %>% 
    bind_rows(
-    all_human_mouse_metadata %>%
+     all_human_mouse_metadata %>%
       filter(pathogen == "Trauma", treatment == "Trauma", organism == "Human") %>% 
       group_by(timepoint) %>% 
-      slice_sample(n = 30)                          
+      slice_sample(n = 30, replace = F)                        
   )
 
 log2fc_samples = readRDS(here("tables", "all_human_mouse_samples_log2fc.rds")) 
@@ -5542,7 +6841,7 @@ genes_samples_long = human_mouse_log2fc_samples %>%
  # Annotation table
 samples_annotation = genes_samples_long %>%
   select(pathogen, organism, participant_id, timepoint, condition) %>%
-  distinct()
+  distinct() 
 
 
 # Pivot to wide format
@@ -5550,8 +6849,15 @@ genes_samples_wide_all = genes_samples_long %>%
   select(human_symbol, condition, log2fc) %>% 
   distinct() %>%
   pivot_wider(names_from = "condition",
-              values_from = "log2fc") %>%
+              values_from = "log2fc", 
+              values_fn = mean) %>%
   column_to_rownames("human_symbol")
+
+
+genes_samples_long %>%
+  select(human_symbol, condition, log2fc) %>% 
+  distinct() %>%
+  get_dupes()
 ```
 
 
