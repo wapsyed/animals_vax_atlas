@@ -242,9 +242,8 @@ mouse_fluad_log2fc_filtered_sample_long = mouse_fluad_log2_hgnc_symbol %>%
   inner_join(mouse_fluad_metadata %>% 
                select(geo_sample, participant_id, timepoint),
              by = "geo_sample") %>% 
-  select(human_symbol, participant_id, timepoint, log2) %>% 
-  distinct() %>% 
-  select(participant_id, human_symbol, timepoint, value = log2) %>%
+  select(participant_id, human_symbol,  timepoint, value = log2) %>%
+    distinct() %>% 
   pivot_wider(names_from = timepoint, values_from = value, names_prefix = "day_") %>%
   pivot_longer(cols = starts_with("day_"),
                names_to = "timepoint",
@@ -1206,9 +1205,6 @@ mouse_engerixb_log2_filtered_probes = mouse_engerixb_log2 %>%
   select(probe, mouse_entrez, human_symbol = hgnc_symbol, c(mouse_engerixb_metadata %>% pull(geo_sample)))
 #14395
 mouse_engerixb_log2_filtered %>% dim()
-
-
-
 mouse_engerixb_log2_hgnc_symbol = mouse_engerixb_log2_filtered_probes %>% 
   select(probe_id = probe, human_symbol, c(mouse_engerixb_metadata$geo_sample)) %>% 
   column_to_rownames("human_symbol")
@@ -6209,7 +6205,18 @@ all_human_mouse_metadata = bind_rows(
     mutate(timepoint = as.character(timepoint)),
   human_burn_metadata,
   human_trauma_metadata
-)
+) %>% 
+  # Annotate timepoints
+  mutate(timepoint = case_when(time_unit == "Day" ~ paste0("Day ", timepoint),
+                               time_unit == "Hour" & timepoint != "Early Hours" ~ paste0(timepoint, "h"),
+                               pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours") ~ "Early Hours",
+                               T~timepoint),
+    # Order factor
+    timepoint = factor(timepoint, levels = unique(timepoint[order(
+      if_else(str_detect(timepoint, "Early"), 0, 
+              readr::parse_number(as.character(timepoint)))
+    )]))
+  )
 
 all_human_mouse_metadata %>% 
   saveRDS(here("tables", "all_human_mouse_metadata.rds"))
@@ -6217,6 +6224,10 @@ all_human_mouse_metadata %>%
 
 ## Sample log2FC
 ```{r}
+
+all_human_mouse_metadata =
+  readRDS(here("tables", "all_human_mouse_metadata.rds"))
+
 # Sample log2fc
 #Import
 human_mouse_log2fc_samples_ecoli = readRDS(here("tables", "ecoli_infection_human_mouse_samples_log2fc.rds"))  %>% 
@@ -6237,11 +6248,13 @@ human_mouse_log2fc_samples_engerixb = readRDS(file = here("tables", "hepatitisb_
 
 human_mouse_log2fc_samples_fluad = readRDS(file = here("tables", "influenza_fluad_human_mouse_log2fc_samples.rds")) %>% 
   mutate(timepoint = as.numeric(timepoint)) %>% 
+  select(-geo_sample) %>% 
   inner_join(fluad_human_mouse_metadata,
              by = join_by("participant_id", "timepoint", "organism")) %>% 
   select(human_symbol, participant_id, geo_sample, log2fc, value_raw = value, day0_value_raw = day0, timepoint) %>% 
   mutate(timepoint = as.character(timepoint))
 
+#Burn and Trauma
 mouse_log2fc_samples_trauma_burn = readRDS(here("tables", "trauma_burn_mouse_log2fc_sample_clean_long.rds"))  %>% 
   select(human_symbol, participant_id, geo_sample, log2fc, day0_value_raw = value_raw, value_raw_ref, timepoint) %>% 
   mutate(timepoint = as.character(timepoint))
@@ -6277,6 +6290,43 @@ all_human_mouse_samples_log2fc %>%
              by = join_by("geo_sample", "timepoint")) %>% 
   filter(organism == "Human",
          pathogen == "Staphylococcus aureus")
+
+all_human_mouse_samples_log2fc %>%
+  inner_join(all_human_mouse_metadata %>% 
+               mutate(timepoint = as.character(timepoint)), 
+             by = join_by("geo_sample", "timepoint")) %>% 
+  filter(organism == "Human",
+         pathogen == "Trauma")
+
+#Insert
+
+log2fc_samples = readRDS(here("tables", "all_human_mouse_samples_log2fc.rds")) 
+
+# Filter human samples with trauma to decrease computation time
+
+# #Duplicate infection timepoints in human to match the mouse
+# log2fc_samples_annotated_matched = log2fc_samples_annotated %>% 
+#   
+#   #Duplicate infection timepoints in human to match the mouse
+#   bind_rows(
+#   log2fc_samples_annotated %>%
+#   filter(organism == "Human",
+#          pathogen %in% c("Staphylococcus aureus", "Escherichia coli")) %>%
+#   select(pathogen, organism, participant_id, human_symbol, log2fc) %>%
+#   #Get timepoints from mouse
+#   inner_join(log2fc_samples_annotated %>%
+#                filter(organism == "Mouse",
+#                      pathogen %in% c("Staphylococcus aureus", "Escherichia coli")) %>%
+#                select(pathogen, treatment, timepoint) %>%
+#                distinct(),
+#              by = "pathogen")
+#   ) 
+
+# #Check result
+# log2fc_samples_annotated_matched %>% 
+#   dplyr::count(pathogen, treatment, organism, timepoint) 
+
+
 ```
 
 ## DGE results
@@ -6401,7 +6451,6 @@ human_degs = readRDS(file = here("tables", "influenza_fluad_human_dge_limma_degs
   mutate(organism = "Human",
          test = "Limma",
          paired = "Paired") 
-
 mouse_degs = readRDS(file = here("tables", "influenza_fluad_mouse_dge_limma_degs.rds")) %>% 
   clean_names() %>% 
   rename(padj = adj_p_val) %>% 
