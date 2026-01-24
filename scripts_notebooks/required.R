@@ -333,6 +333,28 @@ cluster_by_day <- function(df, day_column = "day", condition_column = "condition
   return(order_df)
 }
 
+#Safe correlation 
+safe_cor_test <- function(x, y, method) {
+  # Remove NAs and infinite values first
+  ok <- is.finite(x) & is.finite(y)
+  x <- x[ok]
+  y <- y[ok]
+  
+  # cor.test requires n >= 3 to run without error
+  if (length(x) < 3 || sd(x) == 0 || sd(y) == 0) {
+    return(list(estimate = NA_real_, p.value = NA_real_))
+  } else {
+    tryCatch({
+      ct <- cor.test(x, y, method = method)
+      return(list(estimate = unname(ct$estimate), p.value = ct$p.value))
+    }, error = function(e) {
+      return(list(estimate = NA_real_, p.value = NA_real_))
+    })
+  }
+}
+
+
+
 #Colors --------
 
 
