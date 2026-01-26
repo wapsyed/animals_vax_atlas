@@ -6748,10 +6748,12 @@ all_human_mouse_metadata_filtered = all_human_mouse_metadata %>%
 log2fc_samples = readRDS(here("tables", "all_human_mouse_samples_log2fc.rds")) 
 
 log2fc_samples_annotated = log2fc_samples %>% 
-  select(-timepoint) %>% 
-  inner_join(all_human_mouse_metadata_filtered %>% 
-               mutate(timepoint = as.character(timepoint)), 
+  inner_join(all_human_mouse_metadata_filtered, 
              by = join_by("geo_sample"))  
+
+#Check
+log2fc_samples_annotated %>% 
+  dplyr::count(pathogen, organism, timepoint)
 
 
 #DEGs
@@ -6840,7 +6842,7 @@ genes_samples_long = human_mouse_log2fc_samples %>%
   distinct() %>%
   mutate(condition = paste0(pathogen, "_", participant_id, "_", timepoint))
 
- # Annotation table
+# Annotation table
 samples_annotation = genes_samples_long %>%
   select(pathogen, organism, participant_id, timepoint, condition) %>%
   distinct() 
@@ -6864,101 +6866,78 @@ genes_samples_long %>%
 
 
 ```{r}
-compute_corr_by_pathogen = function(df) {
+# Compute Correlations and p-values between all conditions
+cor_btm_samples_wide_all = genes_samples_wide_all %>% 
+  as.matrix() %>% 
+  rcorr(type = "spearman")
 
-  genes_samples_wide =
-    df %>% 
-    select(human_symbol, condition, log2fc) %>% 
-    pivot_wider(
-      names_from  = condition,
-      values_from = log2fc
-    ) %>% 
-    column_to_rownames("human_symbol")
+# Convert correlation matrix to long format
+cor_btm_samples_wide_all_r = cor_btm_samples_wide_all$r %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "correlation")
 
-  cor_mat = rcorr(as.matrix(genes_samples_wide), type = "spearman")
+# Convert p-value matrix to long format
+cor_btm_samples_wide_all_p = cor_btm_samples_wide_all$P %>% 
+  as.data.frame() %>% 
+  rownames_to_column("condition1") %>% 
+  pivot_longer(cols = -condition1,
+               names_to = "condition2",
+               values_to = "p_value")
 
-  tibble(
-    condition1 = rep(colnames(cor_mat$r), each = ncol(cor_mat$r)),
-    condition2 = rep(colnames(cor_mat$r), times = ncol(cor_mat$r)),
-    correlation = as.vector(cor_mat$r),
-    p_value     = as.vector(cor_mat$P),
-    n_genes     = as.vector(cor_mat$n)
-  )
-}
-
-#Compute correlation
-correlation_long_by_pathogen =
-  genes_samples_long %>% 
-  group_by(pathogen) %>% 
-  group_modify(~ compute_corr_by_pathogen(.x)) %>% 
-  ungroup()
-
-
-#Clean 
-correlation_long_all_mouse_human_timepoints_summary =
-  correlation_long_by_pathogen %>% 
-
-  inner_join(
-    samples_annotation %>% 
-      rename_with(~ paste0(.x, "_condition1")) %>% 
-      rename(condition1 = condition_condition1),
-    by = "condition1"
-  ) %>% 
-
-  inner_join(
-    samples_annotation %>% 
-      rename_with(~ paste0(.x, "_condition2")) %>% 
-      rename(condition2 = condition_condition2),
-    by = "condition2"
-  ) %>% 
+# Join correlations, p-values, and sample annotations
+correlation_long_all_btm_mouse_human_timepoints_summary = cor_btm_samples_wide_all_r %>% 
+  inner_join(cor_btm_samples_wide_all_p, 
+             by = join_by("condition1", "condition2")) %>% 
+  inner_join(btm_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition1")) %>% 
+               rename(condition1 = condition_condition1),
+             by = "condition1") %>% 
+  inner_join(btm_samples_annotation %>% 
+               rename_with(~ paste0(.x, "_condition2")) %>% 
+               rename(condition2 = condition_condition2),
+             by = "condition2") %>% 
+  
+  mutate(pathogen1 = str_split_i(condition1, "_", 1),
+         pathogen2 = str_split_i(condition2, "_", 1)) %>% 
 
   # Remove symmetric duplicates 
-  filter(condition1 < condition2) %>% 
+  filter(condition1 < condition2,
+         pathogen1 == pathogen2) %>% 
 
   # Keep Human as reference when comparing human and mouse
   filter(!(organism_condition1 == "Mouse" & organism_condition2 == "Human")) %>% 
 
-  filter(pathogen == pathogen_condition1,
-         pathogen == pathogen_condition2) %>% 
-
   # Annotate comparison type and timepoints
-  mutate(
-    comparison = paste0(organism_condition1, " vs. ", organism_condition2),
-    timepoint_comparison = paste0(timepoint_condition1, "-", timepoint_condition2)
-  ) %>% 
+  mutate(comparison = paste0(organism_condition1, " vs. ", organism_condition2),
+         timepoint_comparison = paste0(timepoint_condition1, "-", timepoint_condition2),
+         pathogen = pathogen1) %>% 
 
-  # Compute summary statistics
+  # Compute summary statistics per comparison and timepoint
   group_by(pathogen, comparison, timepoint_comparison) %>% 
-  summarise(
-    mean = mean(correlation, na.rm = TRUE),
+  mutate(
+    mean = mean(correlation, na.rm = T),
     sd   = sd(correlation, na.rm = TRUE),
-    n    = n(),
+    n = n(),
     se   = sd / sqrt(n),
     tval = qt(0.975, df = n - 1),
     ci_low  = mean - tval * se,
-    ci_high = mean + tval * se,
-    timepoint_condition1,
-    timepoint_condition2,
-    .groups = "drop"
+    ci_high = mean + tval * se
   ) %>% 
-
-  arrange(pathogen, comparison)  %>% 
   ungroup() %>% 
-  select(pathogen, comparison, timepoint_condition1, timepoint_condition2, mean:ci_high) %>% 
+  select(comparison, pathogen, timepoint_condition1, timepoint_condition2, mean:ci_high) %>% 
   distinct() %>% 
-  # For same-organism comparisons, keep only matching timepoints
-  filter(!(comparison == "Mouse vs. Mouse" & timepoint_condition1 != timepoint_condition2),
-         !(comparison == "Human vs. Human" & timepoint_condition1 != timepoint_condition2))
+  arrange(comparison) %>% 
+  #Filter only matching conditions
+  filter(timepoint_condition1 == timepoint_condition2) %>% 
+  mutate(timepoint = timepoint_condition1)
 
-
-
-
-correlation_long_all_mouse_human_timepoints_summary %>% 
-  # Numeric representation of timepoint for plotting
-  mutate(timepoint = timepoint_condition2 %>% as.numeric()) %>% 
-  filter(!(pathogen %in% c("Influenza", "Hepatitis B") & timepoint_condition1 != timepoint_condition2))
-
-correlation_long_all_mouse_human_timepoints_summary
+# Save output
+# correlation_long_all_btm_mouse_human_timepoints_summary %>% 
+#   saveRDS(file = here("tables", paste0(filename, "_samples_btm_correlation_all_timepoints_summary.rds")))
+correlation_long_all_btm_mouse_human_timepoints_summary
 ```
 
 
