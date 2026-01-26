@@ -6734,25 +6734,50 @@ btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"
 all_human_mouse_metadata =
   readRDS(here("tables", "all_human_mouse_metadata.rds"))
 
+
+
+
+```
+
+
+```{r}
 #Filter conditions with too many human samples to reduce computation time
 set.seed(420)
-all_human_mouse_metadata_filtered = all_human_mouse_metadata %>% 
+all_human_mouse_metadata_filtered =
+    all_human_mouse_metadata %>% 
+   filter(!(pathogen %in% c("Trauma", "Influenza", "Burn") & organism == "Human")) %>% 
+  
    bind_rows(
+     #Sample trauma patients
      all_human_mouse_metadata %>%
       filter(pathogen == "Trauma", treatment == "Trauma", organism == "Human") %>% 
       group_by(timepoint) %>% 
-      slice_sample(n = 30, replace = F)                        
+      slice_sample(n = 30, replace = F),
+     #Sample Bur patients
+     all_human_mouse_metadata %>%
+      filter(pathogen == "Burn", treatment == "Burn", organism == "Human") %>% 
+      group_by(timepoint) %>% 
+      slice_sample(n = 30, replace = F),
+     #Sample Fluad patients
+     all_human_mouse_metadata %>% 
+       filter(participant_id %in% c(all_human_mouse_metadata %>%
+                                      filter(pathogen == "Influenza", organism == "Human") %>% 
+                                      pull(participant_id) %>% 
+                                      unique() %>% 
+                                      sample(size = 30, replace = FALSE)))
   )
 
 log2fc_samples = readRDS(here("tables", "all_human_mouse_samples_log2fc.rds")) 
 
 log2fc_samples_annotated = log2fc_samples %>% 
   inner_join(all_human_mouse_metadata_filtered, 
-             by = join_by("geo_sample"))  
+             by = join_by("geo_sample"))   
 
 #Check
 log2fc_samples_annotated %>% 
-  dplyr::count(pathogen, organism, timepoint)
+  select(pathogen, organism, timepoint, participant_id) %>% 
+  distinct() %>% 
+  dplyr::count(pathogen, organism, timepoint) 
 
 
 #DEGs
@@ -6862,21 +6887,11 @@ genes_samples_wide_all = genes_samples_long %>%
 # Compute Correlations and p-values between all conditions
 #Influenza
 cor_btm_samples_wide_all = genes_samples_wide_all %>% 
-  select(samples_annotation %>% filter(pathogen == "Influenza") %>% pull(condition)) %>% 
+  # select(samples_annotation %>% filter(pathogen == "Influenza") %>% pull(condition)) %>% 
   drop_na() %>% 
   as.matrix() %>% 
   rcorr(type = "spearman")
 
-
-
-```
-
-
-```{r}
-# Compute Correlations and p-values between all conditions
-cor_btm_samples_wide_all = genes_samples_wide_all %>% 
-  as.matrix() %>% 
-  rcorr(type = "spearman")
 
 # Convert correlation matrix to long format
 cor_btm_samples_wide_all_r = cor_btm_samples_wide_all$r %>% 
@@ -6936,7 +6951,9 @@ correlation_long_all_btm_mouse_human_timepoints_summary = cor_btm_samples_wide_a
   ungroup() %>% 
   select(comparison, pathogen, timepoint_condition1, timepoint_condition2, mean:ci_high) %>% 
   distinct() %>% 
-  arrange(comparison) %>% 
+  arrange(comparison) 
+
+correlation_long_all_btm_mouse_human_timepoints_summary %>% 
   #Filter only matching conditions
   filter(timepoint_condition1 == timepoint_condition2) %>% 
   mutate(timepoint = timepoint_condition1)
@@ -6946,6 +6963,71 @@ correlation_long_all_btm_mouse_human_timepoints_summary = cor_btm_samples_wide_a
 #   saveRDS(file = here("tables", paste0(filename, "_samples_btm_correlation_all_timepoints_summary.rds")))
 correlation_long_all_btm_mouse_human_timepoints_summary
 ```
+
+
+
+```{r}
+# 1. Define the pathogens list
+pathogen_list <- unique(samples_annotation$pathogen)
+
+# 2. Initialize a list to store results
+correlation_results <- list()
+
+for (path in pathogen_list) {
+  
+  # Get sample IDs for this specific pathogen
+  pathogen_samples <- samples_annotation %>% 
+    filter(pathogen == path) %>% 
+    pull(geo_sample) # or 'condition' depending on your column name
+  
+  # Subset and prepare the matrix
+  # Ensure only genes present in all samples are used (drop_na)
+  matrix_subset <- genes_samples_wide_all %>%
+    select(all_of(pathogen_samples)) %>%
+    drop_na() %>%
+    as.matrix()
+  
+  # 3. Calculate Spearman Correlation
+  cor_obj <- rcorr(matrix_subset, type = "spearman")
+  
+  # 4. Extract Rho (r) and P-values
+  r_long <- as.data.frame(cor_obj$r) %>%
+    rownames_to_column("sample1") %>%
+    pivot_longer(-sample1, names_to = "sample2", values_to = "rho")
+  
+  p_long <- as.data.frame(cor_obj$P) %>%
+    rownames_to_column("sample1") %>%
+    pivot_longer(-sample1, names_to = "sample2", values_to = "p_val")
+  
+  # 5. Join and annotate with Metadata
+  combined <- r_long %>%
+    left_join(p_long, by = c("sample1", "sample2")) %>%
+    # Add metadata for sample 1
+    left_join(samples_annotation %>% select(geo_sample, organism1 = organism, timepoint1 = timepoint), 
+              by = c("sample1" = "geo_sample")) %>%
+    # Add metadata for sample 2
+    left_join(samples_annotation %>% select(geo_sample, organism2 = organism, timepoint2 = timepoint), 
+              by = c("sample2" = "geo_sample")) %>%
+    mutate(pathogen = path)
+  
+  correlation_results[[path]] <- combined
+}
+
+# 6. Bind all results into one master table
+all_correlations_long <- bind_rows(correlation_results)
+```
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ```{r fig.height=3, fig.width=8}
