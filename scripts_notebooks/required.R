@@ -367,10 +367,11 @@ colors_vaccines = c("Agrippal" = "#669bbc",
 
 
 
-colors_immune = list(organism = c("FIT" = "#4361ee",
+colors = list(organism = c("FIT" = "#4361ee",
                                   "Mouse" = "#4DBBD5FF",
                                   "Human" = "#90A4AEFF"),
-                     timepoint = c("0.08" = "#D0D8FB", 
+                     timepoint = c("Early hours" = "#D0D8FB",
+                                   "0.08" = "#D0D8FB", 
                                    "0.17" = "#A1B0F7",
                                    "0.5" = "#4361ee",
                                    "1" = "#caf0f8",
