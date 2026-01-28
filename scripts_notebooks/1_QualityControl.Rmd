@@ -3390,7 +3390,7 @@ pca_log2fc_expression %>%
 
 
 
-
+#========================
 
 
 #Influenza
@@ -4202,6 +4202,2401 @@ pca_log2fc_expression %>%
          width = 7,
          height = 3)
 ```
+
+
+#========================
+#Staphylococcus aureus
+Import
+```{r}
+#Input
+filename = "saureus_infection"
+pathogen_selected = "Staphylococcus aureus"
+timepoint_selected = c("12h", "24h", "Day 1")
+
+#Import
+all_human_mouse_samples_log2fc = readRDS(here("tables", "all_human_mouse_samples_log2fc.rds"))
+human_mouse_metadata = readRDS(file = here("tables", "all_human_mouse_metadata.rds")) 
+all_degs_human_mouse = readRDS(file = here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
+  filter(pathogen == pathogen_selected)
+
+all_degs_human_mouse$timepoint %>% unique()
+
+# Annotate expression data
+all_human_mouse_samples_log2fc_annotated <- all_human_mouse_samples_log2fc %>%
+  select(human_symbol, geo_sample, expression = value_raw, day0_value_raw, log2fc) %>% 
+  inner_join(human_mouse_metadata, by = "geo_sample")
+
+long_expr = all_human_mouse_samples_log2fc_annotated %>%  
+  filter(pathogen == pathogen_selected)
+
+
+#Average L2FC and expression
+long_expr_log2fc_avg = long_expr %>% 
+  group_by(human_symbol, organism, timepoint) %>% 
+  summarise(n_subjects = n(),
+            #Expression
+            avg_expression = mean(expression, na.rm = T),
+            median_expression = median(expression, na.rm = T),
+            sd_expression = sd(expression, na.rm = T),
+            se_expression = sd_expression/sqrt(n_subjects),
+            #Log2FC
+            avg_log2fc = mean(log2fc, na.rm = T),
+            sd_log2fc = sd(expression, na.rm = T),
+            se_log2fc = sd_log2fc/sqrt(n_subjects),
+            #Effect size
+            effect_size = avg_log2fc/sd_log2fc) %>% 
+  ungroup() %>% 
+  mutate(ci_low_expression = avg_expression - 1.96*se_expression,
+         ci_high_expression = avg_expression + 1.96*se_expression,
+         ci_low_log2fc = avg_log2fc - 1.96*se_log2fc,
+         ci_high_log2fc = avg_log2fc + 1.96*se_log2fc)
+
+
+```
+
+##### RLE plot
+```{r fig.height=8, fig.width=18}
+# Plot RLE
+rle_plot = long_expr %>%
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  group_by(human_symbol, organism) %>%
+  mutate(expression_median = median(expression, na.rm = TRUE),
+         RLE = expression - expression_median) %>%
+  ungroup() %>% 
+  ggplot() +
+  aes(x = participant_id, y = RLE, fill = organism, color = organism) +
+  facet_wrap(~pathogen+organism+timepoint, scales = "free_x", space = "free_x", nrow = 1) +
+    geom_boxplot(outlier.size = 0.5) +
+  theme_vaxgo() +
+  labs(title = "RLE Plot by Organism", y = "Relative Log Expression", x = "Sample") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8),
+        legend.position = "top") +
+    scale_fill_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  scale_color_manual(values = c(Mouse = "#4DBBD5FF",
+                                Human = "#90A4AEFF")) 
+
+# Print
+print(rle_plot)
+
+#Save
+rle_plot %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_human_mouse_qc_rle_plot.png")),
+         width = 18,
+         height = 8)
+
+beep()
+```
+
+
+#### SA Plot
+
+```{r fig.height=5, fig.width=10}
+sa_plot = long_expr_log2fc_avg %>%
+  ggplot() +
+  aes(x = avg_expression,
+      y = sd_expression,
+      color = timepoint) +
+  facet_nested_wrap(~organism+timepoint, scales = "free",
+             nrow = 2) +
+  geom_point(alpha = 0.1) + 
+  geom_smooth(se = T, size = 1, color = "black", fill = "gray25") +
+  geom_hline(yintercept = 0, linetype = 2, color = "black") +
+  scale_color_manual(values = colors$timepoint) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  labs(x = "Avg log2-Expression",
+       y = "Standard deviation",
+       color = "Timepoint") +
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 10),
+          axis.text.y = element_text(size = 10),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+          panel.spacing = unit(1, "lines"),
+          plot.margin = margin(0, 0.5, 0, 0.5, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.margin=margin(0,0,0,0),
+          legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.title = element_text(size = 10),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+    ) +
+  guides(color = guide_legend(override.aes = list(size = 5, alpha = 1, shape = 16)))
+
+sa_plot
+
+sa_plot %>% 
+ggsave(file = here("Figures", paste0(filename, "_human_mouse_qc_saplot.png")), 
+         height = 5,
+         width = 10)
+```
+
+
+#### MA Plot
+```{r fig.height=5, fig.width=10}
+ma_plot = long_expr_log2fc_avg %>%
+  ggplot() +
+  aes(x = avg_expression,
+      y = avg_log2fc,
+      color = timepoint) +
+  facet_nested_wrap(~organism+timepoint, scales = "free",
+             nrow = 2) +
+  geom_point(alpha = 0.1) + 
+  geom_hline(yintercept = 0, linetype = 2, color = "black") +
+  scale_color_manual(values = colors$timepoint) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  labs(x = "Avg log2-Expression",
+       y = "Log2Fold-Change",
+       color = "Timepoint") +
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 10),
+          axis.text.y = element_text(size = 10),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+          panel.spacing = unit(1, "lines"),
+          plot.margin = margin(0, 0.5, 0, 0.5, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.margin=margin(0,0,0,0),
+          legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.title = element_text(size = 10),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+    ) +
+  guides(color = guide_legend(override.aes = list(size = 5, alpha = 1, shape = 16)))
+
+ma_plot
+
+ma_plot %>% 
+  ggsave(file = here("Figures", paste0(filename, "_human_mouse_qc_maplot.png")), 
+         height = 5,
+         width = 10)
+```
+
+
+
+
+
+##### Distribution, Expression, by organism, Density
+```{r fig.height=3, fig.width=10}
+
+#Plot average expression
+distribution_check_avg_plot = long_expr_log2fc_avg %>% 
+  ggplot() +
+  aes(x = avg_expression) +
+  facet_grid(~timepoint, scales = "fixed", axes = "all") +
+  #Human
+  geom_density(aes(y = after_stat(count),
+                   fill = organism), 
+               na.rm = T,
+               color = NA,
+               position = position_identity(), 
+               alpha = 0.2,
+               data = . %>% 
+                 filter(organism == "Human")) +
+  
+  geom_density(aes(y = after_stat(count),
+                   color = organism), 
+               na.rm = T,
+               fill = NA,
+               size = 1,
+               position = position_identity(), 
+               alpha = 1,
+               data = . %>% 
+                 filter(organism == "Human")) +
+  
+  #Mouse
+  geom_density(aes(y = after_stat(count),
+                   fill = organism), 
+               color = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 0.2,
+               data = . %>% 
+                 filter(organism == "Mouse")) +
+  geom_density(aes(y = after_stat(count),
+                   color = organism), 
+               fill = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 1,
+               size = 1,
+               data = . %>% 
+                 filter(organism == "Mouse")) +
+  scale_y_continuous(expand = c(0.01, 0.01))+
+  scale_fill_manual(values = c(FIT = "#4361ee",
+                               Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  scale_color_manual(values = c(FIT = "#4361ee",
+                                Mouse = "#4DBBD5FF",
+                                Human = "#90A4AEFF")) +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        legend.key = element_blank(),
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "",
+       x = "Expression",
+       y = "Frequency")
+
+distribution_check_avg_plot
+
+```
+
+
+
+
+
+##### Distribution, Expression, by organism, Violin plot
+```{r}
+#Boxplot by organism, averaged
+distribution_check_avg_boxplot = long_expr_log2fc_avg %>% 
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  mutate(timepoint = as.character(timepoint)) %>% 
+  ggplot() +
+  aes(y = avg_expression,
+      x = organism,
+      label = organism) +
+    facet_grid(~organism, scales = "free_x", 
+             space = "free_x", 
+             axes = "all_x",
+             axis.labels = "all_y") +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 20))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Expression")
+
+distribution_check_avg_boxplot
+```
+
+
+
+
+##### Distribution, Expression, by subject, Kaboxplot
+```{r fig.height=7, fig.width=18}
+
+human_mouse_fluad_kaboxplot_data = long_expr %>%
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  group_by(organism, participant_id, timepoint) %>%
+  summarise(
+    q0  = quantile(expression, 0),
+    q25 = quantile(expression, 0.25),
+    q50 = quantile(expression, 0.5),
+    q75 = quantile(expression, 0.75),
+    q100 = quantile(expression, 1)
+  ) %>% 
+  ungroup() %>% 
+  droplevels()
+
+human_mouse_fluad_kaboxplot_data_long = human_mouse_fluad_kaboxplot_data %>% 
+  pivot_longer(cols = q0:q100,
+               names_to = "quantile",
+               values_to = "expression") %>% 
+  ungroup() %>% 
+  droplevels()
+
+distribution_check_subject_plot = long_expr %>% 
+  droplevels() %>% 
+  filter(timepoint %in% c(timepoint_selected)) %>%
+  ggplot() +
+  aes(y = expression,
+      x = participant_id,
+      label = participant_id) +
+    facet_wrap(~fct_rev(organism), 
+           scales = "free_x", 
+           space = "free_x", 
+           drop = TRUE) +
+  
+  # IQR
+  geom_boxplot(aes(fill = organism), alpha = 1, width = 1) +
+  
+  #Connect quantiles
+  geom_line(aes(group = quantile),
+            color = "black",
+            size = 1,
+            data = human_mouse_fluad_kaboxplot_data_long) +
+
+  
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     limits = c(-5, 20)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF"
+    )) +
+  scale_color_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF"
+    )) +
+  guides(color=guide_legend(nrow=1,byrow=TRUE)) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "",
+       color = "",
+       x = "Participant",
+       y = "Expression")
+
+
+distribution_check_subject_plot
+```
+
+Combine boxplots
+```{r fig.height=5, fig.width=18}
+#With boxplot
+distribution_check_subject_all = (distribution_check_subject_plot + theme(strip.text.y = element_blank())) +
+  (distribution_check_avg_boxplot + theme(axis.title.y = element_blank(), legend.position = "none")) +
+  plot_layout(guides = "collect",
+              axes = "collect",
+              axis_titles = "collect",
+              widths = c(1, 0.1)) +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+# #Get outliers
+# distribution_check_subject_all %>% 
+#   ggplotly()
+
+```
+
+#### Distribution, Log2FC, by organism, Densities
+
+```{r fig.height=5, fig.width=10}
+#### Distribution, Log2FC, by organism, Densities
+distribution_check_log2fc_plot = long_expr %>% 
+  ggplot() +
+  aes(x = log2fc) +
+  
+    facet_grid(~timepoint, scales = "free_y") +
+  
+  #Human
+  geom_density(aes(fill = organism), 
+               na.rm = T,
+               color = NA,
+               position = position_identity(), 
+               size = 1,
+               alpha = 0.2,
+               data = . %>% 
+                 filter(organism == "Human")) +
+  
+  geom_density(aes(color = organism), 
+               na.rm = T,
+               fill = NA,
+               position = position_identity(), 
+               size = 1,
+               alpha = 1,
+               data = . %>% 
+                 filter(organism == "Human")) +
+  
+  #Mouse
+  geom_density(aes(fill = organism), 
+               color = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 0.2,
+               size = 1,
+               data = . %>% 
+                 filter(organism == "Mouse")) +
+  
+  geom_density(aes(color = organism), 
+               fill = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 1,
+               size = 1,
+               data = . %>% 
+                 filter(organism == "Mouse")) +
+
+  scale_y_continuous(expand = c(0.01, 0.01))+
+  scale_x_continuous(limits = c(-5, 5)) +
+  scale_fill_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  scale_color_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        legend.key = element_blank(),
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "",
+       x = "Log2-Fold Change",
+       y = "Frequency")
+
+distribution_check_log2fc_plot
+
+```
+
+
+
+
+
+
+
+
+##### Distribution, Log2FC, by organism, Boxplot
+```{r}
+
+#Distribution, Log2FC, by organism, Boxplot --------
+distribution_check_avg_log2fc_boxplot = long_expr_log2fc_avg %>% 
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  drop_na(avg_log2fc) %>% 
+  ggplot() +
+  aes(y = avg_log2fc,
+      x = organism,
+      label = organism) +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+  facet_grid(~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0,0), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Log2-Fold Change")
+
+distribution_check_avg_log2fc_boxplot
+
+#Boxplot by organism, averaged, all timepoints --------
+distribution_check_avg_log2fc_boxplot_timepoints = long_expr_log2fc_avg %>% 
+  # filter(timepoint %in% c(1)) %>% 
+  drop_na(avg_log2fc) %>% 
+  ggplot() +
+  aes(y = avg_log2fc,
+      x = organism,
+      label = organism) +
+    facet_grid(~timepoint, scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+
+  scale_y_continuous(expand = c(0,0), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Log2-Fold Change")
+
+distribution_check_avg_log2fc_boxplot_timepoints
+```
+
+
+##### Distribution, Log2FC, by subject, Boxplot
+```{r fig.height=7, fig.width=18}
+
+##### Distribution, Log2FC, by subject, Boxplot
+distribution_check_subject_log2fc_plot = long_expr %>% 
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+    facet_grid(~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  #Boxplot
+  geom_boxplot(aes(fill = organism), alpha = 1, width = 1, outliers = F) +
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+
+distribution_check_subject_log2fc_plot
+
+# #Get outliers
+# distribution_check_subject_log2fc_plot %>% 
+#   ggplotly()
+```
+
+
+Sanity check
+```{r}
+#Sanity check
+long_expr %>% 
+  filter(organism == "Mouse") %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+  facet_grid(timepoint~.) +
+  
+  geom_boxplot(aes(fill = organism), outliers = F) +
+
+  scale_y_continuous(expand = c(0.01, 0.01), limits = c(-1, 1))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+
+
+long_expr %>% 
+  filter(organism == "Human") %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+  geom_boxplot(aes(fill = organism), outliers = F) +
+  facet_grid(timepoint~.) +
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+```
+
+##Unite all distributions 
+```{r fig.height=10, fig.width=18}
+#Combine boxplots-------
+a = (distribution_check_subject_log2fc_plot + theme(strip.text.y = element_blank()))
+b = (distribution_check_avg_log2fc_boxplot + theme(axis.title.y = element_blank(), legend.position = "none"))
+c = (distribution_check_subject_plot + theme(strip.text.y = element_blank()))
+d = (distribution_check_avg_boxplot + theme(axis.title.y = element_blank(), legend.position = "none"))
+
+distribution_check_subject_log2fc_all = ((c | d) + plot_layout(widths = c(1, 0.1))) /
+((a | b) + plot_layout(widths = c(1, 0.1))) +
+  plot_layout(guides = "collect",
+              axes = "collect",
+              axis_titles = "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+distribution_check_densities_patch = ((distribution_check_avg_plot + theme(strip.text.y = element_blank())) | (distribution_check_log2fc_plot)) +
+  plot_layout(widths = c(0.5, 0.5),
+              guides = "collect", axis_titles = "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+distribution_check_subject_avg_exprs_log2fc_all = distribution_check_densities_patch/distribution_check_subject_log2fc_all +
+  plot_layout(heights = c(0.2, 0.8))
+
+distribution_check_subject_avg_exprs_log2fc_all
+
+#Save
+distribution_check_subject_avg_exprs_log2fc_all %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_human_mouse_qc_distribution_subject_expression_log2fc_densities_all.png")),
+         width = 18,
+         height = 10)
+
+```
+##### PCA: Expression and Log2fc
+```{r fig.height=3, fig.width=7}
+#Import metadata
+annotation_samples_pca = long_expr %>% 
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  select(participant_id, organism, timepoint, sample) %>% 
+  distinct()
+
+#Get DEGs in human
+human_degs = all_degs_human_mouse %>% #169.800 rows
+  filter(adj_p_val <= 0.05) %>%  #24.136 rows
+  pull(human_symbol) %>% 
+  unique()
+
+beep()
+
+# PCA -------
+
+# PCA with raw values ====================
+clean_matrix_raw = long_expr %>%
+  #Filter only DEGs
+  # filter(human_symbol %in% human_degs) %>% 
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>%  
+  select(sample, human_symbol, value = expression) %>% 
+  pivot_wider(names_from = "sample",
+              values_from = "value") %>% 
+  column_to_rownames("human_symbol") %>% 
+  as.matrix()
+
+clean_matrix_raw[!is.finite(clean_matrix_raw)] <- 0
+
+pca_raw <- prcomp(t(clean_matrix_raw), scale. = TRUE)
+pca_raw_df <- as_tibble(pca_raw$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_raw$x)) %>%
+  left_join(annotation_samples_pca, by = "sample")
+
+#With outliers
+pca_expression <- pca_raw_df %>% 
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      fill = timepoint,
+      shape = organism,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_vaxgo() +
+  scale_color_manual(values = colors$timepoint) +
+  scale_fill_manual(values = colors$timepoint) +
+  scale_shape_manual(values = c("Human" =  21,
+                                "Mouse" = 24)) +
+  labs(title = "Log2-Expression",
+       shape = "Organism",
+       color = "Timepoint") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  guides(fill = "none")
+
+pca_expression 
+
+# PCA with Log2FC ====================
+clean_matrix_log2fc = long_expr %>% 
+  filter(timepoint %in% timepoint_selected) %>% 
+  # filter(human_symbol %in% human_degs) %>% #Filter only DEGs in human
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  select(sample, human_symbol, log2fc) %>% 
+  pivot_wider(names_from = "sample",
+              values_from = "log2fc") %>% 
+  column_to_rownames("human_symbol") %>% 
+  as.matrix()
+
+clean_matrix_log2fc[!is.finite(clean_matrix_log2fc)] <- 0
+
+pca_log2fc <- prcomp(t(clean_matrix_log2fc), scale. = TRUE)
+pca_log2fc_df <- as_tibble(pca_log2fc$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_log2fc$x)) %>%
+  left_join(annotation_samples_pca, by = "sample")
+
+#Plots ------
+#With outliers
+pca_log2fc <- pca_log2fc_df %>% 
+  filter(timepoint %in% timepoint_selected) %>% 
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      fill = timepoint,
+      shape = organism,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_vaxgo() +
+  scale_color_manual(values = colors$timepoint) +
+  scale_fill_manual(values = colors$timepoint) +
+  scale_shape_manual(values = c("Human" =  21,
+                                "Mouse" = 24)) +
+  labs(title = "Log2FC",
+       shape = "Organism",
+       color = "Timepoint") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  guides(fill = "none")
+
+#Unite plots
+pca_log2fc_expression = (pca_expression | pca_log2fc) +
+  plot_layout(guides = "collect")
+pca_log2fc_expression
+
+#Save
+pca_log2fc_expression %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_human_mouse_qc_pca_log2fc.png")),
+         width = 7,
+         height = 3)
+```
+
+
+#===================
+
+#Escherichia coli
+Import
+```{r}
+#Input
+filename = "ecoli_infection"
+pathogen_selected = "Escherichia coli"
+timepoint_selected = c("24h", "Day 1")
+
+#Import
+all_human_mouse_samples_log2fc = readRDS(here("tables", "all_human_mouse_samples_log2fc.rds"))
+human_mouse_metadata = readRDS(file = here("tables", "all_human_mouse_metadata.rds")) 
+all_degs_human_mouse = readRDS(file = here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
+  filter(pathogen == pathogen_selected)
+
+all_degs_human_mouse$timepoint %>% unique()
+
+# Annotate expression data
+all_human_mouse_samples_log2fc_annotated <- all_human_mouse_samples_log2fc %>%
+  select(human_symbol, geo_sample, expression = value_raw, day0_value_raw, log2fc) %>% 
+  inner_join(human_mouse_metadata, by = "geo_sample")
+
+long_expr = all_human_mouse_samples_log2fc_annotated %>%  
+  filter(pathogen == pathogen_selected)
+
+
+#Average L2FC and expression
+long_expr_log2fc_avg = long_expr %>% 
+  group_by(human_symbol, organism, timepoint) %>% 
+  summarise(n_subjects = n(),
+            #Expression
+            avg_expression = mean(expression, na.rm = T),
+            median_expression = median(expression, na.rm = T),
+            sd_expression = sd(expression, na.rm = T),
+            se_expression = sd_expression/sqrt(n_subjects),
+            #Log2FC
+            avg_log2fc = mean(log2fc, na.rm = T),
+            sd_log2fc = sd(expression, na.rm = T),
+            se_log2fc = sd_log2fc/sqrt(n_subjects),
+            #Effect size
+            effect_size = avg_log2fc/sd_log2fc) %>% 
+  ungroup() %>% 
+  mutate(ci_low_expression = avg_expression - 1.96*se_expression,
+         ci_high_expression = avg_expression + 1.96*se_expression,
+         ci_low_log2fc = avg_log2fc - 1.96*se_log2fc,
+         ci_high_log2fc = avg_log2fc + 1.96*se_log2fc)
+
+
+```
+
+##### RLE plot
+```{r fig.height=8, fig.width=18}
+# Plot RLE
+rle_plot = long_expr %>%
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  group_by(human_symbol, organism) %>%
+  mutate(expression_median = median(expression, na.rm = TRUE),
+         RLE = expression - expression_median) %>%
+  ungroup() %>% 
+  ggplot() +
+  aes(x = participant_id, y = RLE, fill = organism, color = organism) +
+  facet_wrap(~pathogen+organism+timepoint, scales = "free_x", space = "free_x", nrow = 1) +
+    geom_boxplot(outlier.size = 0.5) +
+  theme_vaxgo() +
+  labs(title = "RLE Plot by Organism", y = "Relative Log Expression", x = "Sample") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8),
+        legend.position = "top") +
+    scale_fill_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  scale_color_manual(values = c(Mouse = "#4DBBD5FF",
+                                Human = "#90A4AEFF")) 
+
+# Print
+print(rle_plot)
+
+#Save
+rle_plot %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_human_mouse_qc_rle_plot.png")),
+         width = 18,
+         height = 8)
+
+beep()
+```
+
+
+#### SA Plot
+
+```{r fig.height=5, fig.width=10}
+sa_plot = long_expr_log2fc_avg %>%
+  ggplot() +
+  aes(x = avg_expression,
+      y = sd_expression,
+      color = timepoint) +
+  facet_nested_wrap(~organism+timepoint, scales = "free",
+             nrow = 2) +
+  geom_point(alpha = 0.1) + 
+  geom_smooth(se = T, size = 1, color = "black", fill = "gray25") +
+  geom_hline(yintercept = 0, linetype = 2, color = "black") +
+  scale_color_manual(values = colors$timepoint) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  labs(x = "Avg log2-Expression",
+       y = "Standard deviation",
+       color = "Timepoint") +
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 10),
+          axis.text.y = element_text(size = 10),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+          panel.spacing = unit(1, "lines"),
+          plot.margin = margin(0, 0.5, 0, 0.5, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.margin=margin(0,0,0,0),
+          legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.title = element_text(size = 10),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+    ) +
+  guides(color = guide_legend(override.aes = list(size = 5, alpha = 1, shape = 16)))
+
+sa_plot
+
+sa_plot %>% 
+ggsave(file = here("Figures", paste0(filename, "_human_mouse_qc_saplot.png")), 
+         height = 5,
+         width = 10)
+```
+
+
+#### MA Plot
+```{r fig.height=5, fig.width=10}
+ma_plot = long_expr_log2fc_avg %>%
+  ggplot() +
+  aes(x = avg_expression,
+      y = avg_log2fc,
+      color = timepoint) +
+  facet_nested_wrap(~organism+timepoint, scales = "free",
+             nrow = 2) +
+  geom_point(alpha = 0.1) + 
+  geom_hline(yintercept = 0, linetype = 2, color = "black") +
+  scale_color_manual(values = colors$timepoint) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  labs(x = "Avg log2-Expression",
+       y = "Log2Fold-Change",
+       color = "Timepoint") +
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 10),
+          axis.text.y = element_text(size = 10),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+          panel.spacing = unit(1, "lines"),
+          plot.margin = margin(0, 0.5, 0, 0.5, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.margin=margin(0,0,0,0),
+          legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.title = element_text(size = 10),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+    ) +
+  guides(color = guide_legend(override.aes = list(size = 5, alpha = 1, shape = 16)))
+
+ma_plot
+
+ma_plot %>% 
+  ggsave(file = here("Figures", paste0(filename, "_human_mouse_qc_maplot.png")), 
+         height = 5,
+         width = 10)
+```
+
+
+
+
+
+##### Distribution, Expression, by organism, Density
+```{r fig.height=3, fig.width=10}
+
+#Plot average expression
+distribution_check_avg_plot = long_expr_log2fc_avg %>% 
+  ggplot() +
+  aes(x = avg_expression) +
+  facet_grid(~timepoint, scales = "fixed", axes = "all") +
+  #Human
+  geom_density(aes(y = after_stat(count),
+                   fill = organism), 
+               na.rm = T,
+               color = NA,
+               position = position_identity(), 
+               alpha = 0.2,
+               data = . %>% 
+                 filter(organism == "Human")) +
+  
+  geom_density(aes(y = after_stat(count),
+                   color = organism), 
+               na.rm = T,
+               fill = NA,
+               size = 1,
+               position = position_identity(), 
+               alpha = 1,
+               data = . %>% 
+                 filter(organism == "Human")) +
+  
+  #Mouse
+  geom_density(aes(y = after_stat(count),
+                   fill = organism), 
+               color = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 0.2,
+               data = . %>% 
+                 filter(organism == "Mouse")) +
+  geom_density(aes(y = after_stat(count),
+                   color = organism), 
+               fill = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 1,
+               size = 1,
+               data = . %>% 
+                 filter(organism == "Mouse")) +
+  scale_y_continuous(expand = c(0.01, 0.01))+
+  scale_fill_manual(values = c(FIT = "#4361ee",
+                               Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  scale_color_manual(values = c(FIT = "#4361ee",
+                                Mouse = "#4DBBD5FF",
+                                Human = "#90A4AEFF")) +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        legend.key = element_blank(),
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "",
+       x = "Expression",
+       y = "Frequency")
+
+distribution_check_avg_plot
+
+```
+
+
+
+
+
+##### Distribution, Expression, by organism, Violin plot
+```{r}
+#Boxplot by organism, averaged
+distribution_check_avg_boxplot = long_expr_log2fc_avg %>% 
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  mutate(timepoint = as.character(timepoint)) %>% 
+  ggplot() +
+  aes(y = avg_expression,
+      x = organism,
+      label = organism) +
+    facet_grid(~organism, scales = "free_x", 
+             space = "free_x", 
+             axes = "all_x",
+             axis.labels = "all_y") +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 20))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Expression")
+
+distribution_check_avg_boxplot
+```
+
+
+
+
+##### Distribution, Expression, by subject, Kaboxplot
+```{r fig.height=7, fig.width=18}
+
+human_mouse_fluad_kaboxplot_data = long_expr %>%
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  group_by(organism, participant_id, timepoint) %>%
+  summarise(
+    q0  = quantile(expression, 0),
+    q25 = quantile(expression, 0.25),
+    q50 = quantile(expression, 0.5),
+    q75 = quantile(expression, 0.75),
+    q100 = quantile(expression, 1)
+  ) %>% 
+  ungroup() %>% 
+  droplevels()
+
+human_mouse_fluad_kaboxplot_data_long = human_mouse_fluad_kaboxplot_data %>% 
+  pivot_longer(cols = q0:q100,
+               names_to = "quantile",
+               values_to = "expression") %>% 
+  ungroup() %>% 
+  droplevels()
+
+distribution_check_subject_plot = long_expr %>% 
+  droplevels() %>% 
+  filter(timepoint %in% c(timepoint_selected)) %>%
+  ggplot() +
+  aes(y = expression,
+      x = participant_id,
+      label = participant_id) +
+    facet_wrap(~fct_rev(organism), 
+           scales = "free_x", 
+           space = "free_x", 
+           drop = TRUE) +
+  
+  # IQR
+  geom_boxplot(aes(fill = organism), alpha = 1, width = 1) +
+  
+  #Connect quantiles
+  geom_line(aes(group = quantile),
+            color = "black",
+            size = 1,
+            data = human_mouse_fluad_kaboxplot_data_long) +
+
+  
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     limits = c(-5, 20)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF"
+    )) +
+  scale_color_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF"
+    )) +
+  guides(color=guide_legend(nrow=1,byrow=TRUE)) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "",
+       color = "",
+       x = "Participant",
+       y = "Expression")
+
+
+distribution_check_subject_plot
+```
+
+Combine boxplots
+```{r fig.height=5, fig.width=18}
+#With boxplot
+distribution_check_subject_all = (distribution_check_subject_plot + theme(strip.text.y = element_blank())) +
+  (distribution_check_avg_boxplot + theme(axis.title.y = element_blank(), legend.position = "none")) +
+  plot_layout(guides = "collect",
+              axes = "collect",
+              axis_titles = "collect",
+              widths = c(1, 0.1)) +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+# #Get outliers
+# distribution_check_subject_all %>% 
+#   ggplotly()
+
+```
+
+#### Distribution, Log2FC, by organism, Densities
+
+```{r fig.height=5, fig.width=10}
+#### Distribution, Log2FC, by organism, Densities
+distribution_check_log2fc_plot = long_expr %>% 
+  ggplot() +
+  aes(x = log2fc) +
+  
+    facet_grid(~timepoint, scales = "free_y") +
+  
+  #Human
+  geom_density(aes(fill = organism), 
+               na.rm = T,
+               color = NA,
+               position = position_identity(), 
+               size = 1,
+               alpha = 0.2,
+               data = . %>% 
+                 filter(organism == "Human")) +
+  
+  geom_density(aes(color = organism), 
+               na.rm = T,
+               fill = NA,
+               position = position_identity(), 
+               size = 1,
+               alpha = 1,
+               data = . %>% 
+                 filter(organism == "Human")) +
+  
+  #Mouse
+  geom_density(aes(fill = organism), 
+               color = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 0.2,
+               size = 1,
+               data = . %>% 
+                 filter(organism == "Mouse")) +
+  
+  geom_density(aes(color = organism), 
+               fill = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 1,
+               size = 1,
+               data = . %>% 
+                 filter(organism == "Mouse")) +
+
+  scale_y_continuous(expand = c(0.01, 0.01))+
+  scale_x_continuous(limits = c(-5, 5)) +
+  scale_fill_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  scale_color_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        legend.key = element_blank(),
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "",
+       x = "Log2-Fold Change",
+       y = "Frequency")
+
+distribution_check_log2fc_plot
+
+```
+
+
+
+
+
+
+
+
+##### Distribution, Log2FC, by organism, Boxplot
+```{r}
+
+#Distribution, Log2FC, by organism, Boxplot --------
+distribution_check_avg_log2fc_boxplot = long_expr_log2fc_avg %>% 
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  drop_na(avg_log2fc) %>% 
+  ggplot() +
+  aes(y = avg_log2fc,
+      x = organism,
+      label = organism) +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+  facet_grid(~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0,0), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Log2-Fold Change")
+
+distribution_check_avg_log2fc_boxplot
+
+#Boxplot by organism, averaged, all timepoints --------
+distribution_check_avg_log2fc_boxplot_timepoints = long_expr_log2fc_avg %>% 
+  # filter(timepoint %in% c(1)) %>% 
+  drop_na(avg_log2fc) %>% 
+  ggplot() +
+  aes(y = avg_log2fc,
+      x = organism,
+      label = organism) +
+    facet_grid(~timepoint, scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+
+  scale_y_continuous(expand = c(0,0), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Log2-Fold Change")
+
+distribution_check_avg_log2fc_boxplot_timepoints
+```
+
+
+##### Distribution, Log2FC, by subject, Boxplot
+```{r fig.height=7, fig.width=18}
+
+##### Distribution, Log2FC, by subject, Boxplot
+distribution_check_subject_log2fc_plot = long_expr %>% 
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+    facet_grid(~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  #Boxplot
+  geom_boxplot(aes(fill = organism), alpha = 1, width = 1, outliers = F) +
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+
+distribution_check_subject_log2fc_plot
+
+# #Get outliers
+# distribution_check_subject_log2fc_plot %>% 
+#   ggplotly()
+```
+
+
+Sanity check
+```{r}
+#Sanity check
+long_expr %>% 
+  filter(organism == "Mouse") %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+  facet_grid(timepoint~.) +
+  
+  geom_boxplot(aes(fill = organism), outliers = F) +
+
+  scale_y_continuous(expand = c(0.01, 0.01), limits = c(-1, 1))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+
+
+long_expr %>% 
+  filter(organism == "Human") %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+  geom_boxplot(aes(fill = organism), outliers = F) +
+  facet_grid(timepoint~.) +
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+```
+
+##Unite all distributions 
+```{r fig.height=10, fig.width=18}
+#Combine boxplots-------
+a = (distribution_check_subject_log2fc_plot + theme(strip.text.y = element_blank()))
+b = (distribution_check_avg_log2fc_boxplot + theme(axis.title.y = element_blank(), legend.position = "none"))
+c = (distribution_check_subject_plot + theme(strip.text.y = element_blank()))
+d = (distribution_check_avg_boxplot + theme(axis.title.y = element_blank(), legend.position = "none"))
+
+distribution_check_subject_log2fc_all = ((c | d) + plot_layout(widths = c(1, 0.1))) /
+((a | b) + plot_layout(widths = c(1, 0.1))) +
+  plot_layout(guides = "collect",
+              axes = "collect",
+              axis_titles = "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+distribution_check_densities_patch = ((distribution_check_avg_plot + theme(strip.text.y = element_blank())) | (distribution_check_log2fc_plot)) +
+  plot_layout(widths = c(0.5, 0.5),
+              guides = "collect", axis_titles = "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+distribution_check_subject_avg_exprs_log2fc_all = distribution_check_densities_patch/distribution_check_subject_log2fc_all +
+  plot_layout(heights = c(0.2, 0.8))
+
+distribution_check_subject_avg_exprs_log2fc_all
+
+#Save
+distribution_check_subject_avg_exprs_log2fc_all %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_human_mouse_qc_distribution_subject_expression_log2fc_densities_all.png")),
+         width = 18,
+         height = 10)
+
+```
+##### PCA: Expression and Log2fc
+```{r fig.height=3, fig.width=7}
+#Import metadata
+annotation_samples_pca = long_expr %>% 
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  select(participant_id, organism, timepoint, sample) %>% 
+  distinct()
+
+#Get DEGs in human
+human_degs = all_degs_human_mouse %>% #169.800 rows
+  filter(adj_p_val <= 0.05) %>%  #24.136 rows
+  pull(human_symbol) %>% 
+  unique()
+
+beep()
+
+# PCA -------
+
+# PCA with raw values ====================
+clean_matrix_raw = long_expr %>%
+  #Filter only DEGs
+  # filter(human_symbol %in% human_degs) %>% 
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>%  
+  select(sample, human_symbol, value = expression) %>% 
+  pivot_wider(names_from = "sample",
+              values_from = "value") %>% 
+  column_to_rownames("human_symbol") %>% 
+  as.matrix()
+
+clean_matrix_raw[!is.finite(clean_matrix_raw)] <- 0
+
+pca_raw <- prcomp(t(clean_matrix_raw), scale. = TRUE)
+pca_raw_df <- as_tibble(pca_raw$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_raw$x)) %>%
+  left_join(annotation_samples_pca, by = "sample")
+
+#With outliers
+pca_expression <- pca_raw_df %>% 
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      fill = timepoint,
+      shape = organism,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_vaxgo() +
+  scale_color_manual(values = colors$timepoint) +
+  scale_fill_manual(values = colors$timepoint) +
+  scale_shape_manual(values = c("Human" =  21,
+                                "Mouse" = 24)) +
+  labs(title = "Log2-Expression",
+       shape = "Organism",
+       color = "Timepoint") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  guides(fill = "none")
+
+pca_expression 
+
+# PCA with Log2FC ====================
+clean_matrix_log2fc = long_expr %>% 
+  filter(timepoint %in% timepoint_selected) %>% 
+  # filter(human_symbol %in% human_degs) %>% #Filter only DEGs in human
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  select(sample, human_symbol, log2fc) %>% 
+  pivot_wider(names_from = "sample",
+              values_from = "log2fc") %>% 
+  column_to_rownames("human_symbol") %>% 
+  as.matrix()
+
+clean_matrix_log2fc[!is.finite(clean_matrix_log2fc)] <- 0
+
+pca_log2fc <- prcomp(t(clean_matrix_log2fc), scale. = TRUE)
+pca_log2fc_df <- as_tibble(pca_log2fc$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_log2fc$x)) %>%
+  left_join(annotation_samples_pca, by = "sample")
+
+#Plots ------
+#With outliers
+pca_log2fc <- pca_log2fc_df %>% 
+  filter(timepoint %in% timepoint_selected) %>% 
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      fill = timepoint,
+      shape = organism,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_vaxgo() +
+  scale_color_manual(values = colors$timepoint) +
+  scale_fill_manual(values = colors$timepoint) +
+  scale_shape_manual(values = c("Human" =  21,
+                                "Mouse" = 24)) +
+  labs(title = "Log2FC",
+       shape = "Organism",
+       color = "Timepoint") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  guides(fill = "none")
+
+#Unite plots
+pca_log2fc_expression = (pca_expression | pca_log2fc) +
+  plot_layout(guides = "collect")
+pca_log2fc_expression
+
+#Save
+pca_log2fc_expression %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_human_mouse_qc_pca_log2fc.png")),
+         width = 7,
+         height = 3)
+```
+
+
+
+
+
+
+
+
+
+#==============
+#Burn
+Import
+```{r}
+#Input
+filename = "burn"
+pathogen_selected = "Burn"
+timepoint_selected = c("2h", "Early hours")
+
+#Import
+all_human_mouse_samples_log2fc = readRDS(here("tables", "all_human_mouse_samples_log2fc.rds"))
+human_mouse_metadata = readRDS(file = here("tables", "all_human_mouse_metadata.rds")) 
+all_degs_human_mouse = readRDS(file = here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
+  filter(pathogen == pathogen_selected)
+
+all_degs_human_mouse$timepoint %>% unique()
+
+# Annotate expression data
+all_human_mouse_samples_log2fc_annotated <- all_human_mouse_samples_log2fc %>%
+  select(human_symbol, geo_sample, expression = value_raw, day0_value_raw, log2fc) %>% 
+  inner_join(human_mouse_metadata, by = "geo_sample")
+
+long_expr = all_human_mouse_samples_log2fc_annotated %>%  
+  filter(pathogen == pathogen_selected)
+
+long_expr %>% 
+  filter(is.na(expression))
+  dplyr::count(organism, timepoint)
+
+#Average L2FC and expression
+long_expr_log2fc_avg = long_expr %>% 
+  group_by(human_symbol, organism, timepoint) %>% 
+  summarise(n_subjects = n(),
+            #Expression
+            avg_expression = mean(expression, na.rm = T),
+            median_expression = median(expression, na.rm = T),
+            sd_expression = sd(expression, na.rm = T),
+            se_expression = sd_expression/sqrt(n_subjects),
+            #Log2FC
+            avg_log2fc = mean(log2fc, na.rm = T),
+            sd_log2fc = sd(expression, na.rm = T),
+            se_log2fc = sd_log2fc/sqrt(n_subjects),
+            #Effect size
+            effect_size = avg_log2fc/sd_log2fc) %>% 
+  ungroup() %>% 
+  mutate(ci_low_expression = avg_expression - 1.96*se_expression,
+         ci_high_expression = avg_expression + 1.96*se_expression,
+         ci_low_log2fc = avg_log2fc - 1.96*se_log2fc,
+         ci_high_log2fc = avg_log2fc + 1.96*se_log2fc)
+
+
+```
+
+##### RLE plot
+```{r fig.height=8, fig.width=18}
+# Plot RLE
+
+rle_df = long_expr %>%
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  filter(!is.na(expression)) %>%
+  group_by(human_symbol, organism) %>%
+  mutate(expression_median = median(expression, na.rm = TRUE),
+         RLE = expression - expression_median)
+
+rle_plot = rle_df %>%
+  ungroup() %>% 
+  ggplot() +
+  aes(x = participant_id, y = RLE, fill = organism, color = organism) +
+  facet_wrap(~pathogen+organism+timepoint, scales = "free_x", space = "free_x", nrow = 1) +
+  geom_boxplot(outlier.size = 0.5) +
+  theme_vaxgo() +
+  labs(title = "RLE Plot by Organism", y = "Relative Log Expression", x = "Sample") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8),
+        legend.position = "top") +
+    scale_fill_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  scale_color_manual(values = c(Mouse = "#4DBBD5FF",
+                                Human = "#90A4AEFF")) 
+
+# Print
+print(rle_plot)
+
+summary(rle_df$RLE)
+
+#Save
+rle_plot %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_human_mouse_qc_rle_plot.png")),
+         width = 18,
+         height = 8)
+
+beep()
+```
+
+
+#### SA Plot
+
+```{r fig.height=5, fig.width=10}
+sa_plot = long_expr_log2fc_avg %>%
+  ggplot() +
+  aes(x = avg_expression,
+      y = sd_expression,
+      color = timepoint) +
+  facet_nested_wrap(~organism+timepoint, scales = "free",
+             nrow = 2) +
+  geom_point(alpha = 0.1) + 
+  geom_smooth(se = T, size = 1, color = "black", fill = "gray25") +
+  geom_hline(yintercept = 0, linetype = 2, color = "black") +
+  scale_color_manual(values = colors$timepoint) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  labs(x = "Avg log2-Expression",
+       y = "Standard deviation",
+       color = "Timepoint") +
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 10),
+          axis.text.y = element_text(size = 10),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+          panel.spacing = unit(1, "lines"),
+          plot.margin = margin(0, 0.5, 0, 0.5, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.margin=margin(0,0,0,0),
+          legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.title = element_text(size = 10),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+    ) +
+  guides(color = guide_legend(override.aes = list(size = 5, alpha = 1, shape = 16)))
+
+sa_plot
+
+sa_plot %>% 
+ggsave(file = here("Figures", paste0(filename, "_human_mouse_qc_saplot.png")), 
+         height = 5,
+         width = 10)
+```
+
+
+#### MA Plot
+```{r fig.height=5, fig.width=10}
+ma_plot = long_expr_log2fc_avg %>%
+  ggplot() +
+  aes(x = avg_expression,
+      y = avg_log2fc,
+      color = timepoint) +
+  facet_nested_wrap(~organism+timepoint, scales = "free",
+             nrow = 2) +
+  geom_point(alpha = 0.1) + 
+  geom_hline(yintercept = 0, linetype = 2, color = "black") +
+  scale_color_manual(values = colors$timepoint) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  labs(x = "Avg log2-Expression",
+       y = "Log2Fold-Change",
+       color = "Timepoint") +
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 10),
+          axis.text.y = element_text(size = 10),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+          panel.spacing = unit(1, "lines"),
+          plot.margin = margin(0, 0.5, 0, 0.5, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.margin=margin(0,0,0,0),
+          legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.title = element_text(size = 10),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+    ) +
+  guides(color = guide_legend(override.aes = list(size = 5, alpha = 1, shape = 16)))
+
+ma_plot
+
+ma_plot %>% 
+  ggsave(file = here("Figures", paste0(filename, "_human_mouse_qc_maplot.png")), 
+         height = 5,
+         width = 10)
+```
+
+
+
+
+
+##### Distribution, Expression, by organism, Density
+```{r fig.height=3, fig.width=10}
+
+#Plot average expression
+distribution_check_avg_plot = long_expr_log2fc_avg %>% 
+  ggplot() +
+  aes(x = avg_expression) +
+  facet_grid(~timepoint, scales = "fixed", axes = "all") +
+  #Human
+  geom_density(aes(y = after_stat(count),
+                   fill = organism), 
+               na.rm = T,
+               color = NA,
+               position = position_identity(), 
+               alpha = 0.2,
+               data = . %>% 
+                 filter(organism == "Human")) +
+  
+  geom_density(aes(y = after_stat(count),
+                   color = organism), 
+               na.rm = T,
+               fill = NA,
+               size = 1,
+               position = position_identity(), 
+               alpha = 1,
+               data = . %>% 
+                 filter(organism == "Human")) +
+  
+  #Mouse
+  geom_density(aes(y = after_stat(count),
+                   fill = organism), 
+               color = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 0.2,
+               data = . %>% 
+                 filter(organism == "Mouse")) +
+  geom_density(aes(y = after_stat(count),
+                   color = organism), 
+               fill = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 1,
+               size = 1,
+               data = . %>% 
+                 filter(organism == "Mouse")) +
+  scale_y_continuous(expand = c(0.01, 0.01))+
+  scale_fill_manual(values = c(FIT = "#4361ee",
+                               Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  scale_color_manual(values = c(FIT = "#4361ee",
+                                Mouse = "#4DBBD5FF",
+                                Human = "#90A4AEFF")) +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        legend.key = element_blank(),
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "",
+       x = "Expression",
+       y = "Frequency")
+
+distribution_check_avg_plot
+
+```
+
+
+
+
+
+##### Distribution, Expression, by organism, Violin plot
+```{r}
+#Boxplot by organism, averaged
+distribution_check_avg_boxplot = long_expr_log2fc_avg %>% 
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  mutate(timepoint = as.character(timepoint)) %>% 
+  ggplot() +
+  aes(y = avg_expression,
+      x = organism,
+      label = organism) +
+    facet_grid(~organism, scales = "free_x", 
+             space = "free_x", 
+             axes = "all_x",
+             axis.labels = "all_y") +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 20))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Expression")
+
+distribution_check_avg_boxplot
+```
+
+
+
+
+##### Distribution, Expression, by subject, Kaboxplot
+```{r fig.height=7, fig.width=18}
+
+human_mouse_fluad_kaboxplot_data = long_expr %>%
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  group_by(organism, participant_id, timepoint) %>%
+  summarise(
+    q0  = quantile(expression, 0),
+    q25 = quantile(expression, 0.25),
+    q50 = quantile(expression, 0.5),
+    q75 = quantile(expression, 0.75),
+    q100 = quantile(expression, 1)
+  ) %>% 
+  ungroup() %>% 
+  droplevels()
+
+human_mouse_fluad_kaboxplot_data_long = human_mouse_fluad_kaboxplot_data %>% 
+  pivot_longer(cols = q0:q100,
+               names_to = "quantile",
+               values_to = "expression") %>% 
+  ungroup() %>% 
+  droplevels()
+
+distribution_check_subject_plot = long_expr %>% 
+  droplevels() %>% 
+  filter(timepoint %in% c(timepoint_selected)) %>%
+  ggplot() +
+  aes(y = expression,
+      x = participant_id,
+      label = participant_id) +
+    facet_wrap(~fct_rev(organism), 
+           scales = "free_x", 
+           space = "free_x", 
+           drop = TRUE) +
+  
+  # IQR
+  geom_boxplot(aes(fill = organism), alpha = 1, width = 1) +
+  
+  #Connect quantiles
+  geom_line(aes(group = quantile),
+            color = "black",
+            size = 1,
+            data = human_mouse_fluad_kaboxplot_data_long) +
+
+  
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     limits = c(-5, 20)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF"
+    )) +
+  scale_color_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF"
+    )) +
+  guides(color=guide_legend(nrow=1,byrow=TRUE)) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "",
+       color = "",
+       x = "Participant",
+       y = "Expression")
+
+
+distribution_check_subject_plot
+```
+
+Combine boxplots
+```{r fig.height=5, fig.width=18}
+#With boxplot
+distribution_check_subject_all = (distribution_check_subject_plot + theme(strip.text.y = element_blank())) +
+  (distribution_check_avg_boxplot + theme(axis.title.y = element_blank(), legend.position = "none")) +
+  plot_layout(guides = "collect",
+              axes = "collect",
+              axis_titles = "collect",
+              widths = c(1, 0.1)) +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+# #Get outliers
+# distribution_check_subject_all %>% 
+#   ggplotly()
+
+```
+
+#### Distribution, Log2FC, by organism, Densities
+
+```{r fig.height=5, fig.width=10}
+#### Distribution, Log2FC, by organism, Densities
+distribution_check_log2fc_plot = long_expr %>% 
+  ggplot() +
+  aes(x = log2fc) +
+  
+    facet_grid(~timepoint, scales = "free_y") +
+  
+  #Human
+  geom_density(aes(fill = organism), 
+               na.rm = T,
+               color = NA,
+               position = position_identity(), 
+               size = 1,
+               alpha = 0.2,
+               data = . %>% 
+                 filter(organism == "Human")) +
+  
+  geom_density(aes(color = organism), 
+               na.rm = T,
+               fill = NA,
+               position = position_identity(), 
+               size = 1,
+               alpha = 1,
+               data = . %>% 
+                 filter(organism == "Human")) +
+  
+  #Mouse
+  geom_density(aes(fill = organism), 
+               color = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 0.2,
+               size = 1,
+               data = . %>% 
+                 filter(organism == "Mouse")) +
+  
+  geom_density(aes(color = organism), 
+               fill = NA,
+               na.rm = T,
+               position = position_identity(), 
+               alpha = 1,
+               size = 1,
+               data = . %>% 
+                 filter(organism == "Mouse")) +
+
+  scale_y_continuous(expand = c(0.01, 0.01))+
+  scale_x_continuous(limits = c(-5, 5)) +
+  scale_fill_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  scale_color_manual(values = c(Mouse = "#4DBBD5FF",
+                               Human = "#90A4AEFF"))+
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "top",
+        legend.key = element_blank(),
+        strip.text.x = element_text(color = "black", size = 10),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.y = element_rect(fill = NA, color = NA)) +
+  labs(fill = "Organism",
+       color = "",
+       x = "Log2-Fold Change",
+       y = "Frequency")
+
+distribution_check_log2fc_plot
+
+```
+
+
+
+
+
+
+
+
+##### Distribution, Log2FC, by organism, Boxplot
+```{r}
+
+#Distribution, Log2FC, by organism, Boxplot --------
+distribution_check_avg_log2fc_boxplot = long_expr_log2fc_avg %>% 
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  drop_na(avg_log2fc) %>% 
+  ggplot() +
+  aes(y = avg_log2fc,
+      x = organism,
+      label = organism) +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+  facet_grid(~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  scale_y_continuous(expand = c(0,0), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Log2-Fold Change")
+
+distribution_check_avg_log2fc_boxplot
+
+#Boxplot by organism, averaged, all timepoints --------
+distribution_check_avg_log2fc_boxplot_timepoints = long_expr_log2fc_avg %>% 
+  # filter(timepoint %in% c(1)) %>% 
+  drop_na(avg_log2fc) %>% 
+  ggplot() +
+  aes(y = avg_log2fc,
+      x = organism,
+      label = organism) +
+    facet_grid(~timepoint, scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  geom_violin(aes(fill = organism)) +
+  geom_boxplot(fill = "white", 
+               outliers = F, width = 0.1) +
+
+  scale_y_continuous(expand = c(0,0), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Organism",
+       y = "Log2-Fold Change")
+
+distribution_check_avg_log2fc_boxplot_timepoints
+```
+
+
+##### Distribution, Log2FC, by subject, Boxplot
+```{r fig.height=7, fig.width=18}
+
+##### Distribution, Log2FC, by subject, Boxplot
+distribution_check_subject_log2fc_plot = long_expr %>% 
+  filter(timepoint %in% c(timepoint_selected)) %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+    facet_grid(~fct_rev(organism), scales = "free_x", space = "free", axes = "all_x", axis.labels = "all_y") +
+  #Boxplot
+  geom_boxplot(aes(fill = organism), alpha = 1, width = 1, outliers = F) +
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+
+distribution_check_subject_log2fc_plot
+
+# #Get outliers
+# distribution_check_subject_log2fc_plot %>% 
+#   ggplotly()
+```
+
+
+Sanity check
+```{r}
+#Sanity check
+long_expr %>% 
+  filter(organism == "Mouse") %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+  facet_grid(timepoint~.) +
+  
+  geom_boxplot(aes(fill = organism), outliers = F) +
+
+  scale_y_continuous(expand = c(0.01, 0.01), limits = c(-1, 1))+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+
+
+long_expr %>% 
+  filter(organism == "Human") %>% 
+  ggplot() +
+  aes(y = log2fc,
+      x = participant_id,
+      label = participant_id) +
+  geom_boxplot(aes(fill = organism), outliers = F) +
+  facet_grid(timepoint~.) +
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     # limits = c(-1, 1)
+                     )+
+  scale_fill_manual(values = c(
+    "Human"  = "#90A4AEFF",
+    "Mouse" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        legend.key = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x = element_text(color = "white", size = 10, face = "bold"),
+        strip.text.y = element_text(color = "black", size = 10, hjust = 0, angle = 0),
+        panel.spacing.y = unit(0.8, "lines"),
+        strip.background.x = element_rect(fill = "black"),
+        ) +
+  labs(fill = "Organism",
+       x = "Participant",
+       y = "Log2-Fold Change")
+```
+
+##Unite all distributions 
+```{r fig.height=10, fig.width=18}
+#Combine boxplots-------
+a = (distribution_check_subject_log2fc_plot + theme(strip.text.y = element_blank()))
+b = (distribution_check_avg_log2fc_boxplot + theme(axis.title.y = element_blank(), legend.position = "none"))
+c = (distribution_check_subject_plot + theme(strip.text.y = element_blank()))
+d = (distribution_check_avg_boxplot + theme(axis.title.y = element_blank(), legend.position = "none"))
+
+distribution_check_subject_log2fc_all = ((c | d) + plot_layout(widths = c(1, 0.1))) /
+((a | b) + plot_layout(widths = c(1, 0.1))) +
+  plot_layout(guides = "collect",
+              axes = "collect",
+              axis_titles = "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+distribution_check_densities_patch = ((distribution_check_avg_plot + theme(strip.text.y = element_blank())) | (distribution_check_log2fc_plot)) +
+  plot_layout(widths = c(0.5, 0.5),
+              guides = "collect", axis_titles = "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
+
+distribution_check_subject_avg_exprs_log2fc_all = distribution_check_densities_patch/distribution_check_subject_log2fc_all +
+  plot_layout(heights = c(0.2, 0.8))
+
+distribution_check_subject_avg_exprs_log2fc_all
+
+#Save
+distribution_check_subject_avg_exprs_log2fc_all %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_human_mouse_qc_distribution_subject_expression_log2fc_densities_all.png")),
+         width = 18,
+         height = 10)
+
+```
+##### PCA: Expression and Log2fc
+```{r fig.height=3, fig.width=7}
+#Import metadata
+annotation_samples_pca = long_expr %>% 
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  select(participant_id, organism, timepoint, sample) %>% 
+  distinct()
+
+#Get DEGs in human
+human_degs = all_degs_human_mouse %>% #169.800 rows
+  filter(adj_p_val <= 0.05) %>%  #24.136 rows
+  pull(human_symbol) %>% 
+  unique()
+
+beep()
+
+# PCA -------
+
+# PCA with raw values ====================
+clean_matrix_raw = long_expr %>%
+  #Filter only DEGs
+  # filter(human_symbol %in% human_degs) %>% 
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>%  
+  select(sample, human_symbol, value = expression) %>% 
+  pivot_wider(names_from = "sample",
+              values_from = "value") %>% 
+  column_to_rownames("human_symbol") %>% 
+  as.matrix()
+
+clean_matrix_raw[!is.finite(clean_matrix_raw)] <- 0
+
+pca_raw <- prcomp(t(clean_matrix_raw), scale. = TRUE)
+pca_raw_df <- as_tibble(pca_raw$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_raw$x)) %>%
+  left_join(annotation_samples_pca, by = "sample")
+
+#With outliers
+pca_expression <- pca_raw_df %>% 
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      fill = timepoint,
+      shape = organism,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_vaxgo() +
+  scale_color_manual(values = colors$timepoint) +
+  scale_fill_manual(values = colors$timepoint) +
+  scale_shape_manual(values = c("Human" =  21,
+                                "Mouse" = 24)) +
+  labs(title = "Log2-Expression",
+       shape = "Organism",
+       color = "Timepoint") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  guides(fill = "none")
+
+pca_expression 
+
+# PCA with Log2FC ====================
+clean_matrix_log2fc = long_expr %>% 
+  filter(timepoint %in% timepoint_selected) %>% 
+  # filter(human_symbol %in% human_degs) %>% #Filter only DEGs in human
+  mutate(sample = paste0(participant_id, "Day", timepoint)) %>% 
+  select(sample, human_symbol, log2fc) %>% 
+  pivot_wider(names_from = "sample",
+              values_from = "log2fc") %>% 
+  column_to_rownames("human_symbol") %>% 
+  as.matrix()
+
+clean_matrix_log2fc[!is.finite(clean_matrix_log2fc)] <- 0
+
+pca_log2fc <- prcomp(t(clean_matrix_log2fc), scale. = TRUE)
+pca_log2fc_df <- as_tibble(pca_log2fc$x[, 1:2]) %>%
+  mutate(sample = rownames(pca_log2fc$x)) %>%
+  left_join(annotation_samples_pca, by = "sample")
+
+#Plots ------
+#With outliers
+pca_log2fc <- pca_log2fc_df %>% 
+  filter(timepoint %in% timepoint_selected) %>% 
+  ggplot() +
+  aes(x = PC1,
+      y = PC2,
+      color = timepoint,
+      fill = timepoint,
+      shape = organism,
+      label = participant_id) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_vaxgo() +
+  scale_color_manual(values = colors$timepoint) +
+  scale_fill_manual(values = colors$timepoint) +
+  scale_shape_manual(values = c("Human" =  21,
+                                "Mouse" = 24)) +
+  labs(title = "Log2FC",
+       shape = "Organism",
+       color = "Timepoint") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.border = element_rect(colour = "black", fill=NA, linewidth=1),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank()) +
+  guides(fill = "none")
+
+#Unite plots
+pca_log2fc_expression = (pca_expression | pca_log2fc) +
+  plot_layout(guides = "collect")
+pca_log2fc_expression
+
+#Save
+pca_log2fc_expression %>% 
+  ggsave(filename = here("Figures", paste0(filename, "_human_mouse_qc_pca_log2fc.png")),
+         width = 7,
+         height = 3)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
