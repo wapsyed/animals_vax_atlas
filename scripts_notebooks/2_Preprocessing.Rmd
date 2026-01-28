@@ -5185,6 +5185,7 @@ saveRDS(here("tables", "burn_human_log2fc_sample_clean_long.rds"))
 ##### Limma
 Unpaired samples design
 ```{r}
+library(sva)
 #Import
 #Import
 mouse_log2_hgnc_symbol = readRDS(file = here("tables", "trauma_burn_mouse_exprs_hgnc_symbol.rds"))
@@ -5209,38 +5210,91 @@ genes_to_keep <- exprs(eset_mouse) %>%
   { . >= 5 }
 
 eset_filtered <- eset_mouse[genes_to_keep, ]
+```
 
-#Create model matrix
-design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
-                       eset_filtered) 
 
-colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+```{r}
+# 2. Preparação para SVA
+dat <- exprs(eset_filtered)
+metadata <- pData(eset_filtered)
 
-aw <- arrayWeights(eset_filtered, design)
+# Matriz do que queremos preservar (Condição e Timepoint biológico)
+mod  <- model.matrix(~ 0 + condition, data = metadata)
+# Matriz nula
+mod0 <- model.matrix(~ 1, data = metadata)
+
+# 3. Estimar e rodar SVA
+n.sv <- num.sv(dat, mod, method = "be") # 'be' é geralmente mais robusto para transcriptômica
+
+if (n.sv > 0) {
+  svobj <- sva(dat, mod, mod0, n.sv = n.sv)
+  
+  # 4. Criar o novo Design Matrix combinando Biologia + Surrogate Variables
+  design_sva <- cbind(mod, svobj$sv)
+  colnames(design_sva) <- c(make.names(colnames(mod)), paste0("SV", 1:n.sv))
+} else {
+  design_sva <- mod
+  colnames(design_sva) <- make.names(colnames(mod))
+}
+
+# 1. Extrair as SVs
+svs <- svobj$sv
+colnames(svs) <- paste0("SV", 1:ncol(svs))
+
+# 2. Unir com os metadados
+df_check <- cbind(pData(eset_filtered), svs)
+
+# 3. Testar correlação com o timepoint (ANOVA para cada SV)
+lapply(1:svobj$n.sv, function(i) {
+  fit_check <- lm(as.formula(paste0("SV", i, " ~ timepoint")), data = df_check)
+  summary(fit_check)$adj.r.squared # Queremos valores BAIXOS aqui
+})
+```
+
+
+```{r}
+# Fatores biológicos reais
+batch_factors <- c("condition", "timepoint")
+pct_threshold <- 0.6
+
+# --- PASSO A: PVCA nos dados ORIGINAIS ---
+pvca_original <- pvcaBatchAssess(eset_filtered, batch_factors, pct_threshold)
+
+# --- PASSO B: Remover o efeito das SVs para teste ---
+# Criamos uma matriz de expressão "limpa" apenas para o PVCA
+v_clean <- eset_filtered
+exprs(v_clean) <- removeBatchEffect(exprs(eset_filtered), covariates = svobj$sv)
+
+pvca_clean <- pvcaBatchAssess(v_clean, batch_factors, pct_threshold)
+
+# --- PASSO C: Comparação Visual ---
+par(mfrow=c(1,2))
+barplot(pvca_original$dat, las=2, main="Original", col="gray")
+barplot(pvca_clean$dat, las=2, main="After SVA", col="steelblue")
+```
+
+
+
+
+```{r}
+# --- 2. Sample Weighting Diagnostic ---
+# Using the SVA-adjusted design to calculate array weights
+aw <- arrayWeights(eset_filtered, design_sva)
+
 barplot(aw, 
-        names.arg = eset_filtered$condition, # Define os nomes no eixo X
-        main = "Sample Weights Diagnostic", 
+        names.arg = eset_filtered$condition, 
+        main = "Sample Weights Diagnostic (with SVA)", 
         ylab = "Weight", 
-        las = 2,           # Rotaciona os nomes em 90 graus
-        cex.names = 0.7,   # Diminui o tamanho da fonte se houver muitos nomes
+        las = 2, 
+        cex.names = 0.7, 
         col = "skyblue")
 
-#Fit Limma model
-fit <- lmFit(eset_filtered, 
-             design, 
-             weights = aw
-             ) 
+# --- 3. Linear Modeling (Limma) ---
+fit <- lmFit(eset_filtered, design_sva, weights = aw)
 
-#Get conditions
-colnames(design) %>% 
-  as.data.frame() %>% 
-  arrange(.)
-
-#Get contrasts 
-colnames(design) <- make.names(colnames(design))
-
+# --- 4. Contrast Matrix & Empirical Bayes ---
+# We compare Burn vs Control at each specific timepoint
 cont_matrix <- makeContrasts(
-  # --- Burn Comparisons ---
   Burn_2h = conditionBurn_2.Hour - conditionBurn_Control_2.Hour,
   Burn_D1 = conditionBurn_1.Day  - conditionBurn_Control_1.Day,
   Burn_D3 = conditionBurn_3.Day  - conditionBurn_Control_3.Day,
@@ -5249,46 +5303,95 @@ cont_matrix <- makeContrasts(
 )
 
 fit2 <- contrasts.fit(fit, cont_matrix)
-fit2 <- eBayes(fit2, 
-               trend = T, 
-               robust = T
-               )
-plotSA(fit2, main = "Sigma vs Abundance (Weights Applied)")
 
-#Get DEGs
+# Using trend=TRUE and robust=TRUE to handle mean-variance trends and outliers
+fit2 <- eBayes(fit2, trend = TRUE, robust = TRUE)
 
-## For every contrast
+# Diagnostic: Check the residual variance trend
+plotSA(fit2, main = "Sigma vs Abundance (SVA + Weights Applied)")
+
+# --- 5. DEG Extraction & Result Formatting ---
 results_list <- lapply(1:ncol(fit2), function(i) {
   topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
     mutate(comparison = colnames(fit2)[i]) %>% 
     rownames_to_column("symbol")
-  })
+})
 
-# Combine all results
-all_contrasts_degs <- bind_rows(results_list)
-
-# Get all DEGs and clean dataset
-all_degs_mouse_burn = all_contrasts_degs %>% 
-  select(comparison, everything()) %>% 
-  mutate(organism = "Mouse") %>% 
-  select(condition = comparison, everything()) %>% 
-  clean_names() %>% 
+# Combine all results into a clean, tidy dataframe
+all_degs_mouse_burn <- bind_rows(results_list) %>% 
+  clean_names() %>%
   rename(human_symbol = symbol,
          mean_l2fc = log_fc,
          ci_upper = ci_r,
-         ci_lower = ci_l)
+         ci_lower = ci_l,
+         condition = comparison) %>%
+  mutate(organism = "Mouse")
 
-all_degs_mouse_burn$condition %>% unique()
-	
-# #Save
-# all_degs_mouse_burn %>% saveRDS(file = here("tables", "burn_mouse_dge_limma_degs.rds"))
-
+# Summary of Significant DEGs (Adj P-Value <= 0.05)
 all_degs_mouse_burn %>% 
   group_by(condition) %>%
   filter(adj_p_val <= 0.05) %>% 
   summarise(n_degs = n())
+	
+#Save
+# all_degs_mouse_burn %>% saveRDS(file = here("tables", "burn_mouse_dge_limma_degs.rds"))
 
 ```
+
+
+pvalues distribution
+```{r fig.height=3, fig.width=10}
+all_degs_mouse_burn %>% 
+  separate(condition, into = c("pathogen", "timepoint"), remove = F, sep = "_") %>% 
+  ggplot() +
+  aes(x = p_value) +
+  geom_histogram(binwidth = 0.05, fill = "steelblue", color = "white") +
+  facet_wrap(~timepoint, scales = "free", nrow=1) +
+  labs(title = "p-value distribution, post-Limma", x = "P-value", y = "Count") +
+  theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 8),
+          axis.text.y = element_text(size = 8),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+          panel.spacing = unit(0, "lines"),
+          plot.margin = margin(0, 0.5, 0, 0.5, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.margin=margin(0,0,0,0),
+          legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.title = element_text(size = 10),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+    ) +
+  guides(color = guide_legend(override.aes = list(size = 5, alpha = 1, shape = 16)))
+
+
+all_degs_mouse_burn %>% 
+  separate(condition, into = c("pathogen", "timepoint"), remove = F, sep = "_") %>% 
+  ggplot() +
+  aes(x = adj_p_val) +
+  geom_histogram(binwidth = 0.05, fill = "steelblue", color = "white") +
+  facet_wrap(~timepoint, scales = "free", nrow=1) +
+  labs(title = "p-adj value distribution, post-Limma", x = "P-value", y = "Count") +
+  theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 8),
+          axis.text.y = element_text(size = 8),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+          panel.spacing = unit(0, "lines"),
+          plot.margin = margin(0, 0.5, 0, 0.5, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.margin=margin(0,0,0,0),
+          legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.title = element_text(size = 10),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+    ) +
+  guides(color = guide_legend(override.aes = list(size = 5, alpha = 1, shape = 16)))
+```
+
+
 
 
 MDS PLOT
@@ -6697,7 +6800,12 @@ degs_ttest_limma =
     mouse_degs
     ) %>% 
   mutate(timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-          pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli", "Burn", "Trauma"))
+         pathogen = as.character(pathogen),
+         pathogen = case_when(pathogen == "Staphylococcus aureus" ~ "S. aureus",
+                              pathogen == "Hepatitis B" ~ "HepB",
+                              pathogen == "Escherichia coli" ~ "E. coli",
+                              T ~ pathogen),
+          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"))
 
 all_log2fc_paired_unpaired_ttest %>% 
   dplyr::count(pathogen, organism, timepoint)
@@ -6712,24 +6820,26 @@ Summarize and plot
 #Summarize  
 degs_ttest_limma_summary = degs_ttest_limma %>% 
   group_by(pathogen, organism, timepoint, test) %>% 
-  summarise(
-    n_degs = sum(padj <= 0.05, na.rm = TRUE),
-    .groups = "drop"
-  ) 
+  summarise( n_degs = sum(padj <= 0.05, na.rm = TRUE)) %>% 
+  ungroup()
 
 degs_ttest_limma_summary
 
 # Plot number of DEGs per test and significance level
-degs_ttest_limma_summary_plot_gg = degs_ttest_limma_summary %>%
+degs_ttest_limma_summary_plot_gg_1row = degs_ttest_limma_summary %>%
+  filter(pathogen %in% c("Influenza", "HepB", "S. aureus")) %>% 
   ggplot(aes(
     x = timepoint,
     y = n_degs,
     fill = test
   )) +
-  facet_nested_wrap(~pathogen+organism, scales = "free",
-                    strip = strip_nested(size = "variable"),
-                    nrow = 2) +
-  geom_col(width = 0.8, position = position_dodge2(width = 0.8, preserve = "single")) +
+  facet_wrap(~pathogen~organism, 
+                    scales = "free",
+                    space = "free_x",
+                    # strip = strip_nested(size = "variable"),
+                    nrow = 1
+             ) +
+  geom_col(position = position_dodge2(width = 0.8)) +
   # Manual colors per test
   scale_fill_manual(values = c(
     "t-Test" = "gray25",
@@ -6757,6 +6867,52 @@ degs_ttest_limma_summary_plot_gg = degs_ttest_limma_summary %>%
     panel.grid.major.y = element_line(color = "gray75", linetype = 3),
     axis.ticks.y = element_line(color = "gray75"),
     ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) 
+
+degs_ttest_limma_summary_plot_gg_2row = degs_ttest_limma_summary %>%
+  filter(!(pathogen %in% c("Influenza", "HepB", "S. aureus"))) %>% 
+  ggplot(aes(
+    x = timepoint,
+    y = n_degs,
+    fill = test
+  )) +
+  facet_wrap(~pathogen~organism, 
+                    scales = "free",
+                    space = "free_x",
+                    # strip = strip_nested(size = "variable"),
+                    nrow = 1
+             ) +
+  geom_col(position = position_dodge2(width = 0.8)) +
+  # Manual colors per test
+  scale_fill_manual(values = c(
+    "t-Test" = "gray25",
+    "Limma" = "#4DBBD5FF"
+  )) +
+  
+  scale_x_discrete(
+    expand = c(0.01, 0.01)
+  ) +
+  scale_y_continuous(expand = c(0, 0), n.breaks = 5) +
+  
+  theme_vaxgo() +
+  labs(
+    x = "Time",
+    y = "DEGs",
+    fill = "Test",
+    alpha = "Pairing"
+  ) +
+
+  theme(
+    legend.position = "top",
+    axis.line.y = element_blank(),
+    panel.grid.major.y = element_line(color = "gray75", linetype = 3),
+    axis.ticks.y = element_line(color = "gray75"),
+    ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) 
+
+
+degs_ttest_limma_summary_plot_gg = (degs_ttest_limma_summary_plot_gg_1row /
+degs_ttest_limma_summary_plot_gg_2row) +
+  plot_layout(guides = "collect") +
+  plot_annotation(theme = theme(legend.position = "top"))
 
 # Render plot
 degs_ttest_limma_summary_plot_gg

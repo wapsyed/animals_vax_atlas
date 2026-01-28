@@ -33,6 +33,7 @@ cran_packages = c(
 # Install packages from Bioconductor
 
 bioc_pkgs = c(
+  "pvca",
   "biomaRt", "GEOquery", "circlize", "celldex", 
   "org.Hs.eg.db", "DESeq2", "msigdbr", 
   "ape", "variancePartition", 
