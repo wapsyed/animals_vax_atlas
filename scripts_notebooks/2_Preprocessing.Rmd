@@ -5281,7 +5281,7 @@ all_degs_mouse_burn = all_contrasts_degs %>%
 all_degs_mouse_burn$condition %>% unique()
 	
 # #Save
-all_degs_mouse_burn %>% saveRDS(file = here("tables", "burn_mouse_dge_limma_degs.rds"))
+# all_degs_mouse_burn %>% saveRDS(file = here("tables", "burn_mouse_dge_limma_degs.rds"))
 
 all_degs_mouse_burn %>% 
   group_by(condition) %>%
@@ -5289,6 +5289,109 @@ all_degs_mouse_burn %>%
   summarise(n_degs = n())
 
 ```
+
+
+MDS PLOT
+```{r}
+#MDS plot
+# Extrair coordenadas do MDS sem plotar o gráfico base
+mds_res <- plotMDS(eset_filtered, plot = FALSE)
+
+# 2. Criar o data.frame garantindo que os nomes venham das colunas do eset
+df_mds <- data.frame(
+  Sample    = colnames(eset_filtered), 
+  X         = mds_res$x,
+  Y         = mds_res$y,
+  Condition = eset_filtered$condition,
+  timepoint = eset_filtered$timepoint
+) %>% 
+  mutate(group = if_else(str_detect(Condition, "Control"), "Control", "Burn"))
+
+# Plotar
+ggplot(df_mds, aes(x = X, y = Y, color = group, shape = timepoint)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = Sample), vjust = -1, size = 3) + # Opcional: mostra o nome da amostra
+  theme_minimal() +
+  labs(title = "MDS Plot - Mouse Burn Study",
+       x = "Leading logFC dim 1",
+       y = "Leading logFC dim 2")
+
+```
+
+
+PCA PLOT
+```{r}
+# 1. Calcular o PCA
+# Lembre-se: t() transpõe para termos as amostras nas linhas
+pca_matrix <- t(exprs(eset_filtered))
+pca_res <- prcomp(pca_matrix, scale. = TRUE)
+
+# 2. Calcular a variância explicada (para os eixos)
+vars <- round(100 * pca_res$sdev^2 / sum(pca_res$sdev^2), 1)
+
+# 3. Criar o data.frame seguindo sua lógica do MDS
+df_pca <- data.frame(
+  Sample    = colnames(eset_filtered),
+  PC1       = pca_res$x[,1],
+  PC2       = pca_res$x[,2],
+  Condition = eset_filtered$condition,
+  timepoint = eset_filtered$timepoint
+) %>% 
+  mutate(group = if_else(str_detect(Condition, "Control"), "Control", "Burn"))
+
+# 4. Plotar com ggplot2
+ggplot(df_pca, aes(x = PC1, y = PC2, color = group, shape = timepoint)) +
+  geom_point(size = 4, alpha = 0.8) +
+  # Adiciona elipses para os grupos principais (Burn vs Control)
+  stat_ellipse(aes(group = group), linetype = 2, size = 0.5) + 
+  theme_minimal() +
+  labs(
+    title = "PCA Plot - Mouse Burn Study",
+    x = paste0("PC1 (", vars[1], "%)"),
+    y = paste0("PC2 (", vars[2], "%)"),
+    color = "Treatment Group",
+    shape = "Timepoint/Condition"
+  ) +
+  # Opcional: Melhora a diferenciação visual se houver muitos shapes
+  scale_shape_manual(values = c(15, 16, 17, 18, 7, 8, 9, 10))
+```
+
+```{r fig.height=5, fig.width=10}
+genes_de_interesse <- c("TNF", "IL6", "IL1B", "CXCL1", "CCL2", "IFNG")
+
+df_genes <- as.data.frame(t(exprs(eset_filtered))) %>%
+  rownames_to_column("geo_sample") %>% 
+  pivot_longer(cols = -geo_sample, names_to = "Gene", values_to = "Expression") %>%
+  inner_join(mouse_metadata, by = "geo_sample") %>%
+  mutate(group = if_else(str_detect(treatment, "Control"), "Control", "Burn"),
+         timepoint = fct_relevel(timepoint, "2 Hour", "1 Day", "3 Day", "7 Day"))
+
+df_genes %>% 
+  filter(Gene %in% genes_de_interesse) %>% 
+ggplot(aes(x = timepoint, y = Expression, fill = group)) +
+  # Boxplot para mostrar a tendência e distribuição
+  geom_boxplot(outlier.shape = NA, alpha = 0.5, position = position_dodge(width = 0.8)) +
+  # Pontos individuais para mostrar a dispersão/heterocedasticidade que vimos no MDS
+  geom_point(position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.8),
+             size = 2) +
+  # Separar por Gene
+  facet_wrap(~Gene, scales = "free_y", nrow = 1) + 
+  theme_vaxgo() +
+  scale_fill_manual(values = c("Control" = "#4DBBD5FF", "Burn" = "#E64B35FF")) +
+  labs(
+    title = "Expressão Gênica Temporal - Mouse Burn Study",
+    x = "Tempo",
+    y = "Log2 Expression",
+    fill = "Grupo",
+    shape = "Timepoint"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(face = "bold", size = 10),
+    legend.position = "top"
+  )
+```
+
 
 
 
