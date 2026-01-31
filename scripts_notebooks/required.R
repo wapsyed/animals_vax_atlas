@@ -245,9 +245,9 @@ enricher_condition <- function(df, term2gene_df) {
       result <- tryCatch({
         enricher(
           gene = genes,
-          pvalueCutoff = 0.50,
+          pvalueCutoff = 1,
           pAdjustMethod = "BH",
-          TERM2GENE = term2gene_df
+          TERM2GENE = term2gene_df, 
         ) %>%
           as.data.frame() %>%
           clean_names() %>%
