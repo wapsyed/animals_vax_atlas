@@ -2697,20 +2697,7 @@ final_results <- list(
   plot_data = bind_rows(plot_data_list),
   objects = raw_objects_list
 )
-```
 
-
-```{r}
-library(dplyr)
-library(tidyr)
-library(stringr)
-
-# # 1. Initialize result list
-# final_results$objects$`Staphylococcus aureus_2h-24h`$genelist_uu$gene_list1_uu %>% 
-#   as.data.frame() %>% 
-#   rename(genes = ".") %>% 
-#   mutate(condition = "Staphylococcus aureus_2h-24h",
-#          comparison = "genelist_uu")
 
 #Extract gene lists
 # 1. Define the quadrants we want to extract
@@ -2761,14 +2748,6 @@ final_results_final = list(
 final_results_final %>% saveRDS(file = here("tables", "all_human_mouse_rrho_df.rds"))
 
 ```
-
-
-
-
-
-
-
-
 
 
 #### Plot RRHO Heatmap
@@ -3371,7 +3350,7 @@ human_degs = all_degs_human_mouse %>%
 
 #Get shared DEGs 
 human_mouse = mouse_degs %>%
-  inner_join(human_degs %>%
+  full_join(human_degs %>%
                ungroup() %>%
                distinct(),
              by = join_by("human_symbol", "timepoint", "pathogen")) %>% 
@@ -3385,13 +3364,7 @@ human_mouse %>%
 ```{r}
 # #Input
 # filename = "all_human_mouse"
-# gene_sets <- list(
-#   "AllGenes" = log2fc_samples_annotated,
-#   "Immune"   = log2fc_samples_annotated %>%
-#                  filter(human_symbol %in% (btm_annotation_genes %>%
-#                                           filter(module_category == "immune") %>%
-#                                           pull(symbol) %>% unique()))
-#   )
+# human_mouse_log2fc_samples = log2fc_samples_annotated
 
 #Input
 filename = "all_human_mouse_DEGs"
@@ -3400,12 +3373,6 @@ human_mouse_log2fc_samples =
   inner_join(human_mouse %>%
                mutate(timepoint = as.character(timepoint)),
              by = join_by(timepoint, human_symbol, pathogen))
-gene_sets <- list(
-  "AllGenes" = human_mouse_log2fc_samples,
-  "Immune"   = human_mouse_log2fc_samples %>%
-                 filter(human_symbol %in% (btm_annotation_genes %>%
-                                          filter(module_category == "immune") %>%
-                                          pull(symbol) %>% unique())))
   
 
 ```
@@ -3422,12 +3389,13 @@ library(janitor)
 # 1. Define Inputs and Gene Subsets -----------------------------------------
 # We create a list to automate the loop over both sets
 gene_sets_list <- list(
-  "AllGenes" = log2fc_samples_annotated,
-  "Immune"   = log2fc_samples_annotated %>% 
+  "AllGenes" = human_mouse_log2fc_samples,
+  "Immune"   = human_mouse_log2fc_samples %>% 
                  filter(human_symbol %in% (btm_annotation_genes %>% 
                                           filter(module_category == "immune") %>% 
                                           pull(symbol) %>% unique()))
 )
+
 
 # 2. Main Processing Loop ----------------------------------------------------
 # map_dfr iterates through "AllGenes" and "Immune", stacking the results
@@ -3464,10 +3432,13 @@ final_correlations <- map_dfr(names(gene_sets_list), function(set_name) {
     # Subset matrix and drop NAs
     matrix_subset <- genes_samples_wide %>%
       select(all_of(intersect(pathogen_samples, colnames(.)))) %>%
-      drop_na() %>%
+      # drop_na() %>%
       as.matrix()
     
-    if(ncol(matrix_subset) < 2) return(NULL)
+    if(nrow(matrix_subset) <= 4 | ncol(matrix_subset) < 2) {
+      warning(paste("Skipping pathogen:", path, "- only", nrow(matrix_subset), "shared genes found."))
+      return(NULL)
+    }
     
     # Calculate Spearman Correlation
     cor_obj <- rcorr(matrix_subset, type = "spearman")
@@ -3545,12 +3516,16 @@ correlation_summary_filtered_DEGs = readRDS(file = here("tables","all_human_mous
 correlation_summary_filtered_all = readRDS(file = here("tables","all_human_mouse_gene_sets_correlation_summary.rds")) %>% 
   mutate(filter = "No filter")
 
-#Plot
-correlation_long_all_mouse_human_timepoints_summary_plot = correlation_summary_filtered_DEGs %>% 
-  bind_rows(correlation_summary_filtered_all) %>% 
+correlation_summaries =  
+  bind_rows(correlation_summary_filtered_DEGs,
+            correlation_summary_filtered_all) %>% 
   mutate(timepoint = str_replace(timepoint, "Day ", "Day\n"),
          timepoint = as.character(timepoint),
-         timepoint = fct_relevel(timepoint, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day\n1", "Day\n3", "Day\n7"))) %>% 
+         timepoint = fct_relevel(timepoint, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day\n1", "Day\n3", "Day\n7")),
+         filter = fct_relevel(filter, c("No filter", "DEGs")))
+
+#Plot
+correlation_long_all_mouse_human_timepoints_summary_plot = correlation_summaries %>% 
   ggplot() +
   aes(x = timepoint,
       y = mean_rho,
@@ -3579,7 +3554,7 @@ correlation_long_all_mouse_human_timepoints_summary_plot = correlation_summary_f
 
   scale_x_discrete(expand = c(0.05, 0.05)) +
   scale_y_continuous(expand = c(0.01, 0.01),
-                     limits = c(-0.1, 1)
+                     limits = c(-0.5, 1)
                      ) +
   theme_vaxgo() +
   scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
@@ -3619,10 +3594,10 @@ correlation_long_all_mouse_human_timepoints_summary_plot = correlation_summary_f
 
 correlation_long_all_mouse_human_timepoints_summary_plot
 
-correlation_long_all_mouse_human_timepoints_summary_plot %>%
-  ggsave(filename = here("Figures", paste0("all_human_mouse_all_DEGs_correlation_timepoints_summary_plot.png")),
-         width = 16,
-         height = 3)
+# correlation_long_all_mouse_human_timepoints_summary_plot %>%
+#   ggsave(filename = here("Figures", paste0("all_human_mouse_all_DEGs_correlation_timepoints_summary_plot.png")),
+#          width = 16,
+#          height = 3)
 
 ```
 
