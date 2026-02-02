@@ -5140,6 +5140,7 @@ cor_labels <- dge_btm_gsea_mean_wide %>%
   group_by(pathogen, timepoint) %>%
   summarise(
     test_result = list(safe_cor_test(Human, Mouse, method =  "pearson")),
+    n = n(),
     .groups = "drop"
   ) %>%
   mutate(
@@ -5159,7 +5160,7 @@ cor_labels <- dge_btm_gsea_mean_wide %>%
     cor_label = paste0(
       "r=", round(cor_value, 2),
       ", R²=", round(r_squared, 2),
-      p_label
+      p_label, ", ", n
     )
   )
 
@@ -5171,6 +5172,7 @@ cor_labels_filter_Mouse <- dge_btm_gsea_mean_wide %>%
   group_by(pathogen, timepoint) %>%
   summarise(
     test_result = list(safe_cor_test(Human, Mouse, method = "pearson")),
+    n = n(),
     .groups = "drop"
   ) %>%
   mutate(
@@ -5189,7 +5191,7 @@ cor_labels_filter_Mouse <- dge_btm_gsea_mean_wide %>%
     cor_label_mouse = paste0(
       "r=", round(cor_value_mouse, 2),
       ", R²=", round(r_squared_mouse, 2),
-      p_label_mouse
+      p_label_mouse,", ", n
     )
   )
 
@@ -5201,6 +5203,7 @@ cor_labels_filter_Mouse_Human <- dge_btm_gsea_mean_wide %>%
   group_by(pathogen, timepoint) %>%
   summarise(
     test_result = list(safe_cor_test(Human, Mouse, method = "pearson")),
+    n = n(),
     .groups = "drop"
   ) %>%
   mutate(
@@ -5219,11 +5222,48 @@ cor_labels_filter_Mouse_Human <- dge_btm_gsea_mean_wide %>%
     cor_label_mouse_human = paste0(
       "r=", round(cor_value_mouse_human, 2),
       ", R²=", round(r_squared_mouse_human, 2),
-      p_label_mouse_human
+      p_label_mouse_human,", ", n
     )
   )
 
 
+dge_btm_mean_group_correlation_df = dge_btm_gsea_mean_wide %>% 
+  ungroup() %>% 
+  mutate(group = fct_relevel(group, c(immune_order)),
+         process = str_wrap(process, width = 15)) %>% 
+  drop_na(mean_log2fc_Mouse) %>% 
+  inner_join(cor_labels, by = join_by(pathogen, timepoint)) %>% 
+  inner_join(cor_labels_filter_Mouse, by = join_by(pathogen, timepoint)) %>% 
+  inner_join(cor_labels_filter_Mouse_Human, by = join_by(pathogen, timepoint)) %>% 
+  mutate(cor_labels_all_filtered = paste0("All: ", cor_label, ",\nM: ", cor_label_mouse, ",\nM&H: ", cor_label_mouse_human)) %>% 
+  #Annotate timepoints
+  mutate(timepoint = case_when(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "2", "Early hours")~"Early hours", 
+                               pathogen %in% c("Influenza", "Hepatitis B") ~ paste0("Day ", timepoint),
+                               pathogen %in% c("Ecoli", "Saureus") ~ paste0(timepoint, "h"),
+                               T ~timepoint),
+         timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         timepoint_comparison = if_else(pathogen %in% c("Escherichia coli", "Staphylococcus aureus"),
+                                        paste0(timepoint, "-", "24h"), 
+                                        paste0(timepoint, "-", timepoint)) %>% 
+                                str_replace(., "Early hours-Early hours", "2h-Early"),
+         
+         #Create facet names
+         facet_name = paste0(timepoint_comparison, "\n", cor_labels_all_filtered)) %>% 
+  arrange(timepoint) %>% 
+  mutate(
+         facet_name = fct_inorder(facet_name),
+         pathogen = case_when(pathogen == "Saureus" ~ "Staphylococcus aureus",
+                              pathogen == "Ecoli" ~ "Escherichia coli",
+                              T ~pathogen),
+         pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli", "Burn", "Trauma"))
+
+
+dge_btm_mean_group_correlation_df %>% 
+  dplyr::count(pathogen, timepoint, timepoint_comparison)
+```
+
+
+```{r fig.height=5, fig.width=7}
 # NES vs NES
 # Means vs means
 cor_labels_nes <- dge_btm_gsea_mean_wide %>%
@@ -5318,39 +5358,7 @@ cor_labels_nes_filter_Mouse_Human <- dge_btm_gsea_mean_wide %>%
 
 
 
-dge_btm_mean_group_correlation_df = dge_btm_gsea_mean_wide %>% 
-  ungroup() %>% 
-  mutate(group = fct_relevel(group, c(immune_order)),
-         process = str_wrap(process, width = 15)) %>% 
-  drop_na(mean_log2fc_Mouse) %>% 
-  inner_join(cor_labels, by = join_by(pathogen, timepoint)) %>% 
-  inner_join(cor_labels_filter_Mouse, by = join_by(pathogen, timepoint)) %>% 
-  inner_join(cor_labels_filter_Mouse_Human, by = join_by(pathogen, timepoint)) %>% 
-  mutate(cor_labels_all_filtered = paste0("All: ", cor_label, ",\nM: ", cor_label_mouse, ",\nM&H: ", cor_label_mouse_human)) %>% 
-  #Annotate timepoints
-  mutate(timepoint = case_when(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "2", "Early hours")~"Early hours", 
-                               pathogen %in% c("Influenza", "Hepatitis B") ~ paste0("Day ", timepoint),
-                               pathogen %in% c("Ecoli", "Saureus") ~ paste0(timepoint, "h"),
-                               T ~timepoint),
-         timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         timepoint_comparison = if_else(pathogen %in% c("Escherichia coli", "Staphylococcus aureus"),
-                                        paste0(timepoint, "-", "24h"), 
-                                        paste0(timepoint, "-", timepoint)) %>% 
-                                str_replace(., "Early hours-Early hours", "2h-Early"),
-         
-         #Create facet names
-         facet_name = paste0(timepoint_comparison, "\n", cor_labels_all_filtered)) %>% 
-  arrange(timepoint) %>% 
-  mutate(
-         facet_name = fct_inorder(facet_name),
-         pathogen = case_when(pathogen == "Saureus" ~ "Staphylococcus aureus",
-                              pathogen == "Ecoli" ~ "Escherichia coli",
-                              T ~pathogen),
-         pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli", "Burn", "Trauma"))
 
-
-dge_btm_mean_group_correlation_df %>% 
-  dplyr::count(pathogen, timepoint, timepoint_comparison)
 
 ```
 
@@ -5360,7 +5368,7 @@ dge_btm_mean_group_correlation_df %>%
 
 ####### Plot means
 
-```{r fig.height=9, fig.width=10, message=FALSE, warning=FALSE}
+```{r fig.height=9, fig.width=11, message=FALSE, warning=FALSE}
 
 #Plot correlation plot (means)
 dge_btm_mean_group_correlation_plot = 
@@ -5397,8 +5405,9 @@ dge_btm_mean_group_correlation_plot =
                  color = group,
                  shape = filter),
                  data = . %>% filter(filter == c("All")),
-             size = 1.5,
+             size = 2,
              alpha = 0.2,
+             stroke = 0.1,
     sigma = 2)
     ) +
   #Filtered
@@ -5406,15 +5415,18 @@ dge_btm_mean_group_correlation_plot =
                  shape = filter,
                  color = group),
              data = . %>% filter(filter == c("Mouse")),
-             size = 1.5,
+             size = 2,
+             stroke = 0.1,
              alpha = 1
              ) +
   geom_point(aes(fill = group,
-                 shape = filter),
+                 shape = filter,
+                 # color = group
+                 ),
              color = "black",
              data = . %>% filter(filter == c("Mouse and Human")),
-             size = 1.5,
-             stroke = 0.5,
+             size = 2,
+             stroke = 0.1,
              alpha = 1,
              ) +
   scale_shape_manual(values = c(21, 22, 24)) +
@@ -5439,25 +5451,31 @@ dge_btm_mean_group_correlation_plot =
   #Theme
     theme_vaxgo() +
     theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 8),
+          axis.title.x = element_text(size = 8),
           axis.text.y = element_text(size = 8),
+          axis.title.y = element_text(size = 8),
           strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
           strip.text.x = element_text(angle = 0, hjust = 0., vjust = 0.5, size = 8),
           legend.position = "top",
           legend.direction = "horizontal", 
-          legend.text = element_text(size = 6, hjust = 0),
+          legend.text = element_text(size = 8, hjust = 0),
           legend.title = element_text(size = 8),
+          legend.spacing.x = unit(0, 'cm'),
+          legend.spacing.y = unit(0, 'cm'),
           ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
           legend.box.spacing = unit(0, "cm"),
-          panel.spacing = unit(0, "lines")
+          panel.spacing = unit(0, "lines"), 
+          plot.margin = margin(0, 0, 0, 0, unit = "cm"),
+          
           )
 
 dge_btm_mean_group_correlation_plot
 
-#Save results
+# Save results
 dge_btm_mean_group_correlation_plot %>%
   ggsave(filename = here("Figures",  "all_human_mouse_dge_btm_mean_group_correlation_plot.png"),
-         width = 10,
-         height = 9)
+         width = 11,
+         height = 10)
 ```
 
 
