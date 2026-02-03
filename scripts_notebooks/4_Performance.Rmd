@@ -41,10 +41,7 @@ all_human_mouse_metadata_matched =     #Duplicate infection timepoints in human 
   ) %>% 
   group_by(pathogen, organism, timepoint) %>%
   summarise(n = n())
-```
 
-
-```{r}
 all_degs_human_mouse = 
   readRDS(file = here("tables", "all_human_mouse_dge_limma_degs_matched.rds")) %>% 
   mutate(timepoint = if_else(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours"), "Early hours", timepoint))
@@ -104,7 +101,7 @@ Calculate ROC curve
 Inputs
 ```{r fig.height=4, fig.width=10}
 set.seed(123)
-# ######## Input -----
+######## Input -----
 # filename = "all_human_mouse"
 # gene_set_filename = "All_OnlyImmune"
 # genes_df_input = bind_rows(
@@ -281,29 +278,91 @@ auc_results_down = classified_df_probs_down %>%
   ungroup() %>% 
   select(pathogen, model, timepoint, auc, comparison)
 
-#Plot curves ------------------
-#PLOT ROC Curve
-roc_curve_plot = roc_curve_up_notup %>% 
-  bind_rows(roc_curve_down_notdown %>% 
-              filter(model != "Human")) %>%
-  ungroup() %>% 
-  mutate(timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+
+##### Unite all results
+roc_curve_auc_df = bind_rows(auc_results_up,auc_results_down) %>% 
+  inner_join(
+    roc_curve_up_notup %>% 
+      bind_rows(roc_curve_down_notdown %>% 
+                  filter(model != "Human")),
+    by = join_by(pathogen, model, timepoint, comparison)) %>% 
+    mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
+         comparison = factor(comparison, levels = c("Up", "Down")),
+         # timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
+         timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
          pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
                               pathogen == "Staphylococcus aureus" ~ "S. aureus",
                               pathogen == "Escherichia coli" ~ "E. coli",
-                              T~pathogen),
+                              T ~ pathogen),
          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
+  mutate(auc = round(auc, 2) %>% as.character())
+
+roc_curve_auc_df %>% 
+  select(pathogen, model, comparison, timepoint, auc) %>% 
+  filter(model == "Immune") %>% 
+              distinct()
+```
+
+
+```{r fig.height=5, fig.width=8}
+#Plot curves ------------------
+#PLOT ROC Curve
+roc_curve_plot = roc_curve_auc_df %>% 
+  # mutate(comparison = as.character(comparison),
+  #        comparison = if_else(comparison == "Up", "U", "D")) %>% 
   arrange(pathogen) %>% 
   ungroup() %>% 
   ggplot(aes(x = 1 - specificity, 
              y = sensitivity, 
              color = model,
              linetype = comparison)) +
-  geom_path(size = 1, alpha = 1) +
+  geom_path(size = 0.75, alpha = 1) +
   geom_abline(lty = 3) +
   theme_vaxgo() +
-  facet_nested_wrap(~pathogen+timepoint, nrow = 5,
+  facet_nested_wrap(~pathogen+timepoint, nrow = 3, axes = "x",
                     strip = strip_nested(size = "variable")) +
+  #Mouse
+  geom_text(data = . %>% 
+              filter(model == "Mouse", comparison == "Up") %>% 
+              select(pathogen, model, comparison, timepoint, auc) %>% 
+              distinct(),
+            mapping = aes(label = paste(comparison, auc),
+                color = model,
+                x = 1,
+                y = 0.4),
+            size = 2,
+            hjust = 1) +
+  geom_text(data = . %>% 
+              filter(model == "Mouse", comparison == "Down") %>% 
+              select(pathogen, model, comparison, timepoint, auc) %>% 
+              distinct(),
+            mapping = aes(label = paste(comparison, auc),
+                color = model,
+                x = 1,
+                y = 0.3),
+            size = 2,
+            hjust = 1) +
+  #Immune
+  geom_text(data = . %>% 
+              filter(model == "Immune", comparison == "Up") %>% 
+              select(pathogen, model, comparison, timepoint, auc) %>% 
+              distinct(),
+            mapping = aes(label = paste(comparison, auc),
+                color = model,
+                x = 1,
+                y = 0.2),
+            size = 2,
+            hjust = 1) +
+   geom_text(data = . %>% 
+              filter(model == "Immune", comparison == "Down") %>% 
+              select(pathogen, model, comparison, timepoint, auc) %>% 
+              distinct(),
+            mapping = aes(label = paste(comparison, auc),
+                color = model,
+                x = 1,
+                y = 0.1),
+            size = 2,
+            hjust = 1) +
   scale_linetype_manual(values = c("Up" = 1,
                                    "Down" = 2)) +
   # coord_equal() +
@@ -321,113 +380,135 @@ roc_curve_plot = roc_curve_up_notup %>%
   guides(fill = guide_legend(override.aes = list(size = 4)),
          color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
          ) +
-  theme(
-    legend.position = "top",
-    strip.text = element_text(size = 8),
-    strip.placement = "outside",
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 8, angle = 0, hjust = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.text.y = element_text(size = 8),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank(),
-    ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-  ) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 8),
+          axis.title.x = element_text(size = 8),
+          axis.text.y = element_text(size = 8),
+          axis.title.y = element_text(size = 8),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          strip.text.x = element_text(angle = 0, hjust = 0., vjust = 0.5, size = 8),
+          legend.position = "top",
+          legend.direction = "horizontal", 
+          legend.text = element_text(size = 8, hjust = 0),
+          legend.title = element_text(size = 8),
+          legend.spacing.x = unit(0, 'cm'),
+          legend.spacing.y = unit(0, 'cm'),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
+          legend.box.spacing = unit(0, "cm"),
+          panel.spacing.y = unit(0, "lines"), 
+          panel.spacing.x = unit(1, "lines"), 
+          plot.margin = margin(0, 0.3, 0, 0, unit = "cm"),
+          
+          ) +
   scale_x_continuous(n.breaks = 3) +
-  scale_y_continuous(n.break = 3)
+  scale_y_continuous(n.break = 3) +
+  guides(linetype = guide_legend(override.aes = list(linewidth = 0.5, size = 1),
+                                 order = 2), 
+         fill = "none",
+         color = guide_legend(override.aes = list(linewidth = 3)))
 
-# Visualize AUC
-auc_plot <- bind_rows(auc_results_up, 
-                      auc_results_down) %>% 
-  mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
-         comparison = factor(comparison, levels = c("Up", "Down")),
-         timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
-         timepoint = fct_relevel(timepoint, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T ~ pathogen),
-         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
-ggplot(aes(x = auc, 
-             y = timepoint %>% fct_rev(), 
-             fill = model)) +
-  geom_col(width = 1,
-           position = position_dodge(1)) +
-  
-  # Add a reference line for random prediction (AUC = 0.5)
-  geom_vline(xintercept = 0.5, linetype = "dashed", color = "black", linewidth = 0.5) +
-  
-  geom_text(aes(label = round(auc, 2)),
-            position = position_dodge2(1),
-            hjust = -0.2, size = 2, vjust = 0.5) +
-  
-  facet_nested_wrap(~pathogen+comparison, 
-                    scales = "free", 
-                    ncol = 4,
-                    strip = strip_nested(size = "variable"))+
-  
-  labs(
-    x = "AUC",
-    y = "",
-    fill = "Model"
-  ) +
-    scale_fill_manual(values = c(
-    "Mouse" = "#4DBBD5FF",
-    "Immune" = "#4361ee",
-    "Human" = "#90A4AEFF",
-    "Permutation" = "gray80"
-    )) +
-  guides(fill = guide_legend(override.aes = list(size = 4)),
-         color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
-         ) +
-  theme_vaxgo()  +
-  theme(
-    legend.position = "top",
-    strip.text = element_text(size = 8),
-    strip.placement = "outside",
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.title.y = element_blank(),
-    axis.text.y = element_text(size = 8),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank(),
-    ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-  ) +
-  scale_x_continuous(expand = c(0,0), limits = c(0,1.05), n.breaks = 3)
+roc_curve_plot
 
 
-#Unite plots
-roc_auc_curve_plot = ((roc_curve_plot) | 
-  (auc_plot + theme(legend.position = "none")
-   )
-  ) +
-  plot_layout(
-  guides = "collect",
-  widths = c(0.8, 1) 
-) +
-plot_annotation(
-  theme = theme(
-    legend.position = "top",
-    plot.margin = margin(0.5, 0.5,0.5,0.5, "pt")
-  )
-) & 
-theme(
-  panel.spacing = unit(0, "lines"),
-  # plot.margin = margin(0, 2, 0, 2, "pt"),
-   legend.margin=margin(0,0,0,0),
-  legend.title = element_text(size = 8),
-  legend.text = element_text(size = 8),
-   legend.box.margin=margin(1,0,-10,0),
-   plot.margin = margin(0.1, 0.1, 0.1, 0.1, unit = "cm")
-)
-
-roc_auc_curve_plot
-
-roc_auc_curve_plot %>%
+roc_curve_plot %>%
   ggsave(filename = here("Figures", paste0(filename, "_performance_roc_", gene_set_filename, ".png")),
-         width = 10,
-         height = 6)
+         width = 8,
+         height = 5)
+```
+
+
+```{r fig.height=6, fig.width=10}
+# # Visualize AUC
+# auc_plot <- bind_rows(auc_results_up, 
+#                       auc_results_down) %>% 
+#   mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
+#          comparison = factor(comparison, levels = c("Up", "Down")),
+#          timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
+#          timepoint = fct_relevel(timepoint, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+#          pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
+#                               pathogen == "Staphylococcus aureus" ~ "S. aureus",
+#                               pathogen == "Escherichia coli" ~ "E. coli",
+#                               T ~ pathogen),
+#          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
+# ggplot(aes(x = auc, 
+#              y = timepoint %>% fct_rev(), 
+#              fill = model)) +
+#   geom_col(width = 1,
+#            position = position_dodge(1)) +
+#   
+#   # Add a reference line for random prediction (AUC = 0.5)
+#   geom_vline(xintercept = 0.5, linetype = "dashed", color = "black", linewidth = 0.5) +
+#   
+#   geom_text(aes(label = round(auc, 2)),
+#             position = position_dodge2(1),
+#             hjust = -0.2, size = 2, vjust = 0.5) +
+#   
+#   facet_nested_wrap(~pathogen+comparison, 
+#                     scales = "free", 
+#                     ncol = 4,
+#                     strip = strip_nested(size = "variable"))+
+#   
+#   labs(
+#     x = "AUC",
+#     y = "",
+#     fill = "Model"
+#   ) +
+#     scale_fill_manual(values = c(
+#     "Mouse" = "#4DBBD5FF",
+#     "Immune" = "#4361ee",
+#     "Human" = "#90A4AEFF",
+#     "Permutation" = "gray80"
+#     )) +
+#   guides(fill = guide_legend(override.aes = list(size = 4)),
+#          color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
+#          ) +
+#   theme_vaxgo()  +
+#   theme(
+#     legend.position = "top",
+#     strip.text = element_text(size = 8),
+#     strip.placement = "outside",
+#     # strip.background.x = element_rect(fill = "gray95", color = NA), 
+#     strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
+#     axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
+#     axis.title.y = element_blank(),
+#     axis.text.y = element_text(size = 8),
+#     panel.spacing.x = unit(0.5, "lines"),
+#     legend.key = element_blank(),
+#     ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+#   ) +
+#   scale_x_continuous(expand = c(0,0), limits = c(0,1.05), n.breaks = 3)
+# 
+# 
+# #Unite plots
+# roc_auc_curve_plot = ((roc_curve_plot) | 
+#   (auc_plot + theme(legend.position = "none")
+#    )
+#   ) +
+#   plot_layout(
+#   guides = "collect",
+#   widths = c(0.8, 1) 
+# ) +
+# plot_annotation(
+#   theme = theme(
+#     legend.position = "top",
+#     plot.margin = margin(0.5, 0.5,0.5,0.5, "pt")
+#   )
+# ) & 
+# theme(
+#   panel.spacing = unit(0, "lines"),
+#   # plot.margin = margin(0, 2, 0, 2, "pt"),
+#    legend.margin=margin(0,0,0,0),
+#   legend.title = element_text(size = 8),
+#   legend.text = element_text(size = 8),
+#    legend.box.margin=margin(1,0,-10,0),
+#    plot.margin = margin(0.1, 0.1, 0.1, 0.1, unit = "cm")
+# )
+# 
+# roc_auc_curve_plot
+# 
+# roc_auc_curve_plot %>%
+#   ggsave(filename = here("Figures", paste0(filename, "_performance_roc_", gene_set_filename, ".png")),
+#          width = 10,
+#          height = 6)
 
 ```
 
@@ -602,10 +683,7 @@ dge_long_genes_down = btms_df_input %>%
 dge_long_genes_down %>% 
   filter(pathogen == "Staphylococcus aureus",
          organism == "Human")
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 # Assign human truth
 #=====================================================
@@ -627,10 +705,7 @@ truth_human_down = dge_long_genes_down %>%
 
 truth_human_up %>% 
   dplyr::count(pathogen, organism, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 #Generate reference distributions
 #=====================================================
@@ -660,10 +735,7 @@ permutation_prediction_down = perfect_prediction_down %>%
 
 perfect_prediction_down %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 # Combine models (Mouse + Immune + Uniform + Perfect)
 #=====================================================
@@ -683,10 +755,7 @@ models_down = dge_long_genes_down %>%
 
 models_down %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 # Classify probabilities 
 #=====================================================
@@ -712,10 +781,7 @@ classified_df_probs_down = truth_human_down %>%
 
 classified_df_probs_up %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 #Compute ROC 
 #=====================================================
@@ -736,10 +802,7 @@ roc_curve_down_notdown = classified_df_probs_down %>%
 
 roc_curve_up_notup %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 #Compute AUC 
 #=====================================================
@@ -765,40 +828,80 @@ auc_results_down = classified_df_probs_down %>%
 
 auc_results_down %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
 
-```{r fig.height=8, fig.width=10}
-#Plot curves ------------------
-#PLOT ROC Curve
-roc_curve_plot = roc_curve_up_notup %>% 
-  bind_rows(roc_curve_down_notdown %>% 
-              filter(model != "Human")) %>%
-  ungroup() %>% 
-  mutate(timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+#=====================================================
+#Unite all results
+#=====================================================
+roc_curve_auc_df = bind_rows(auc_results_up,auc_results_down) %>% 
+  inner_join(
+    roc_curve_up_notup %>% 
+      bind_rows(roc_curve_down_notdown %>% 
+                  filter(model != "Human")),
+    by = join_by(pathogen, model, timepoint, comparison)) %>% 
+    mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
+         comparison = factor(comparison, levels = c("Up", "Down")),
+         # timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
+         timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
          pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
                               pathogen == "Staphylococcus aureus" ~ "S. aureus",
                               pathogen == "Escherichia coli" ~ "E. coli",
-                              T~pathogen),
+                              T ~ pathogen),
          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
+  mutate(auc = round(auc, 2) %>% as.character())
+
+roc_curve_auc_df %>% 
+  select(pathogen, model, comparison, timepoint, auc) %>% 
+  filter(model == "Immune") %>% 
+              distinct()
+```
+
+
+```{r fig.height=13, fig.width=4}
+#Plot curves ------------------
+#PLOT ROC Curve
+roc_curve_plot = roc_curve_auc_df %>% 
+  # mutate(comparison = as.character(comparison),
+  #        comparison = if_else(comparison == "Up", "U", "D")) %>% 
   arrange(pathogen) %>% 
   ungroup() %>% 
   ggplot(aes(x = 1 - specificity, 
              y = sensitivity, 
              color = model,
              linetype = comparison)) +
-  geom_path(size = 0.5, alpha = 1) +
+  geom_path(size = 0.75, alpha = 1) +
   geom_abline(lty = 3) +
   theme_vaxgo() +
-  facet_nested_wrap(~pathogen+timepoint, nrow = 5,
+  facet_nested_wrap(~pathogen+timepoint, ncol = 3, axes = "x",
                     strip = strip_nested(size = "variable")) +
+  #Mouse
+  geom_text(data = . %>% 
+              filter(model == "Mouse", comparison == "Up") %>% 
+              select(pathogen, model, comparison, timepoint, auc) %>% 
+              distinct(),
+            mapping = aes(label = paste(comparison, auc),
+                color = model,
+                x = 1,
+                y = 0.2),
+            size = 2,
+            hjust = 1) +
+  geom_text(data = . %>% 
+              filter(model == "Mouse", comparison == "Down") %>% 
+              select(pathogen, model, comparison, timepoint, auc) %>% 
+              distinct(),
+            mapping = aes(label = paste(comparison, auc),
+                color = model,
+                x = 1,
+                y = 0.05),
+            size = 2,
+            hjust = 1) +
+
   scale_linetype_manual(values = c("Up" = 1,
                                    "Down" = 2)) +
   # coord_equal() +
   scale_color_manual(values = c(
-    "Mouse" = "#4DBBD5FF",
+    "Mouse" = "#4361ee",
     "Human" = "#90A4AEFF",
-    "Immune" = "#4361ee",
     "Permutation" = "gray80"
     )) +
   labs(
@@ -809,82 +912,42 @@ roc_curve_plot = roc_curve_up_notup %>%
   guides(fill = guide_legend(override.aes = list(size = 4)),
          color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
          ) +
-  theme(
-    legend.position = "top",
-    strip.text = element_text(size = 8),
-    strip.placement = "outside",
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 8, angle = 0, hjust = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.text.y = element_text(size = 8),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank(),
-    ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-  ) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 8),
+          axis.title.x = element_text(size = 8),
+          axis.text.y = element_text(size = 8),
+          axis.title.y = element_text(size = 8),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          strip.text.x = element_text(angle = 0, hjust = 0., vjust = 0.5, size = 8),
+          legend.position = "top",
+          legend.direction = "horizontal", 
+          legend.text = element_text(size = 8, hjust = 0),
+          legend.title = element_text(size = 8),
+          legend.spacing.x = unit(0, 'cm'),
+          legend.spacing.y = unit(0, 'cm'),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
+          legend.box.spacing = unit(0, "cm"),
+          panel.spacing.y = unit(0, "lines"), 
+          panel.spacing.x = unit(1, "lines"), 
+          plot.margin = margin(0, 0.3, 0, 0, unit = "cm"),
+          
+          ) +
   scale_x_continuous(n.breaks = 3) +
-  scale_y_continuous(n.break = 3)
+  scale_y_continuous(n.break = 3) +
+  guides(linetype = guide_legend(override.aes = list(linewidth = 0.5,
+                                                     size = 1),
+                                 order = 2,
+                                 nrow = 2), 
+         fill = "none",
+         color = guide_legend(override.aes = list(linewidth = 3),
+                              nrow = 2))
 
 roc_curve_plot
 
-# Visualize AUC
-auc_plot <- bind_rows(auc_results_up, 
-                      auc_results_down) %>% 
-  mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
-         comparison = factor(comparison, levels = c("Up", "Down")),
-         timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
-         timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T~pathogen),
-         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
-ggplot(aes(x = auc, 
-             y = timepoint %>% fct_rev(), 
-             fill = model)) +
-  geom_col(width = 1,
-           position = position_dodge(1)) +
-  
-  # Add a reference line for random prediction (AUC = 0.5)
-  geom_vline(xintercept = 0.5, linetype = "dashed", color = "black", linewidth = 0.5) +
-  
-  geom_text(aes(label = round(auc, 2)),
-            position = position_dodge2(1),
-            hjust = -0.2, size = 2, vjust = 0.5) +
-  
-  facet_nested_wrap(~pathogen+comparison, 
-                    scales = "free", 
-                    ncol = 4,
-                    strip = strip_nested(size = "variable"))+
-  
-  labs(
-    x = "AUC",
-    y = "",
-    fill = "Model"
-  ) +
-    scale_fill_manual(values = c(
-    "Mouse" = "#4DBBD5FF",
-    "Immune" = "#4361ee",
-    "Human" = "#90A4AEFF",
-    "Permutation" = "gray80"
-    )) +
-  guides(fill = guide_legend(override.aes = list(size = 4)),
-         color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
-         ) +
-  theme_vaxgo()  +
-  theme(
-    legend.position = "top",
-    strip.text = element_text(size = 8),
-    strip.placement = "outside",
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.title.y = element_blank(),
-    axis.text.y = element_text(size = 8),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank(),
-    ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-  ) +
-  scale_x_continuous(expand = c(0,0), limits = c(0,1.05), n.breaks = 3)
+
+roc_curve_plot %>%
+  ggsave(filename = here("Figures", paste0(filename, "_performance_roc_", gene_set_filename, ".png")),
+         width = 5,
+         height = 13)
 ```
 
 
@@ -963,10 +1026,6 @@ gsea_btm_results_all = bind_rows(
   mutate(timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")))
 
 
-```
-
-
-```{r}
 #Import ============
 #Import DEGs table
 dge_btm_mean_process = gsea_btm_results_all
@@ -1081,10 +1140,7 @@ dge_long_genes_down = btms_df_input %>%
   rename(adj_p_val = pval_one_sided_adj) %>% 
   drop_na(adj_p_val)
 
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 # Assign human truth
 #=====================================================
@@ -1106,10 +1162,7 @@ truth_human_down = dge_long_genes_down %>%
 
 truth_human_up %>% 
   dplyr::count(pathogen, organism, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 #Generate reference distributions
 #=====================================================
@@ -1139,10 +1192,7 @@ permutation_prediction_down = perfect_prediction_down %>%
 
 perfect_prediction_down %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 # Combine models (Mouse + Immune + Uniform + Perfect)
 #=====================================================
@@ -1162,10 +1212,7 @@ models_down = dge_long_genes_down %>%
 
 models_down %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 # Classify probabilities 
 #=====================================================
@@ -1191,10 +1238,7 @@ classified_df_probs_down = truth_human_down %>%
 
 classified_df_probs_up %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 #Compute ROC 
 #=====================================================
@@ -1215,10 +1259,7 @@ roc_curve_down_notdown = classified_df_probs_down %>%
 
 roc_curve_up_notup %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 #Compute AUC 
 #=====================================================
@@ -1244,40 +1285,77 @@ auc_results_down = classified_df_probs_down %>%
 
 auc_results_down %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
 
-```{r fig.height=8, fig.width=10}
-#Plot curves ------------------
-#PLOT ROC Curve
-roc_curve_plot = roc_curve_up_notup %>% 
-  bind_rows(roc_curve_down_notdown %>% 
-              filter(model != "Human")) %>%
-  ungroup() %>% 
-  mutate(timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+#=====================================================
+#Unite all results
+#=====================================================
+roc_curve_auc_df = bind_rows(auc_results_up,auc_results_down) %>% 
+  inner_join(
+    roc_curve_up_notup %>% 
+      bind_rows(roc_curve_down_notdown %>% 
+                  filter(model != "Human")),
+    by = join_by(pathogen, model, timepoint, comparison)) %>% 
+    mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
+         comparison = factor(comparison, levels = c("Up", "Down")),
+         # timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
+         timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
          pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
                               pathogen == "Staphylococcus aureus" ~ "S. aureus",
                               pathogen == "Escherichia coli" ~ "E. coli",
-                              T~pathogen),
+                              T ~ pathogen),
          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
+  mutate(auc = round(auc, 2) %>% as.character())
+
+
+```
+
+
+```{r fig.height=13, fig.width=4}
+#Plot curves ------------------
+#PLOT ROC Curve
+roc_curve_plot = roc_curve_auc_df %>% 
+  # mutate(comparison = as.character(comparison),
+  #        comparison = if_else(comparison == "Up", "U", "D")) %>% 
   arrange(pathogen) %>% 
   ungroup() %>% 
   ggplot(aes(x = 1 - specificity, 
              y = sensitivity, 
              color = model,
              linetype = comparison)) +
-  geom_path(size = 0.5, alpha = 1) +
+  geom_path(size = 0.75, alpha = 1) +
   geom_abline(lty = 3) +
   theme_vaxgo() +
-  facet_nested_wrap(~pathogen+timepoint, nrow = 5,
+  facet_nested_wrap(~pathogen+timepoint, ncol = 3, axes = "x",
                     strip = strip_nested(size = "variable")) +
+  #Mouse
+  geom_text(data = . %>% 
+              filter(model == "Mouse", comparison == "Up") %>% 
+              select(pathogen, model, comparison, timepoint, auc) %>% 
+              distinct(),
+            mapping = aes(label = paste(comparison, auc),
+                color = model,
+                x = 1,
+                y = 0.2),
+            size = 2,
+            hjust = 1) +
+  geom_text(data = . %>% 
+              filter(model == "Mouse", comparison == "Down") %>% 
+              select(pathogen, model, comparison, timepoint, auc) %>% 
+              distinct(),
+            mapping = aes(label = paste(comparison, auc),
+                color = model,
+                x = 1,
+                y = 0.05),
+            size = 2,
+            hjust = 1) +
+
   scale_linetype_manual(values = c("Up" = 1,
                                    "Down" = 2)) +
   # coord_equal() +
   scale_color_manual(values = c(
-    "Mouse" = "#4DBBD5FF",
+    "Mouse" = "#4361ee",
     "Human" = "#90A4AEFF",
-    "Immune" = "#4361ee",
     "Permutation" = "gray80"
     )) +
   labs(
@@ -1288,116 +1366,42 @@ roc_curve_plot = roc_curve_up_notup %>%
   guides(fill = guide_legend(override.aes = list(size = 4)),
          color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
          ) +
-  theme(
-    legend.position = "top",
-    strip.text = element_text(size = 8),
-    strip.placement = "outside",
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 8, angle = 0, hjust = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.text.y = element_text(size = 8),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank(),
-    ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-  ) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 8),
+          axis.title.x = element_text(size = 8),
+          axis.text.y = element_text(size = 8),
+          axis.title.y = element_text(size = 8),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          strip.text.x = element_text(angle = 0, hjust = 0., vjust = 0.5, size = 8),
+          legend.position = "top",
+          legend.direction = "horizontal", 
+          legend.text = element_text(size = 8, hjust = 0),
+          legend.title = element_text(size = 8),
+          legend.spacing.x = unit(0, 'cm'),
+          legend.spacing.y = unit(0, 'cm'),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
+          legend.box.spacing = unit(0, "cm"),
+          panel.spacing.y = unit(0, "lines"), 
+          panel.spacing.x = unit(1, "lines"), 
+          plot.margin = margin(0, 0.3, 0, 0, unit = "cm"),
+          
+          ) +
   scale_x_continuous(n.breaks = 3) +
-  scale_y_continuous(n.break = 3)
+  scale_y_continuous(n.break = 3) +
+  guides(linetype = guide_legend(override.aes = list(linewidth = 0.5,
+                                                     size = 1),
+                                 order = 2,
+                                 nrow = 2), 
+         fill = "none",
+         color = guide_legend(override.aes = list(linewidth = 3),
+                              nrow = 2))
 
 roc_curve_plot
 
-# Visualize AUC
-auc_plot <- bind_rows(auc_results_up, 
-                      auc_results_down) %>% 
-  mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
-         comparison = factor(comparison, levels = c("Up", "Down")),
-         timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
-         timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T~pathogen),
-         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
-ggplot(aes(x = auc, 
-             y = timepoint %>% fct_rev(), 
-             fill = model)) +
-  geom_col(width = 1,
-           position = position_dodge(1)) +
-  
-  # Add a reference line for random prediction (AUC = 0.5)
-  geom_vline(xintercept = 0.5, linetype = "dashed", color = "black", linewidth = 0.5) +
-  
-  geom_text(aes(label = round(auc, 2)),
-            position = position_dodge2(1),
-            hjust = -0.2, size = 2, vjust = 0.5) +
-  
-  facet_nested_wrap(~pathogen+comparison, 
-                    scales = "free", 
-                    ncol = 4,
-                    strip = strip_nested(size = "variable"))+
-  
-  labs(
-    x = "AUC",
-    y = "",
-    fill = "Model"
-  ) +
-    scale_fill_manual(values = c(
-    "Mouse" = "#4DBBD5FF",
-    "Immune" = "#4361ee",
-    "Human" = "#90A4AEFF",
-    "Permutation" = "gray80"
-    )) +
-  guides(fill = guide_legend(override.aes = list(size = 4)),
-         color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
-         ) +
-  theme_vaxgo()  +
-  theme(
-    legend.position = "top",
-    strip.text = element_text(size = 8),
-    strip.placement = "outside",
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.title.y = element_blank(),
-    axis.text.y = element_text(size = 8),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank(),
-    ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-  ) +
-  scale_x_continuous(expand = c(0,0), limits = c(0,1.05), n.breaks = 3)
-```
 
-
-```{r fig.height=12, fig.width=6}
-#Unite plots
-roc_auc_curve_plot = ((roc_curve_plot) /
-  (auc_plot + theme(legend.position = "none")
-   )
-  ) +
-  plot_layout(
-  guides = "collect",
-  heights = c(0.8, 1) 
-) +
-plot_annotation(
-  theme = theme(
-    legend.position = "top",
-    plot.margin = margin(0.5, 0.5,0.5,0.5, "pt")
-  )
-) & 
-theme(
-  panel.spacing = unit(0, "lines"),
-  # plot.margin = margin(0, 2, 0, 2, "pt"),
-   legend.margin=margin(0,0,0,0),
-  legend.title = element_text(size = 8),
-  legend.text = element_text(size = 8),
-   legend.box.margin=margin(1,0,-10,0),
-   plot.margin = margin(0.1, 0.1, 0.1, 0.1, unit = "cm")
-)
-roc_auc_curve_plot
-roc_auc_curve_plot %>%
+roc_curve_plot %>%
   ggsave(filename = here("Figures", paste0(filename, "_performance_roc_", gene_set_filename, ".png")),
          width = 5,
-         height = 12)
-
+         height = 13)
 ```
 
 
@@ -1446,10 +1450,7 @@ dge_hallmarks_mean_process_all = bind_rows(
 dge_hallmarks_mean_process_all %>% 
   dplyr::count(pathogen, organism, timepoint)
 
-```
 
-
-```{r}
 #Import ============
 #Import DEGs table
 dge_hallmarks_mean_process = dge_hallmarks_mean_process_all
@@ -1571,10 +1572,7 @@ dge_long_genes_down = hallmarks_df_input %>%
 dge_long_genes_down %>% 
   filter(pathogen == "Staphylococcus aureus",
          organism == "Human")
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 # Assign human truth
 #=====================================================
@@ -1596,10 +1594,7 @@ truth_human_down = dge_long_genes_down %>%
 
 truth_human_up %>% 
   dplyr::count(pathogen, organism, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 #Generate reference distributions
 #=====================================================
@@ -1629,10 +1624,7 @@ permutation_prediction_down = perfect_prediction_down %>%
 
 perfect_prediction_down %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 # Combine models (Mouse + Immune + Uniform + Perfect)
 #=====================================================
@@ -1652,10 +1644,7 @@ models_down = dge_long_genes_down %>%
 
 models_down %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 # Classify probabilities 
 #=====================================================
@@ -1681,10 +1670,7 @@ classified_df_probs_down = truth_human_down %>%
 
 classified_df_probs_up %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 #Compute ROC 
 #=====================================================
@@ -1705,10 +1691,7 @@ roc_curve_down_notdown = classified_df_probs_down %>%
 
 roc_curve_up_notup %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
 #=====================================================
 #Compute AUC 
 #=====================================================
@@ -1734,40 +1717,76 @@ auc_results_down = classified_df_probs_down %>%
 
 auc_results_down %>% 
   dplyr::count(pathogen, model, timepoint)
-```
 
-
-```{r fig.height=8, fig.width=10}
-#Plot curves ------------------
-#PLOT ROC Curve
-roc_curve_plot = roc_curve_up_notup %>% 
-  bind_rows(roc_curve_down_notdown %>% 
-              filter(model != "Human")) %>%
-  ungroup() %>% 
-  mutate(timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+#=====================================================
+#Unite all results
+#=====================================================
+roc_curve_auc_df = bind_rows(auc_results_up,auc_results_down) %>% 
+  inner_join(
+    roc_curve_up_notup %>% 
+      bind_rows(roc_curve_down_notdown %>% 
+                  filter(model != "Human")),
+    by = join_by(pathogen, model, timepoint, comparison)) %>% 
+    mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
+         comparison = factor(comparison, levels = c("Up", "Down")),
+         # timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
+         timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
          pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
                               pathogen == "Staphylococcus aureus" ~ "S. aureus",
                               pathogen == "Escherichia coli" ~ "E. coli",
-                              T~pathogen),
+                              T ~ pathogen),
          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
+  mutate(auc = round(auc, 2) %>% as.character())
+
+
+```
+
+
+```{r fig.height=13, fig.width=4}
+#Plot curves ------------------
+#PLOT ROC Curve
+roc_curve_plot = roc_curve_auc_df %>% 
+  # mutate(comparison = as.character(comparison),
+  #        comparison = if_else(comparison == "Up", "U", "D")) %>% 
   arrange(pathogen) %>% 
   ungroup() %>% 
   ggplot(aes(x = 1 - specificity, 
              y = sensitivity, 
              color = model,
              linetype = comparison)) +
-  geom_path(size = 0.5, alpha = 1) +
+  geom_path(size = 0.75, alpha = 1) +
   geom_abline(lty = 3) +
   theme_vaxgo() +
-  facet_nested_wrap(~pathogen+timepoint, nrow = 5,
+  facet_nested_wrap(~pathogen+timepoint, ncol = 3, axes = "x",
                     strip = strip_nested(size = "variable")) +
+  #Mouse
+  geom_text(data = . %>% 
+              filter(model == "Mouse", comparison == "Up") %>% 
+              select(pathogen, model, comparison, timepoint, auc) %>% 
+              distinct(),
+            mapping = aes(label = paste(comparison, auc),
+                color = model,
+                x = 1,
+                y = 0.2),
+            size = 2,
+            hjust = 1) +
+  geom_text(data = . %>% 
+              filter(model == "Mouse", comparison == "Down") %>% 
+              select(pathogen, model, comparison, timepoint, auc) %>% 
+              distinct(),
+            mapping = aes(label = paste(comparison, auc),
+                color = model,
+                x = 1,
+                y = 0.05),
+            size = 2,
+            hjust = 1) +
+
   scale_linetype_manual(values = c("Up" = 1,
                                    "Down" = 2)) +
   # coord_equal() +
   scale_color_manual(values = c(
-    "Mouse" = "#4DBBD5FF",
+    "Mouse" = "#4361ee",
     "Human" = "#90A4AEFF",
-    "Immune" = "#4361ee",
     "Permutation" = "gray80"
     )) +
   labs(
@@ -1778,116 +1797,42 @@ roc_curve_plot = roc_curve_up_notup %>%
   guides(fill = guide_legend(override.aes = list(size = 4)),
          color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
          ) +
-  theme(
-    legend.position = "top",
-    strip.text = element_text(size = 8),
-    strip.placement = "outside",
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 8, angle = 0, hjust = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.text.y = element_text(size = 8),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank(),
-    ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-  ) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 8),
+          axis.title.x = element_text(size = 8),
+          axis.text.y = element_text(size = 8),
+          axis.title.y = element_text(size = 8),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          strip.text.x = element_text(angle = 0, hjust = 0., vjust = 0.5, size = 8),
+          legend.position = "top",
+          legend.direction = "horizontal", 
+          legend.text = element_text(size = 8, hjust = 0),
+          legend.title = element_text(size = 8),
+          legend.spacing.x = unit(0, 'cm'),
+          legend.spacing.y = unit(0, 'cm'),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
+          legend.box.spacing = unit(0, "cm"),
+          panel.spacing.y = unit(0, "lines"), 
+          panel.spacing.x = unit(1, "lines"), 
+          plot.margin = margin(0, 0.3, 0, 0, unit = "cm"),
+          
+          ) +
   scale_x_continuous(n.breaks = 3) +
-  scale_y_continuous(n.break = 3)
+  scale_y_continuous(n.break = 3) +
+  guides(linetype = guide_legend(override.aes = list(linewidth = 0.5,
+                                                     size = 1),
+                                 order = 2,
+                                 nrow = 2), 
+         fill = "none",
+         color = guide_legend(override.aes = list(linewidth = 3),
+                              nrow = 2))
 
 roc_curve_plot
 
-# Visualize AUC
-auc_plot <- bind_rows(auc_results_up, 
-                      auc_results_down) %>% 
-  mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
-         comparison = factor(comparison, levels = c("Up", "Down")),
-         timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
-         timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T~pathogen),
-         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
-ggplot(aes(x = auc, 
-             y = timepoint %>% fct_rev(), 
-             fill = model)) +
-  geom_col(width = 1,
-           position = position_dodge(1)) +
-  
-  # Add a reference line for random prediction (AUC = 0.5)
-  geom_vline(xintercept = 0.5, linetype = "dashed", color = "black", linewidth = 0.5) +
-  
-  geom_text(aes(label = round(auc, 2)),
-            position = position_dodge2(1),
-            hjust = -0.2, size = 2, vjust = 0.5) +
-  
-  facet_nested_wrap(~pathogen+comparison, 
-                    scales = "free", 
-                    ncol = 4,
-                    strip = strip_nested(size = "variable"))+
-  
-  labs(
-    x = "AUC",
-    y = "",
-    fill = "Model"
-  ) +
-    scale_fill_manual(values = c(
-    "Mouse" = "#4DBBD5FF",
-    "Immune" = "#4361ee",
-    "Human" = "#90A4AEFF",
-    "Permutation" = "gray80"
-    )) +
-  guides(fill = guide_legend(override.aes = list(size = 4)),
-         color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
-         ) +
-  theme_vaxgo()  +
-  theme(
-    legend.position = "top",
-    strip.text = element_text(size = 8),
-    strip.placement = "outside",
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.title.y = element_blank(),
-    axis.text.y = element_text(size = 8),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank(),
-    ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-  ) +
-  scale_x_continuous(expand = c(0,0), limits = c(0,1.05), n.breaks = 3)
-```
 
-
-```{r fig.height=12, fig.width=6}
-#Unite plots
-roc_auc_curve_plot = ((roc_curve_plot) /
-  (auc_plot + theme(legend.position = "none")
-   )
-  ) +
-  plot_layout(
-  guides = "collect",
-  heights = c(0.8, 1) 
-) +
-plot_annotation(
-  theme = theme(
-    legend.position = "top",
-    plot.margin = margin(0.5, 0.5,0.5,0.5, "pt")
-  )
-) & 
-theme(
-  panel.spacing = unit(0, "lines"),
-  # plot.margin = margin(0, 2, 0, 2, "pt"),
-   legend.margin=margin(0,0,0,0),
-  legend.title = element_text(size = 8),
-  legend.text = element_text(size = 8),
-   legend.box.margin=margin(1,0,-10,0),
-   plot.margin = margin(0.1, 0.1, 0.1, 0.1, unit = "cm")
-)
-roc_auc_curve_plot
-roc_auc_curve_plot %>%
+roc_curve_plot %>%
   ggsave(filename = here("Figures", paste0(filename, "_performance_roc_", gene_set_filename, ".png")),
          width = 5,
-         height = 12)
-
+         height = 13)
 ```
 
 
@@ -1931,10 +1876,6 @@ gsea_hallmarks_results_all = bind_rows(
   mutate(timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")))
 
 
-```
-
-
-```{r}
 #Import ============
 #Import DEGs table
 dge_hallmarks_mean_process = gsea_hallmarks_results_all
@@ -2194,37 +2135,75 @@ auc_results_down = classified_df_probs_down %>%
 
 auc_results_down %>% 
   dplyr::count(pathogen, model, timepoint)
-
-#Plot curves ------------------
-#PLOT ROC Curve
-roc_curve_plot = roc_curve_up_notup %>% 
-  bind_rows(roc_curve_down_notdown %>% 
-              filter(model != "Human")) %>%
-  ungroup() %>% 
-  mutate(timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+#=====================================================
+#Unite all results
+#=====================================================
+roc_curve_auc_df = bind_rows(auc_results_up,auc_results_down) %>% 
+  inner_join(
+    roc_curve_up_notup %>% 
+      bind_rows(roc_curve_down_notdown %>% 
+                  filter(model != "Human")),
+    by = join_by(pathogen, model, timepoint, comparison)) %>% 
+    mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
+         comparison = factor(comparison, levels = c("Up", "Down")),
+         # timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
+         timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
          pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
                               pathogen == "Staphylococcus aureus" ~ "S. aureus",
                               pathogen == "Escherichia coli" ~ "E. coli",
-                              T~pathogen),
+                              T ~ pathogen),
          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
+  mutate(auc = round(auc, 2) %>% as.character())
+
+
+```
+
+
+```{r fig.height=13, fig.width=4}
+#Plot curves ------------------
+#PLOT ROC Curve
+roc_curve_plot = roc_curve_auc_df %>% 
+  # mutate(comparison = as.character(comparison),
+  #        comparison = if_else(comparison == "Up", "U", "D")) %>% 
   arrange(pathogen) %>% 
   ungroup() %>% 
   ggplot(aes(x = 1 - specificity, 
              y = sensitivity, 
              color = model,
              linetype = comparison)) +
-  geom_path(size = 0.5, alpha = 1) +
+  geom_path(size = 0.75, alpha = 1) +
   geom_abline(lty = 3) +
   theme_vaxgo() +
-  facet_nested_wrap(~pathogen+timepoint, nrow = 5,
+  facet_nested_wrap(~pathogen+timepoint, ncol = 3, axes = "x",
                     strip = strip_nested(size = "variable")) +
+  #Mouse
+  geom_text(data = . %>% 
+              filter(model == "Mouse", comparison == "Up") %>% 
+              select(pathogen, model, comparison, timepoint, auc) %>% 
+              distinct(),
+            mapping = aes(label = paste(comparison, auc),
+                color = model,
+                x = 1,
+                y = 0.2),
+            size = 2,
+            hjust = 1) +
+  geom_text(data = . %>% 
+              filter(model == "Mouse", comparison == "Down") %>% 
+              select(pathogen, model, comparison, timepoint, auc) %>% 
+              distinct(),
+            mapping = aes(label = paste(comparison, auc),
+                color = model,
+                x = 1,
+                y = 0.05),
+            size = 2,
+            hjust = 1) +
+
   scale_linetype_manual(values = c("Up" = 1,
                                    "Down" = 2)) +
   # coord_equal() +
   scale_color_manual(values = c(
-    "Mouse" = "#4DBBD5FF",
+    "Mouse" = "#4361ee",
     "Human" = "#90A4AEFF",
-    "Immune" = "#4361ee",
     "Permutation" = "gray80"
     )) +
   labs(
@@ -2235,82 +2214,42 @@ roc_curve_plot = roc_curve_up_notup %>%
   guides(fill = guide_legend(override.aes = list(size = 4)),
          color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
          ) +
-  theme(
-    legend.position = "top",
-    strip.text = element_text(size = 8),
-    strip.placement = "outside",
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 8, angle = 0, hjust = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.text.y = element_text(size = 8),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank(),
-    ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-  ) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 8),
+          axis.title.x = element_text(size = 8),
+          axis.text.y = element_text(size = 8),
+          axis.title.y = element_text(size = 8),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          strip.text.x = element_text(angle = 0, hjust = 0., vjust = 0.5, size = 8),
+          legend.position = "top",
+          legend.direction = "horizontal", 
+          legend.text = element_text(size = 8, hjust = 0),
+          legend.title = element_text(size = 8),
+          legend.spacing.x = unit(0, 'cm'),
+          legend.spacing.y = unit(0, 'cm'),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
+          legend.box.spacing = unit(0, "cm"),
+          panel.spacing.y = unit(0, "lines"), 
+          panel.spacing.x = unit(1, "lines"), 
+          plot.margin = margin(0, 0.3, 0, 0, unit = "cm"),
+          
+          ) +
   scale_x_continuous(n.breaks = 3) +
-  scale_y_continuous(n.break = 3)
+  scale_y_continuous(n.break = 3) +
+  guides(linetype = guide_legend(override.aes = list(linewidth = 0.5,
+                                                     size = 1),
+                                 order = 2,
+                                 nrow = 2), 
+         fill = "none",
+         color = guide_legend(override.aes = list(linewidth = 3),
+                              nrow = 2))
 
 roc_curve_plot
 
-# Visualize AUC
-auc_plot <- bind_rows(auc_results_up, 
-                      auc_results_down) %>% 
-  mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
-         comparison = factor(comparison, levels = c("Up", "Down")),
-         timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
-         timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T~pathogen),
-         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
-ggplot(aes(x = auc, 
-             y = timepoint %>% fct_rev(), 
-             fill = model)) +
-  geom_col(width = 1,
-           position = position_dodge(1)) +
-  
-  # Add a reference line for random prediction (AUC = 0.5)
-  geom_vline(xintercept = 0.5, linetype = "dashed", color = "black", linewidth = 0.5) +
-  
-  geom_text(aes(label = round(auc, 2)),
-            position = position_dodge2(1),
-            hjust = -0.2, size = 2, vjust = 0.5) +
-  
-  facet_nested_wrap(~pathogen+comparison, 
-                    scales = "free", 
-                    ncol = 4,
-                    strip = strip_nested(size = "variable"))+
-  
-  labs(
-    x = "AUC",
-    y = "",
-    fill = "Model"
-  ) +
-    scale_fill_manual(values = c(
-    "Mouse" = "#4DBBD5FF",
-    "Immune" = "#4361ee",
-    "Human" = "#90A4AEFF",
-    "Permutation" = "gray80"
-    )) +
-  guides(fill = guide_legend(override.aes = list(size = 4)),
-         color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
-         ) +
-  theme_vaxgo()  +
-  theme(
-    legend.position = "top",
-    strip.text = element_text(size = 8),
-    strip.placement = "outside",
-    # strip.background.x = element_rect(fill = "gray95", color = NA), 
-    strip.text.y = element_text(size = 10, angle = 0, hjust = 0),
-    axis.text.x = element_text(size = 8, angle = 0, hjust = 0.5, vjust = 0.5),
-    axis.title.y = element_blank(),
-    axis.text.y = element_text(size = 8),
-    panel.spacing.x = unit(0.5, "lines"),
-    legend.key = element_blank(),
-    ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-  ) +
-  scale_x_continuous(expand = c(0,0), limits = c(0,1.05), n.breaks = 3)
+
+roc_curve_plot %>%
+  ggsave(filename = here("Figures", paste0(filename, "_performance_roc_", gene_set_filename, ".png")),
+         width = 5,
+         height = 13)
 ```
 
 
