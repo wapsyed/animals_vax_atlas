@@ -2026,6 +2026,8 @@ degs_human_mouse_overlap_common_plot
 #DEGs (matched)
 all_degs_human_mouse =
   readRDS(here("tables", "all_human_mouse_dge_limma_degs_matched.rds"))
+all_degs_human_mouse_unmatched =
+  readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds"))
 
 #Functional modules
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
@@ -2086,8 +2088,203 @@ degs_immune_nonimmune_summary = human_mouse_log2fc_avg_wide_degs_immune_nonimmun
 
 degs_immune_nonimmune_summary
 ```
+#### Matrix plot
+
+```{r}
+genes_shared <- all_degs_human_mouse %>%
+  select(organism, pathogen, human_symbol) %>% 
+  distinct() %>% 
+  # Get genes that are present in both species
+  group_by(human_symbol, pathogen) %>%
+  filter(n_distinct(organism) == 2) %>%  
+  ungroup()
+
+genes_log2fc_input = all_degs_human_mouse_unmatched %>% 
+  rename(log2fc = mean_l2fc) %>% 
+  inner_join(genes_shared, by = join_by(organism, pathogen, human_symbol))
+```
 
 
+```{r message=FALSE, warning=FALSE}
+# 1. Define Inputs and Gene Subsets -----------------------------------------
+# We create a list to automate the loop over both sets
+gene_sets_list <- list(
+  "AllGenes" = genes_log2fc_input,
+  "DEGs" = genes_log2fc_input %>% 
+    filter(adj_p_val <= 0.05),
+  "Immune"   = genes_log2fc_input %>% 
+                 filter(human_symbol %in% (btm_annotation_genes %>% 
+                                          filter(module_category == "immune") %>% 
+                                          pull(symbol) %>% unique()))
+)
+
+
+# 2. Main Processing Loop ----------------------------------------------------
+# map_dfr iterates through "AllGenes" and "Immune", stacking the results
+final_correlations <- map_dfr(names(gene_sets_list), function(set_name) {
+  
+  message(paste("Processing gene set:", set_name))
+  current_data <- gene_sets_list[[set_name]]
+  
+  # Data Preparation: Long format to Wide Matrix
+  genes_samples_long <- current_data %>%
+    select(pathogen, organism, human_symbol, timepoint, log2fc) %>%
+    distinct() %>%
+    mutate(condition = paste0(pathogen, "_", timepoint))
+
+  samples_annotation <- genes_samples_long %>%
+    select(pathogen, organism, timepoint, condition) %>%
+    distinct() 
+
+  genes_samples_wide <- genes_samples_long %>%
+    select(human_symbol, condition, log2fc) %>% 
+    distinct() %>%
+    pivot_wider(names_from = "condition", values_from = "log2fc", values_fn = mean) %>%
+    column_to_rownames("human_symbol")
+
+  # 3. Pathogen-Specific Correlation Calculation -----------------------------
+  pathogen_list <- unique(samples_annotation$pathogen)
+  
+  map_dfr(pathogen_list, function(path) {
+    
+    pathogen_samples <- samples_annotation %>% 
+      filter(pathogen == path) %>% 
+      pull(condition) 
+    
+    # Subset matrix and drop NAs
+    matrix_subset <- genes_samples_wide %>%
+      select(all_of(intersect(pathogen_samples, colnames(.)))) %>%
+      # drop_na() %>%
+      as.matrix()
+    
+    if(nrow(matrix_subset) <= 4 | ncol(matrix_subset) < 2) {
+      warning(paste("Skipping pathogen:", path, "- only", nrow(matrix_subset), "shared genes found."))
+      return(NULL)
+    }
+    
+    # Calculate Spearman Correlation
+    cor_obj <- rcorr(matrix_subset, type = "spearman")
+    
+    # Tidy extraction of Rho and P-values
+    r_long <- as.data.frame(cor_obj$r) %>%
+      rownames_to_column("condition1") %>%
+      pivot_longer(-condition1, names_to = "condition2", values_to = "rho")
+    
+    # p_long <- as.data.frame(cor_obj$P) %>%
+    #   rownames_to_column("condition1") %>%
+    #   pivot_longer(-condition1, names_to = "condition2", values_to = "p_val")
+    
+    # Join with Metadata and Filter Duplicates
+    r_long %>%
+      # left_join(p_long, by = c("condition1", "condition2")) %>%
+      filter(condition1 < condition2) %>%
+      left_join(samples_annotation %>% select(condition, organism1 = organism, timepoint1 = timepoint), 
+                by = c("condition1" = "condition")) %>%
+      left_join(samples_annotation %>% select(condition, organism2 = organism, timepoint2 = timepoint), 
+                by = c("condition2" = "condition")) %>%
+      mutate(pathogen = path, gene_set = set_name)
+  })
+}) %>% 
+  # Keep Human as reference for cross-species comparisons
+  filter(!(organism1 == "Mouse" & organism2 == "Human")) %>% 
+  mutate(comparison = paste0(organism1, " vs. ", organism2),
+         timepoint_comparison = paste0(timepoint1, "-", timepoint2)) %>% 
+  filter(comparison == "Human vs. Mouse")
+
+final_correlations
+
+correlation_filtered <- final_correlations %>% 
+  mutate(timepoint_label = if_else(pathogen %in% c("Staphylococcus aureus", "Escherichia coli"), 
+                                   timepoint2, timepoint1),
+         timepoint_label = as.character(timepoint_label),
+         timepoint_label = str_replace(timepoint_label,"Early hours", "Early\nhours"),
+         timepoint1 = str_replace(timepoint1,"Early hours", "Early\nhours"),
+         timepoint2 = str_replace(timepoint2,"Early hours", "Early\nhours"),
+         timepoint2 = str_replace(timepoint2,"Day ", "Day\n"),
+         timepoint = fct_relevel(timepoint_label, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         timepoint1 = fct_relevel(timepoint1, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         timepoint2 = fct_relevel(timepoint2, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day\n1", "Day\n3", "Day\n7")),
+         pathogen = as.character(pathogen),
+         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
+                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
+                              pathogen == "Escherichia coli" ~ "E. coli",
+                              T ~pathogen),
+          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         gene_set = str_replace(gene_set, "AllGenes", "All genes"),
+         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
+                               T ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")) 
+
+correlation_filtered
+
+```
+
+
+
+
+
+```{r fig.height=8, fig.width=10}
+correlation_heatmap = correlation_filtered %>% 
+  ggplot() +
+  aes(x = timepoint2,
+      y = timepoint1) +
+  #Facet
+  facet_nested_wrap(~gene_set+treatment+pathogen,
+                    scales = "free",
+                    nrow = 3,
+                    strip = strip_nested(size = "variable")) +
+  labs(x = "Mouse",
+       y = "Human") +
+  geom_tile(aes(fill = rho)) +
+  # geom_shadowtext(aes(label = round(rho, 2)), size = 3, 
+  #                 color = "black",
+  #                 bg.color = "white") +
+  geom_text(aes(label = round(rho, 2)), size = 3, 
+                  color = "black") +
+  scale_x_discrete(expand = c(0,0)) +
+  scale_y_discrete(expand = c(0,0)) +
+  scale_fill_gradientn(
+        colors = c("white", "lightblue", "#4cc9f0", "#4361ee"),
+        values = scales::rescale(seq(0, 1, length.out = 10)),
+        limits = c(0, 1),
+        name = "Spearman's rho",
+        guide = guide_colorbar(
+          barwidth = 15,
+          barheight = 1,
+          nbin = 10,
+          raster = FALSE
+        )
+      ) +
+  #Theme
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size =10),
+        axis.text.y = element_text(size = 10),
+        strip.text.x = element_text(size = 10),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+        legend.position = "top",
+        legend.direction = "horizontal",
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(0,0,-10,0),
+        panel.spacing.y = unit(0, "lines"),
+        panel.spacing.x = unit(0.5, "lines"),
+        plot.margin = margin(0, 0, 0, 0, unit = "cm"),
+        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) 
+
+correlation_heatmap 
+
+correlation_heatmap %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_dge_correlation_matrixplot.png"),
+         width = 10, height = 8)
+
+
+```
+
+
+
+
+#### Scatter plots
 ```{r}
 #Correlation ------
 
@@ -3508,7 +3705,7 @@ saveRDS(correlation_summary_filtered, file = here("tables", paste0(filename, "_g
 ```
 
 
-
+Horizontal
 ```{r fig.height=3, fig.width=16}
 #Import
 correlation_summary_filtered_DEGs = readRDS(file = here("tables","all_human_mouse_DEGs_gene_sets_correlation_summary.rds")) %>% 
@@ -3599,13 +3796,110 @@ correlation_long_all_mouse_human_timepoints_summary_plot = correlation_summaries
 correlation_long_all_mouse_human_timepoints_summary_plot
 
 correlation_long_all_mouse_human_timepoints_summary_plot %>%
-  ggsave(filename = here("Figures", paste0("all_human_mouse_all_DEGs_correlation_timepoints_summary_plot.png")),
+  ggsave(filename = here("Figures", paste0("all_human_mouse_all_DEGs_correlation_timepoints_summary_plot_horizontal.png")),
          width = 16,
          height = 3)
 
 ```
 
+Vertical
+```{r fig.height=6, fig.width=10}
+#Import
+correlation_summary_filtered_DEGs = readRDS(file = here("tables","all_human_mouse_DEGs_gene_sets_correlation_summary.rds")) %>% 
+  mutate(filter = "DEGs")
+correlation_summary_filtered_all = readRDS(file = here("tables","all_human_mouse_gene_sets_correlation_summary.rds")) %>% 
+  mutate(filter = "No filter")
 
+correlation_summaries =  
+  bind_rows(correlation_summary_filtered_DEGs,
+            correlation_summary_filtered_all) %>% 
+  mutate(timepoint = str_replace(timepoint, "Day ", "Day\n"),
+         timepoint = as.character(timepoint),
+         timepoint = fct_relevel(timepoint, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day\n1", "Day\n3", "Day\n7")),
+         filter = fct_relevel(filter, c("No filter", "DEGs")),
+         pathogen = as.character(pathogen),
+         pathogen = str_replace(pathogen, "Staphylococcus aureus", "S. aureus") %>% 
+           str_replace("Escherichia coli", "E. coli"),
+         pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "S. aureus", "E. coli", "Burn", "Trauma"))
+
+#Plot
+correlation_long_all_mouse_human_timepoints_summary_plot = correlation_summaries %>% 
+  ggplot() +
+  aes(x = timepoint,
+      y = mean_rho,
+      group = interaction(comparison, gene_set), 
+      color = comparison,
+      fill = comparison) +
+  
+  facet_nested_wrap(~filter + pathogen, scales = "free_x", nrow = 2) +
+  geom_line(aes(linetype = gene_set,
+                alpha = gene_set),
+            linewidth = 0.5) +
+    geom_errorbar(aes(ymin = ci_low, 
+                    ymax = ci_high,
+                    alpha = gene_set), 
+                width = 0.2,
+                size = 1,
+                linetype = "solid") + 
+   geom_point(aes(alpha = gene_set,
+                  fill = comparison),
+             size = 2, 
+             pch = 21,
+             color = "black",
+             stroke = 0.5) + 
+
+  scale_alpha_manual(values = c("Immune" = 1, "All genes" = 0.5)) +
+
+  scale_x_discrete(expand = c(0.05, 0.05)) +
+  scale_y_continuous(expand = c(0.01, 0.01),
+                     limits = c(-0.1, 1)
+                     ) +
+  theme_vaxgo() +
+  scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  scale_fill_manual(values = c("Human vs. Mouse" = "#4361ee",
+                                "Mouse vs. Mouse" = "#4DBBD5FF",
+                                "Human vs. Human" = "#90A4AEFF")) +
+  labs(
+    # title = gene_set_name,
+       x = "Time",
+       y = "Correlation",
+       shape = "Type",
+       linetype = "Gene category (Line)",
+       alpha = "Gene category (Opacity)",
+       color = "Comparison") +
+  geom_hline(yintercept = 0, linetype = 2, color = "black") +
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 8),
+          axis.text.y = element_text(size = 8),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+          panel.spacing = unit(1.1, "lines"),
+          plot.margin = margin(0, 0.3, 0, 0, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          panel.spacing.y = unit(0, "lines"),
+          legend.margin=margin(0,0,0,0),
+          legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.spacing.y = unit(0, "cm"),
+          legend.title = element_text(size = 10),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+    ) +
+  guides(fill = "none",
+         linetype = guide_legend(order = 1, linewidth = 5, nrow = 2, byrow = TRUE), 
+        alpha = guide_legend(order = 2, linewidth = 3, nrow = 2, byrow = TRUE,),
+        color = guide_legend(override.aes = list(linewidth = 3), nrow = 3, byrow = TRUE,))
+
+correlation_long_all_mouse_human_timepoints_summary_plot
+
+correlation_long_all_mouse_human_timepoints_summary_plot %>%
+  ggsave(filename = here("Figures", paste0("all_human_mouse_all_DEGs_correlation_timepoints_summary_plot_vertical.png")),
+         width = 10,
+         height = 6)
+
+```
 
 
 

@@ -3,7 +3,7 @@
 # CRAN
 
 cran_packages = c(
-  "tidyverse", "rentrez", "yardstick", 
+  "tidyverse", "rentrez", "yardstick",  "shadowtext",
   # "ggridges", 
   "here", "glue", "ggsci", 
   "janitor", "readr", 
@@ -18,12 +18,23 @@ cran_packages = c(
   "ggfx", "devtools", "readxl", "rstatix", "matrixTests"
 )
 
-# install_github("RRHO2/RRHO2", build_opts = c("--no-resave-data", "--no-manual"))
-# library(RRHO2)
 
-# install_github()
 
-# install.packages(cran_packages)
+# install.packages(c(
+#   "tidyverse", "rentrez", "yardstick", 
+#   # "ggridges", 
+#   "here", "glue", "ggsci", 
+#   "janitor", "readr", 
+#   # "paletteer", 
+#   # "beepr", 
+#   # "preprocessCore", 
+#   "maditr", 
+#   "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
+#   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
+#   "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp", "corto", "Hmisc",
+#   "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath",
+#   "ggfx", "devtools", "readxl", "rstatix", "matrixTests"
+# ))
 
 
 # renv::remove("ape")
@@ -43,10 +54,25 @@ bioc_pkgs = c(
 )
 
 # install.packages("BiocManager")
-# BiocManager::install(c(bioc_pkgs) )
+# BiocManager::install(c(
+#   "pvca",
+#   "biomaRt", "GEOquery", "circlize", "celldex", 
+#   "org.Hs.eg.db", "DESeq2", "msigdbr", 
+#   "ape", "variancePartition", 
+#   "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
+#   "mogene10sttranscriptcluster.db", "fgsea"
+#   # "arrayQualityMetrics"
+# ))
+
+# install_github("RRHO2/RRHO2", build_opts = c("--no-resave-data", "--no-manual"))
+# library(RRHO2)
+
+# install_github()
 
 #Load all faster
 lapply(c(cran_packages, bioc_pkgs, "RRHO2"), library, character.only = TRUE)
+
+
 
 ##Aesthetics -----
 #Custom theme
@@ -485,7 +511,7 @@ colors_all <- c(
   "#4361ee",
   "#4DBBD5FF",
   "#90A4AEFF",
-  "#06d6a0",,
+  "#06d6a0",
   "#46eec6",
   "#175289",
   "#caf0f8",
