@@ -1974,9 +1974,7 @@ degs_human_mouse_overlap_common_plot = degs_human_mouse_overlap_genes_summary %>
   )) +
   # scale_fill_manual(values = c("Common" = "#175289",
   #                              "Not common" = "gray90"))    +
-  scale_fill_manual(values = c("Mouse only" = "#4DBBD5FF",
-                               "Human only" = "#90A4AEFF",
-                               "Shared" = "#4361ee"))    +
+  scale_fill_manual(values = colors$comparison)    +
   theme_vaxgo() +
   theme(
     strip.text = element_text(size = 10, margin = margin(1, 0, 1, 0)),
@@ -2048,12 +2046,8 @@ degs_human_mouse_overlap_lineplot = degs_human_mouse_overlap_genes_summary %>%
   scale_y_continuous(expand = c(0.05, 0.05),
                      labels = label_number(scale_cut = cut_short_scale())) +
   theme_vaxgo() +
-  scale_fill_manual(values = c("Mouse only" = "#4DBBD5FF",
-                               "Human only" = "#90A4AEFF",
-                               "Shared" = "#4361ee"))    +
-  scale_color_manual(values = c("Mouse only" = "#4DBBD5FF",
-                               "Human only" = "#90A4AEFF",
-                               "Shared" = "#4361ee"))    +
+  scale_fill_manual(values = colors$comparison)    +
+  scale_color_manual(values = colors$comparison)    +
   labs(x = "Time",
        y = "Total",
        fill = "",
@@ -2188,14 +2182,36 @@ genes_log2fc_input = all_degs_human_mouse_unmatched %>%
 gene_sets_list <- list(
   "AllGenes" = genes_log2fc_input,
   "DEGs" = genes_log2fc_input %>% 
-    filter(adj_p_val <= 0.05),
+                 filter(adj_p_val <= 0.05),
   "Immune"   = genes_log2fc_input %>% 
                  filter(human_symbol %in% (btm_annotation_genes %>% 
                                           filter(module_category == "immune") %>% 
                                           pull(symbol) %>% unique()))
 )
+```
 
 
+
+```{r}
+# Data Preparation: Long format to Wide Matrix
+  genes_samples_long <- genes_log2fc_input %>%
+    select(pathogen, organism, human_symbol, timepoint, log2fc) %>%
+    distinct() %>%
+    mutate(condition = paste0(pathogen, "_", organism, "_", timepoint))
+
+  samples_annotation <- genes_samples_long %>%
+    select(pathogen, organism, timepoint, condition) %>%
+    distinct() 
+
+  genes_samples_wide <- genes_samples_long %>%
+    select(human_symbol, condition, log2fc) %>% 
+    distinct() %>%
+    pivot_wider(names_from = "condition", values_from = "log2fc", values_fn = mean) %>%
+    column_to_rownames("human_symbol")
+```
+
+
+```{r}
 # 2. Main Processing Loop ----------------------------------------------------
 # map_dfr iterates through "AllGenes" and "Immune", stacking the results
 final_correlations <- map_dfr(names(gene_sets_list), function(set_name) {
@@ -2207,7 +2223,7 @@ final_correlations <- map_dfr(names(gene_sets_list), function(set_name) {
   genes_samples_long <- current_data %>%
     select(pathogen, organism, human_symbol, timepoint, log2fc) %>%
     distinct() %>%
-    mutate(condition = paste0(pathogen, "_", timepoint))
+    mutate(condition = paste0(pathogen, "_", organism, "_", timepoint))
 
   samples_annotation <- genes_samples_long %>%
     select(pathogen, organism, timepoint, condition) %>%
@@ -2254,23 +2270,23 @@ final_correlations <- map_dfr(names(gene_sets_list), function(set_name) {
     # Join with Metadata and Filter Duplicates
     r_long %>%
       # left_join(p_long, by = c("condition1", "condition2")) %>%
-      # filter(condition1 < condition2) %>%
+      filter(condition1 < condition2) %>%
       left_join(samples_annotation %>% select(condition, organism1 = organism, timepoint1 = timepoint), 
                 by = c("condition1" = "condition")) %>%
       left_join(samples_annotation %>% select(condition, organism2 = organism, timepoint2 = timepoint), 
                 by = c("condition2" = "condition")) %>%
       mutate(pathogen = path, gene_set = set_name)
   })
-}) %>% 
-  # Keep Human as reference for cross-species comparisons
-  filter(organism1 == "Human" & organism2 == "Mouse") %>% 
-  mutate(comparison = paste0(organism1, " vs. ", organism2),
-         timepoint_comparison = paste0(timepoint1, "-", timepoint2)) %>% 
-  filter(comparison == "Human vs. Mouse")
+})
 
 final_correlations
 
 correlation_filtered <- final_correlations %>% 
+  # Keep Human as reference for cross-species comparisons
+  filter(organism1 == "Human" & organism2 == "Mouse") %>% 
+  mutate(comparison = paste0(organism1, " vs. ", organism2),
+         timepoint_comparison = paste0(timepoint1, "-", timepoint2)) %>% 
+  # filter(comparison == "Human vs. Mouse") %>% 
   mutate(timepoint_label = if_else(pathogen %in% c("Staphylococcus aureus", "Escherichia coli"), 
                                    timepoint2, timepoint1),
          timepoint_label = as.character(timepoint_label),
@@ -2299,12 +2315,31 @@ correlation_filtered
 ```
 
 
-
-
+```{r}
+ correlation_filtered %>% 
+  filter(treatment == "Vaccination",
+         gene_set == "All genes",
+         pathogen == "Influenza") %>% 
+  # filter(rho <1.0) %>% 
+  ggplot() +
+  aes(x = timepoint2,
+      y = timepoint1) +
+  #Facet
+  facet_nested_wrap(~gene_set+treatment+pathogen,
+                    scales = "free",
+                    nrow = 3,
+                    strip = strip_nested(size = "variable")) +
+  labs(x = "Mouse",
+       y = "Human") +
+  geom_tile(aes(fill = rho)) +
+  geom_text(aes(label = round(rho, 2)), size = 3, 
+                  color = "black") 
+```
 
 ```{r fig.height=8, fig.width=10}
 correlation_heatmap = correlation_filtered %>% 
-  filter(rho <1.0) %>% 
+  # filter(treatment == "Vaccination") %>% 
+  # filter(rho <1.0) %>% 
   ggplot() +
   aes(x = timepoint2,
       y = timepoint1) +
@@ -2324,9 +2359,9 @@ correlation_heatmap = correlation_filtered %>%
   scale_x_discrete(expand = c(0,0)) +
   scale_y_discrete(expand = c(0,0)) +
   scale_fill_gradientn(
-        colors = c("white", "lightblue", "#4cc9f0", "#4361ee"),
-        values = scales::rescale(seq(0, 1, length.out = 10)),
-        limits = c(0, 1),
+        colors = c("#4361ee", "white","#46eec6"),
+        values = scales::rescale(seq(-1, 1, length.out = 10)),
+        limits = c(-1, 1),
         name = "Spearman's rho",
         guide = guide_colorbar(
           barwidth = 15,
@@ -2352,7 +2387,7 @@ correlation_heatmap = correlation_filtered %>%
         ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) 
 
 correlation_heatmap 
-# 
+
 correlation_heatmap %>%
   ggsave(filename = here("Figures", "all_human_mouse_dge_correlation_matrixplot.png"),
          width = 11, height = 8)
@@ -2674,14 +2709,8 @@ human_mouse_t_t_avg_wide_scatterplot = human_mouse_t_avg_wide_labels_filters %>%
   guides(fill = guide_legend(override.aes = list(size = 4)),
          color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
          ) +
-  scale_fill_manual(values = c("All genes" = "gray95",
-                               "All DEGs" = "gray85",
-                               "Shared DEGs" = "#175289",
-                               "Immune" ="#46eec6")) +
-  scale_color_manual(values = c("All genes" = "black",
-                               "All DEGs" = "#4361ee",
-                               "Shared DEGs" = "#175289",
-                               "Immune" ="#46eec6")) +
+  scale_fill_manual(values = colors$shared) +
+  scale_color_manual(values = colors$shared) +
   #Add lines
   geom_abline(alpha = 0.2, linetype = 2) +
   geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
@@ -2779,14 +2808,8 @@ human_mouse_rank_rank_avg_wide_scatterplot = human_mouse_log2fc_avg_wide_labels_
                mutate(color_group = "Immune")) +
   guides(color = "none",
          fill = guide_legend(override.aes = list(size = 4))) +
-  scale_fill_manual(values = c("All genes" = "gray90",
-                               "All DEGs" = "gray85",
-                               "Shared DEGs" = "#175289",
-                               "Immune" ="#46eec6")) +
-  scale_color_manual(values = c("All genes" = "gray90",
-                               "All DEGs" = "gray85",
-                               "Shared DEGs" = "#175289",
-                               "Immune" ="#46eec6")) +
+  scale_fill_manual(values = colors$shared) +
+  scale_color_manual(values = colors$shared) +
   #Add lines
   geom_abline(alpha = 0.2, linetype = 2) +
   #Theme
@@ -3262,14 +3285,8 @@ gene_list_lineplot = gene_list_df %>%
              size = 3) +
   geom_text(aes(label = n), color = "black", size = 2, vjust = -0.8) +
   
-  scale_color_manual(values = c("Up-Up" = "#4DBBD5FF", 
-                                "Up-Down" = "#4DBBD5FF", 
-                                "Down-Down" = "#4361ee", 
-                                "Down-Up" = "#4361ee")) +
-  scale_fill_manual(values = c("Up-Up" = "#4DBBD5FF", 
-                                "Up-Down" = "#4DBBD5FF", 
-                                "Down-Down" = "#4361ee", 
-                                "Down-Up" = "#4361ee")) +
+  scale_color_manual(values = colors$direction) +
+  scale_fill_manual(values = colors$direction) +
   scale_linetype_manual(values = c("Up-Up" = 1, 
                                 "Up-Down" = 2, 
                                 "Down-Down" = 1, 
@@ -3385,10 +3402,7 @@ gene_list_df_heatmap_plot = gene_list_df_heatmap %>%
              axis.labels = "margins",
              switch = "y") +
   geom_tile() +
-  scale_fill_manual(values = c("Up-Up" = "#4DBBD5FF", 
-                                "Up-Down" = "#4DBBD5FF", 
-                                "Down-Down" = "#4361ee", 
-                                "Down-Up" = "#4361ee")) +
+  scale_fill_manual(values = colors$direction) +
   theme_vaxgo() + 
   theme(axis.text.y = element_text(hjust = 1, size =8),
         axis.text.x = element_blank(),
@@ -3837,12 +3851,8 @@ correlation_long_all_mouse_human_timepoints_summary_plot = correlation_summaries
                      limits = c(-0.1, 1)
                      ) +
   theme_vaxgo() +
-  scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
-                                "Mouse vs. Mouse" = "#4DBBD5FF",
-                                "Human vs. Human" = "#90A4AEFF")) +
-  scale_fill_manual(values = c("Human vs. Mouse" = "#4361ee",
-                                "Mouse vs. Mouse" = "#4DBBD5FF",
-                                "Human vs. Human" = "#90A4AEFF")) +
+  scale_color_manual(values = colors$comparison_versus) +
+  scale_fill_manual(values = colors$comparison_versus) +
   labs(
     # title = gene_set_name,
        x = "Time",
@@ -3934,12 +3944,8 @@ correlation_long_all_mouse_human_timepoints_summary_plot = correlation_summaries
                      limits = c(-0.1, 1)
                      ) +
   theme_vaxgo() +
-  scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
-                                "Mouse vs. Mouse" = "#4DBBD5FF",
-                                "Human vs. Human" = "#90A4AEFF")) +
-  scale_fill_manual(values = c("Human vs. Mouse" = "#4361ee",
-                                "Mouse vs. Mouse" = "#4DBBD5FF",
-                                "Human vs. Human" = "#90A4AEFF")) +
+  scale_color_manual(values = colors$comparison_versus) +
+  scale_fill_manual(values = colors$comparison_versus) +
   labs(
     # title = gene_set_name,
        x = "Time",
@@ -4005,7 +4011,7 @@ samples_annotation = readRDS(file = here("tables", "all_human_mouse_metadata.rds
 
 #Annotate genes by BTM 
 dge_btm_mean_process_samples = samples_log2fc %>% 
-  select(-timepoint) %>% 
+  select(-participant_id) %>% 
   inner_join(samples_annotation, by = "geo_sample") %>% 
   ungroup() %>% 
   select(symbol = human_symbol, participant_id, geo_sample, timepoint, log2fc, organism, pathogen, treatment) %>% 
@@ -4214,12 +4220,8 @@ correlation_long_all_btm_mouse_human_timepoints_summary_plot = correlation_long_
   scale_y_continuous(expand = c(0.01, 0.01),
                      limits = c(-0.25, 1)) +
   theme_vaxgo() +
-  scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
-                                "Mouse vs. Mouse" = "#4DBBD5FF",
-                                "Human vs. Human" = "#90A4AEFF")) +
-  scale_fill_manual(values = c("Human vs. Mouse" = "#4361ee",
-                                "Mouse vs. Mouse" = "#4DBBD5FF",
-                                "Human vs. Human" = "#90A4AEFF")) +
+  scale_color_manual(values = colors$comparison_versus) +
+  scale_fill_manual(values = colors$comparison_versus) +
   labs(
       # title = "Correlation between organisms,\nBTMs, Means",
        x = "Time",
@@ -4461,12 +4463,8 @@ correlation_long_all_btm_mouse_human_timepoints_summary_plot = correlation_long_
   scale_y_continuous(expand = c(0.01, 0.01),
                      limits = c(-0.2, 1)) +
   theme_vaxgo() +
-  scale_color_manual(values = c("Human vs. Mouse" = "#4361ee",
-                                "Mouse vs. Mouse" = "#4DBBD5FF",
-                                "Human vs. Human" = "#90A4AEFF")) +
-  scale_fill_manual(values = c("Human vs. Mouse" = "#4361ee",
-                                "Mouse vs. Mouse" = "#4DBBD5FF",
-                                "Human vs. Human" = "#90A4AEFF")) +
+  scale_color_manual(values = colors$comparison_versus) +
+  scale_fill_manual(values = colors$comparison_versus) +
   labs(
       # title = "Correlation between organisms,\nHallmarks, Means",
        x = "Time",
@@ -4719,12 +4717,29 @@ dge_btm_process_genes_wide %>%
   dplyr::count(pathogen, timepoint)
 
 
-safe_cor_test <- purrr::possibly(
-  ~cor.test(.x, .y),
-  otherwise = NULL
-)
+# safe_cor_test <- purrr::possibly(
+#   ~cor.test(.x, .y),
+#   otherwise = NULL
+# )
 
-
+safe_cor_test <- function(x, y, method) {
+  # Remove NAs and infinite values first
+  ok <- is.finite(x) & is.finite(y)
+  x <- x[ok]
+  y <- y[ok]
+  
+  # cor.test requires n >= 3 to run without error
+  if (length(x) < 3 || sd(x) == 0 || sd(y) == 0) {
+    return(list(estimate = NA_real_, p.value = NA_real_))
+  } else {
+    tryCatch({
+      ct <- cor.test(x, y, method = method)
+      return(list(estimate = unname(ct$estimate), p.value = ct$p.value))
+    }, error = function(e) {
+      return(list(estimate = NA_real_, p.value = NA_real_))
+    })
+  }
+}
 
 dge_btm_process_genes_correlation = dge_btm_process_genes_wide %>%
   group_by(pathogen, timepoint, process) %>%
@@ -4734,7 +4749,7 @@ dge_btm_process_genes_correlation = dge_btm_process_genes_wide %>%
     )),
     .groups = "drop",
     n_genes = n(),
-    group
+    # group
   ) %>%
 
   mutate(test_result = purrr::map(
@@ -5050,23 +5065,23 @@ Do these leading edges have the same log2fc?
 ```{r}
 #Do these leading edges have the same log2fc?
 
-process_selected = "antigen presentation (lipids and proteins)"
+process_selected = "immune activation - generic cluster"
 
 df_test =
   dge_btm_process_genes_wide %>% 
-  filter(str_detect(process, process_selected)) %>% 
+  filter(process == process_selected) %>% 
   
   # Join com os genes core
   full_join(
     gsea_btm_results_core_joined %>% 
-      filter(str_detect(process, process_selected)),
+      filter(process == process_selected),
     by = join_by("pathogen", "process", "timepoint", symbol == gene)
   ) %>% 
   
   # join com shared %
   inner_join(
     shared_perc %>% 
-      filter(str_detect(process, process_selected),
+    filter(process == process_selected,
              status == "Shared") %>%
       rename(percent = percent,
              status_percent = status),
@@ -5077,7 +5092,7 @@ df_test =
   inner_join(
     dge_btm_gsea_mean_wide %>% 
       ungroup() %>% 
-      filter(str_detect(process, process_selected)) %>% 
+      filter(process == process_selected) %>% 
       select(process, pathogen, timepoint, nes_Mouse, nes_Human),
     by = join_by("pathogen", "process", "timepoint")
   ) %>% 
@@ -5124,11 +5139,7 @@ df_test_scatter = df_test %>%
   geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
   geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
   geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
-  scale_fill_manual(values = c("Shared" = "#4361ee",
-    "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF",
-    "Not core" = "white"
-  )) +
+  scale_fill_manual(values = colors$comparison) +
   labs(fill = "Core",
        x = "Mouse (Log2FC)",
        y = "Human (Log2FC)") +
@@ -5185,16 +5196,8 @@ df_test_log2fc = df_test %>%
   geom_point(size = 1.5, alpha = 1, pch = "l", data = . %>% filter(status != "Not core")) +
   theme_vaxgo() +
   geom_hline(yintercept = 0, alpha = 1, linetype = 2, size = 1, color = "black") +
-  scale_fill_manual(values = c("Shared" = "#4361ee",
-    "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF",
-    "Not core" = "gray80"
-  )) +
-  scale_color_manual(values = c("Shared" = "#4361ee",
-    "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF",
-    "Not core" = "gray80"
-  )) +
+  scale_fill_manual(values = colors$comparison) +
+  scale_color_manual(values = ccolors$comparison) +
   labs(fill = "Core",
        color = "Core",
        y = "Log2fc",
@@ -5247,7 +5250,7 @@ df_test_ranked <- df_test %>%
     )
 
 df_test_ranked_plot = df_test_ranked %>% 
-  filter(pathogen == "Saureus") %>% 
+  # filter(pathogen == "Saureus") %>% 
   ggplot() +
   aes(x = organism,
       y = rank,
@@ -5264,16 +5267,8 @@ df_test_ranked_plot = df_test_ranked %>%
   geom_point(size = 3, alpha = 0.5, pch = "l", data = . %>% filter(status == "Not core")) +
   geom_point(size = 3, alpha = 1, pch = "l", data = . %>% filter(status != "Not core")) +
   theme_vaxgo() +
-  scale_fill_manual(values = c("Shared" = "#4361ee",
-    "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF",
-    "Not core" = "gray80"
-  )) +
-  scale_color_manual(values = c("Shared" = "#4361ee",
-    "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF",
-    "Not core" = "gray80"
-  )) +
+  scale_fill_manual(values = colors$comparison) +
+  scale_color_manual(values = colors$comparison) +
   labs(fill = "Core",
        color = "Core",
        y = "Rank",
@@ -5294,44 +5289,46 @@ df_test_ranked_plot = df_test_ranked %>%
            ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
           ) 
 
-df_test_ranked_plot +
-  geom_text_repel(
-    data = df_test_ranked %>%
-      filter(pathogen == "Saureus") %>%
-      filter(status == "Shared") %>%
-      group_by(pathogen, process, timepoint) %>%
-      arrange(rank, .by_group = TRUE) %>%
-  filter(
-    (nes_Mouse > 0 & row_number() <= 5) |           
-    (nes_Mouse < 0 & row_number() > (n() - 5))     
-  ) %>%
-  ungroup(),
-    aes(label = symbol,
-        x = "M"),
-    size = 3,
-    color = "black",
-    direction = "y",
-    hjust = 0,
-  max.iter = 1e4, max.time = 1, 
-    nudge_x = 0.1,             
-    # segment.size = .7,
-    # segment.alpha = .5,
-  force        = 0.5,
-    segment.linetype = "solid",
-    box.padding = .4,
-  point.padding = 0.2,
-  segment.square    = T,
-    segment.inflect   = TRUE
-    # segment.curvature = -1,
-    # segment.ncp = 3,
-    # segment.angle = 20      
-  ) +
-  coord_cartesian(clip = "off")
+# df_test_ranked_plot +
+#   geom_text_repel(
+#     data = df_test_ranked %>%
+#       # filter(pathogen == "Saureus") %>%
+#       filter(status == "Shared") %>%
+#       group_by(pathogen, process, timepoint) %>%
+#       arrange(rank, .by_group = TRUE) %>%
+#   filter(
+#     (nes_Mouse > 0 & row_number() <= 5) |           
+#     (nes_Mouse < 0 & row_number() > (n() - 5))     
+#   ) %>%
+#   ungroup(),
+#     aes(label = symbol,
+#         x = "M"),
+#     size = 3,
+#     color = "black",
+#     direction = "y",
+#     hjust = 0,
+#   max.iter = 1e4, max.time = 1, 
+#     nudge_x = 0.1,             
+#     # segment.size = .7,
+#     # segment.alpha = .5,
+#   force        = 0.5,
+#     segment.linetype = "solid",
+#     box.padding = .4,
+#   point.padding = 0.2,
+#   segment.square    = T,
+#     segment.inflect   = TRUE
+#     # segment.curvature = -1,
+#     # segment.ncp = 3,
+#     # segment.angle = 20      
+#   ) +
+#   coord_cartesian(clip = "off")
 
-# df_test_ranked_plot %>% 
-# ggsave(filename = here("Figures", paste0("all_human_mouse_gsea_btm_results_leadingedge_core_ranks_lineplot.png", process_selected)),
-#          width = 20,
-#          height = 4)
+df_test_ranked_plot %>%
+ggsave(filename = here("Figures", paste0("all_human_mouse_gsea_btm_results_leadingedge_core_ranks_lineplot_", process_selected, ".png")),
+         width = 20,
+         height = 6)
+
+df_test_ranked_plot
 ```
 
 
@@ -6675,11 +6672,7 @@ df_test_scatter = df_test %>%
   geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
   geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
   geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
-  scale_fill_manual(values = c("Shared" = "#4361ee",
-    "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF",
-    "Not core" = "white"
-  )) +
+  scale_fill_manual(values = colors$comparison) +
   labs(fill = "Core",
        x = "Mouse (Log2FC)",
        y = "Human (Log2FC)") +
@@ -6731,16 +6724,8 @@ df_test_log2fc = df_test %>%
   geom_point(size = 1.5, alpha = 1, pch = "l", data = . %>% filter(status != "Not core")) +
   theme_vaxgo() +
   geom_hline(yintercept = 0, alpha = 1, linetype = 2, size = 1, color = "black") +
-  scale_fill_manual(values = c("Shared" = "#4361ee",
-    "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF",
-    "Not core" = "gray80"
-  )) +
-  scale_color_manual(values = c("Shared" = "#4361ee",
-    "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF",
-    "Not core" = "gray80"
-  )) +
+  scale_fill_manual(values = colors$comparison) +
+  scale_color_manual(values = colors$comparison) +
   labs(fill = "Core",
        color = "Core",
        y = "Log2fc",
@@ -6805,16 +6790,8 @@ df_test_ranked_plot = df_test_ranked %>%
   geom_point(size = 3, alpha = 0.5, pch = "l", data = . %>% filter(status == "Not core")) +
   geom_point(size = 3, alpha = 1, pch = "l", data = . %>% filter(status != "Not core")) +
   theme_vaxgo() +
-  scale_fill_manual(values = c("Shared" = "#4361ee",
-    "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF",
-    "Not core" = "gray80"
-  )) +
-  scale_color_manual(values = c("Shared" = "#4361ee",
-    "Mouse only" = "#4DBBD5FF",
-    "Human only" = "#90A4AEFF",
-    "Not core" = "gray80"
-  )) +
+  scale_fill_manual(values = colors$comparison) +
+  scale_color_manual(values = colors$comparison) +
   labs(fill = "Core",
        color = "Core",
        y = "Rank",
@@ -7638,16 +7615,8 @@ fit_example_human_plot_mouse =
              color = "black",
              pch = 21) +
   scale_x_continuous(breaks = c(1, 3, 7),minor_breaks = F) +
-    scale_color_manual(
-  values = c(
-    "FIT" = "#4361ee", 
-    Mouse = "#4DBBD5FF",
-    Human = "#546E7AFF"))+
-  scale_fill_manual(
-  values = c(
-    "FIT" = "#4361ee", 
-    Mouse = "#4DBBD5FF",
-    Human = "#546E7AFF"))+
+  scale_color_manual(values = colors$organism)+
+  scale_fill_manual(values = colors$organism)+
     theme_vaxgo() +
   theme(axis.text.x = element_text(angle = 0),
         strip.text.x = element_text(color = "black"),
@@ -7684,16 +7653,8 @@ fit_example_human_plot_fit=
              color = "black",
              pch = 21) +
   scale_x_continuous(breaks = c(1, 3, 7),minor_breaks = F) +
-    scale_color_manual(
-  values = c(
-    "FIT" = "#4361ee", 
-    Mouse = "#4DBBD5FF",
-    Human = "#546E7AFF"))+
-  scale_fill_manual(
-  values = c(
-    "FIT" = "#4361ee", 
-    Mouse = "#4DBBD5FF",
-    Human = "#546E7AFF"))+
+    scale_color_manual(values = colors$organism)+
+  scale_fill_manual(values = colors$organism)+
     theme_vaxgo() +
   theme(axis.text.x = element_text(angle = 0),
         strip.text.x = element_text(color = "black"),
