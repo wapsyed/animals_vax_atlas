@@ -4908,6 +4908,10 @@ gsea_btm_results_core_joined =
 
 gsea_btm_results_core_joined %>% 
   dplyr::count(pathogen, timepoint)
+
+#Save table
+gsea_btm_results_core_joined %>% 
+  saveRDS(file = here("tables", "all_human_mouse_gsea_btm_results_core_joined.rds"))
 ```
 
 
@@ -5404,6 +5408,103 @@ leading_edges_plots_short %>%
 
 
 ```
+
+
+
+
+######Alignment
+
+```{r}
+gsea_btm_results_core_joined =
+  readRDS(file = here("tables", "all_human_mouse_gsea_btm_results_core_joined.rds"))
+
+genes_to_align = gsea_btm_results_core_joined %>% 
+  filter(status == "Shared") %>% 
+  filter(timepoint == "12h",
+         pathogen == "Saureus",
+         process == "T cell activation (I)") 
+
+genes_to_align
+
+library(biomaRt)
+library(msa)
+library(tidyverse)
+library(Biostrings)
+
+# 1. Get marts
+human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+mouse_mart <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+
+# Sua lista de genes (exemplo)
+gene_list <- genes_to_align$gene %>% unique() 
+
+# --- 2. Retrieve Sequences ---
+get_sequences <- function(genes, mart, symbol_attr) {
+  getBM(
+    attributes = c(symbol_attr, "cdna", "transcript_length"), 
+    filters = symbol_attr,
+    values = genes,
+    mart = mart
+  )
+}
+
+seq_human <- get_sequences(gene_list, human_mart, "hgnc_symbol")  %>% 
+  #Get longest sequences
+  group_by(hgnc_symbol) %>% 
+  slice_max(transcript_length, n = 1)
+
+seq_mouse <- get_sequences(gene_list, mouse_mart, "mgi_symbol") %>% 
+  #Get longest sequences
+  group_by(mgi_symbol) %>% 
+  slice_max(transcript_length, n = 1) %>% 
+  mutate(mgi_symbol = str_to_upper(mgi_symbol))
+```
+
+
+```{r}
+# --- 3. Run Pairwise Alignment Loop ---
+# Store results in a list
+alignment_results <- list()
+
+for (gene in gene_list) {
+  
+  # Extract sequences
+  h_seq <- seq_human %>% filter(hgnc_symbol == gene) %>% pull(cdna)
+  m_seq <- seq_mouse %>% filter(mgi_symbol == gene) %>% pull(cdna)
+  
+  # Only align if sequence exists in both species
+  if (length(h_seq) > 0 && length(m_seq) > 0) {
+    
+    # Create DNAStringSet object
+    sequences_to_align <- DNAStringSet(c(h_seq, m_seq))
+    names(sequences_to_align) <- c(paste0(gene, "_Human"), paste0(gene, "_Mouse"))
+    
+    # Perform alignment using MUSCLE (or "ClustalW", "ClustalOmega", "Mafft")
+    # MAFFT is recommended for high accuracy in evolutionary conservation
+    curr_alignment <- msa(sequences_to_align, method = "Muscle")
+    
+    # Save to list
+    alignment_results[[gene]] <- curr_alignment
+    
+    cat("Successfully aligned:", gene, "\n")
+  } else {
+    cat("Missing sequence for:", gene, "\n")
+  }
+}
+
+# --- 4. Export or Visualize ---
+# View a specific alignment (e.g., the first gene)
+print(alignment_results[[1]], show = "alignment")
+
+# Calculate Identity Matrix (useful feature for your ML models)
+# Requires 'seqinr' package
+# library(seqinr)
+# alignment_conv <- msaConvert(alignment_results[[1]], type="seqinr::alignment")
+# dist_matrix <- dist.alignment(alignment_conv, "identity")
+# print(dist_matrix)
+```
+
+
 
 
 ###### Module-level, BTMs
