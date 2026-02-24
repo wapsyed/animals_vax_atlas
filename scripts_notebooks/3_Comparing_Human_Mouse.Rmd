@@ -5415,39 +5415,36 @@ leading_edges_plots_short %>%
 ######Alignment
 
 ```{r}
+#Import
 gsea_btm_results_core_joined =
   readRDS(file = here("tables", "all_human_mouse_gsea_btm_results_core_joined.rds"))
+#Inputs
+filename = "all_human_mouse"
+gene_set = "btms"
+select_status = "All"
+# select_status = "Shared"
+# select_status = "Mouse only"
+# select_status = "Human only"
+```
 
-genes_to_align = gsea_btm_results_core_joined %>% 
-  filter(status == "Shared") %>% 
-  filter(timepoint == "12h",
-         pathogen == "Saureus",
-         process == "T cell activation (I)") 
+
+```{r}
+#Filter
+genes_to_align = gsea_btm_results_core_joined 
+  # filter(status == select_status) 
+  # filter(timepoint == "12h",
+  #        pathogen == "Saureus",
+  #        process == "T cell activation (I)") 
 
 genes_to_align
-
-library(biomaRt)
-library(msa)
-library(tidyverse)
-library(Biostrings)
 
 # 1. Get marts
 human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 mouse_mart <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
 
-# Sua lista de genes (exemplo)
-gene_list <- genes_to_align$gene %>% unique() 
+gene_list <- genes_to_align$gene %>% unique()
 
-# --- 2. Retrieve Sequences ---
-get_sequences <- function(genes, mart, symbol_attr) {
-  getBM(
-    attributes = c(symbol_attr, "cdna", "transcript_length"), 
-    filters = symbol_attr,
-    values = genes,
-    mart = mart
-  )
-}
-
+#Get sequences
 seq_human <- get_sequences(gene_list, human_mart, "hgnc_symbol")  %>% 
   #Get longest sequences
   group_by(hgnc_symbol) %>% 
@@ -5458,10 +5455,7 @@ seq_mouse <- get_sequences(gene_list, mouse_mart, "mgi_symbol") %>%
   group_by(mgi_symbol) %>% 
   slice_max(transcript_length, n = 1) %>% 
   mutate(mgi_symbol = str_to_upper(mgi_symbol))
-```
 
-
-```{r}
 # --- 3. Run Pairwise Alignment Loop ---
 # Store results in a list
 alignment_results <- list()
@@ -5481,7 +5475,7 @@ for (gene in gene_list) {
     
     # Perform alignment using MUSCLE (or "ClustalW", "ClustalOmega", "Mafft")
     # MAFFT is recommended for high accuracy in evolutionary conservation
-    curr_alignment <- msa(sequences_to_align, method = "Muscle")
+    curr_alignment <- msa(sequences_to_align, method = "ClustalOmega")
     
     # Save to list
     alignment_results[[gene]] <- curr_alignment
@@ -5496,12 +5490,46 @@ for (gene in gene_list) {
 # View a specific alignment (e.g., the first gene)
 print(alignment_results[[1]], show = "alignment")
 
-# Calculate Identity Matrix (useful feature for your ML models)
-# Requires 'seqinr' package
-# library(seqinr)
-# alignment_conv <- msaConvert(alignment_results[[1]], type="seqinr::alignment")
-# dist_matrix <- dist.alignment(alignment_conv, "identity")
-# print(dist_matrix)
+# --- 1. Create a container for the results ---
+identity_summary <- data.frame(
+  gene = names(alignment_results),
+  identity_score = NA,
+  stringsAsFactors = FALSE
+)
+
+# --- 2. Loop through each alignment to calculate identity ---
+for (i in seq_along(alignment_results)) {
+  gene_name <- names(alignment_results)[i]
+  aln <- alignment_results[[i]]
+  
+  # Convert MSA object to seqinr format
+  # Note: msaConvert works on individual alignment objects
+  aln_seqinr <- msaConvert(aln, type = "seqinr::alignment")
+  
+  # Calculate distance matrix (method "identity")
+  # This returns a distance 'd'. Identity = 1 - d^2
+  dist_obj <- dist.alignment(aln_seqinr, matrix = "identity")
+  
+  # Extract the distance value and convert to identity percentage
+  # Since we only have 2 sequences, the matrix has only one value
+  dist_val <- as.numeric(dist_obj)
+  identity_val <- (1 - dist_val^2) * 100
+  
+  # Store in the summary table
+  identity_summary$identity_score[i] <- round(identity_val, 2)
+} 
+
+# --- 3. View the results ---
+identity_summary_final = identity_summary %>% 
+  arrange(-identity_score) %>% 
+  mutate(status = select_status)
+
+identity_summary_final
+
+identity_summary_final %>% 
+  saveRDS(here("tables", paste0(filename,"_", gene_set, "_gsea_LEGs_alignment_", select_status, ".rds")))
+
+
 ```
 
 

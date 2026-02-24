@@ -10,7 +10,7 @@ cran_packages = c(
   # "paletteer", 
   # "beepr", 
   # "preprocessCore", 
-  "maditr", 
+  "maditr", "ggmsa",
   "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
   "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp", "corto", "Hmisc",
@@ -44,7 +44,7 @@ cran_packages = c(
 # Install packages from Bioconductor
 
 bioc_pkgs = c(
-  "pvca", "msa", "Biostrings"
+  "pvca", "msa", "Biostrings",
   "biomaRt", "GEOquery", "circlize", "celldex", 
   "org.Hs.eg.db", "DESeq2", "msigdbr", 
   "ape", "variancePartition", 
@@ -55,7 +55,7 @@ bioc_pkgs = c(
 
 # install.packages("BiocManager")
 # BiocManager::install(c(
-#   "pvca",
+#   "pvca", "seqinr",
 #   "biomaRt", "GEOquery", "circlize", "celldex", 
 #   "org.Hs.eg.db", "DESeq2", "msigdbr", 
 #   "ape", "variancePartition", 
@@ -66,11 +66,13 @@ bioc_pkgs = c(
 
 # install_github("RRHO2/RRHO2", build_opts = c("--no-resave-data", "--no-manual"))
 # library(RRHO2)
+# devtools::install_github("YuLab-SMU/ggmsa")
+library(ggmsa)
 
 # install_github()
 
 #Load all faster
-lapply(c(cran_packages, bioc_pkgs, "RRHO2"), library, character.only = TRUE)
+lapply(c(cran_packages, bioc_pkgs, "RRHO2", "ggmsa"), library, character.only = TRUE)
 
 
 
@@ -380,6 +382,16 @@ safe_cor_test <- function(x, y, method) {
   }
 }
 
+
+# Function to retrieve sequences
+get_sequences <- function(genes, mart, symbol_attr) {
+  getBM(
+    attributes = c(symbol_attr, "cdna", "transcript_length"), 
+    filters = symbol_attr,
+    values = genes,
+    mart = mart
+  )
+}
 
 
 #Colors --------
