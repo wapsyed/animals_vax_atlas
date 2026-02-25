@@ -5436,10 +5436,7 @@ select_status = "All"
 # select_status = "Shared"
 # select_status = "Mouse only"
 # select_status = "Human only"
-```
 
-
-```{r}
 # #Filter
 # genes_to_align = gsea_btm_results_core_joined 
 #   # filter(status == select_status) 
@@ -5548,7 +5545,8 @@ select_status = "All"
 #http://www.ensembl.org/biomart/martview/cdbaeb7d08ea2dbc5bae9a1b0d6ad871?VIRTUALSCHEMANAME=default&ATTRIBUTES=hsapiens_gene_ensembl.default.homologs.ensembl_gene_id|hsapiens_gene_ensembl.default.homologs.ensembl_gene_id_version|hsapiens_gene_ensembl.default.homologs.ensembl_transcript_id|hsapiens_gene_ensembl.default.homologs.ensembl_transcript_id_version|hsapiens_gene_ensembl.default.homologs.mmusculus_homolog_perc_id_r1|hsapiens_gene_ensembl.default.homologs.mmusculus_homolog_perc_id|hsapiens_gene_ensembl.default.homologs.mmusculus_homolog_associated_gene_name|hsapiens_gene_ensembl.default.homologs.mmusculus_homolog_orthology_type|hsapiens_gene_ensembl.default.homologs.mmusculus_homolog_canonical_transcript_protein|hsapiens_gene_ensembl.default.homologs.mmusculus_homolog_ensembl_gene&FILTERS=&VISIBLEPANEL=attributepanel
 #Import
 gsea_btm_results_core_joined =
-  readRDS(file = here("tables", "all_human_mouse_gsea_btm_results_core_joined.rds"))
+  readRDS(file = here("tables", "all_human_mouse_gsea_btm_results_core_joined.rds")) %>% 
+  distinct()
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
 all_alignments = read_csv(here("tables","human_to_mouse_alignment_mart_export.txt"))
 
@@ -5560,21 +5558,26 @@ alignments_human2mouse = all_alignments %>%
          identity_human2mouse = percent_id_query_gene_identical_to_target_mouse_gene,
          identity_mouse2human = percent_id_target_mouse_gene_identical_to_query_gene) %>% 
   mutate(gene = str_to_upper(gene)) %>% 
+  #Filter genes with multiple identity scores
+  group_by(gene) %>% 
+  summarise(identity_human2mouse = median(identity_human2mouse)) %>% 
+  ungroup() %>% 
+  #Append BTM processes
   inner_join(gsea_btm_results_core_joined,
-             by = join_by(gene)) %>% 
-  inner_join(btm_annotation_genes %>% 
-               select(process, group) %>% 
-               distinct(),
-             by = "process")
+             by = join_by(gene)) 
 
 alignments_human2mouse_all = all_alignments %>% 
-    clean_names() %>% 
+  clean_names() %>% 
   filter(mouse_orthology_confidence_0_low_1_high == 1) %>% 
   drop_na(mouse_gene_name) %>%
   select(gene = mouse_gene_name, mouse_homology_type,
          identity_human2mouse = percent_id_query_gene_identical_to_target_mouse_gene,
          identity_mouse2human = percent_id_target_mouse_gene_identical_to_query_gene) %>% 
-  mutate(gene = str_to_upper(gene))
+  mutate(gene = str_to_upper(gene)) %>% 
+#Filter genes with multiple identity scores
+  group_by(gene) %>% 
+  summarise(identity_human2mouse = median(identity_human2mouse)) %>% 
+  ungroup() 
 
 ```
 
@@ -5760,7 +5763,9 @@ btms_identity_bygroup_byprocess_patch = (alignments_human2mouse_pointrange_proce
               axes = "collect", 
               axis_titles = "collect") +
   plot_annotation(theme = theme(legend.position = "top"))
+
 btms_identity_bygroup_byprocess_patch
+
 btms_identity_bygroup_byprocess_patch %>% 
   ggsave(file = here("Figures", "all_human_mouse_gsea_LEGs_alignment_btms_human2mouse_boxplots_processes_group.png"),
          width = 12,
@@ -5771,26 +5776,44 @@ btms_identity_bygroup_byprocess_patch %>%
 
 
 
-```{r fig.height=12, fig.width=6}
+```{r fig.height=5, fig.width=6}
 #Line plot, All, Global
 alignments_human2mouse_all_global_df = alignments_human2mouse %>% 
+  select(gene:pathogen, timepoint, status) %>% 
+  distinct() %>% 
   # filter(!pathogen %in% c("Influenza", "Hepatitis B")) %>% 
   bind_rows(
             alignments_human2mouse %>% 
+              select(gene:pathogen, timepoint, status) %>% 
+              distinct() %>% 
               # filter(!pathogen %in% c("Influenza", "Hepatitis B")) %>% 
               mutate(status = "BTMs") %>% 
-              select(status, identity_human2mouse) %>% 
+              select(gene, status, identity_human2mouse) %>% 
               distinct(),
             alignments_human2mouse_all %>% 
+              distinct() %>% 
               mutate(status = "All") %>% 
-              select(status, identity_human2mouse) %>% 
+              select(gene, status, identity_human2mouse) %>% 
               distinct()
             ) %>% 
-  mutate(status = fct_relevel(status, "Human only", "Mouse only", "Shared", "BTMs", "All"))
+  mutate(status = fct_relevel(status, "Human only", "Mouse only", "Shared", "BTMs", "All")) 
 
-#Histogram and violin  
-alignments_human2mouse_pointrange_all_global = alignments_human2mouse_all_global_df %>% 
-  mutate(analysis = "Mean Conservation") %>% 
+alignments_human2mouse_all_global_df_nshared = alignments_human2mouse_all_global_df %>% 
+  group_by(status, gene) %>% 
+  dplyr::summarize(n = n()) %>% 
+  ungroup() %>% 
+  inner_join(alignments_human2mouse_all_global_df %>% 
+               select(gene, identity_human2mouse) %>% 
+               distinct(),
+             by = "gene")
+
+alignments_human2mouse_all_global_df_filtered = alignments_human2mouse_all_global_df %>% 
+  select(gene, status, identity_human2mouse) %>% 
+  distinct()
+
+#Histogram and violin
+alignments_human2mouse_pointrange_all_global = alignments_human2mouse_all_global_df_filtered %>%
+  mutate(analysis = "Mean Conservation") %>%
   ggplot() +
   aes(x = status,
       y = identity_human2mouse,
@@ -5804,13 +5827,20 @@ alignments_human2mouse_pointrange_all_global = alignments_human2mouse_all_global
                fatten = 2,
                stroke = 0.5,
                pch = 21,
-               mapping = aes(color = status), 
+               mapping = aes(color = status),
                position = position_dodge2(0)
                )+
-  scale_fill_manual(values = c(colors$comparison, 
+  stat_summary(fun.data = "mean_cl_boot", 
+               geom = "text", 
+               aes(label = after_stat(round(y, 1))), 
+               hjust = -0.2, 
+               size = 3,
+               color = "black"
+  ) +
+  scale_fill_manual(values = c(colors$comparison,
                                "BTMs" = "#4361ee",
                                "All" = "white")) +
-  scale_color_manual(values = c(colors$comparison, 
+  scale_color_manual(values = c(colors$comparison,
                                "BTMs" = "#4361ee",
                                "All" = "black")) +
   scale_x_discrete(expand = c(0.05, 0.05)) +
@@ -5836,10 +5866,15 @@ alignments_human2mouse_pointrange_all_global = alignments_human2mouse_all_global
        y = "%Identity (Human-to-Mouse)",
        color = "",
        fill = "")
-  
-#Histogram and violin  
-alignments_human2mouse_histogram_all_global = alignments_human2mouse_all_global_df %>% 
-  mutate(analysis = "Distribution of conservation") %>% 
+
+alignments_human2mouse_pointrange_all_global
+```
+
+
+```{r fig.height=12, fig.width=6}
+#Histogram and violin
+alignments_human2mouse_histogram_all_global = alignments_human2mouse_all_global_df_filtered %>%
+  mutate(analysis = "Distribution of conservation") %>%
   ggplot() +
   aes(x = status,
       y = identity_human2mouse,
@@ -5847,23 +5882,46 @@ alignments_human2mouse_histogram_all_global = alignments_human2mouse_all_global_
       color = status,
       group = status) +
   facet_wrap(~analysis) +
-  geom_violin(color = "black") +
+  geom_violin(color = "black",
+              alpha = 0.7) +
   geom_boxplot(
               # color = "white",
                mapping = aes(color = status),
                width = 0.1,
-               fill = NA, 
+               fill = NA,
                outliers = F) +
-  scale_fill_manual(values = c(colors$comparison, 
+  #Get top and bottom genes
+  geom_point(data = bind_rows(alignments_human2mouse_all_global_df_filtered %>%
+                                group_by(status) %>%
+                                slice_max(identity_human2mouse, n = 10),
+                              alignments_human2mouse_all_global_df_filtered %>%
+                                group_by(status) %>%
+                                slice_min(identity_human2mouse, n = 10)),
+             color = "black",
+             pch = 21,
+             fill = "white"
+                              ) +
+  stat_summary(
+    fun = median, 
+    geom = "label", 
+    aes(label = after_stat(round(y, 1))),
+    size = 3,
+    hjust = -0.5,   
+    color = "black",
+    fill = "white",
+  ) +
+  scale_fill_manual(values = c(colors$comparison,
                                "BTMs" = "#4361ee",
                                "All" = "white")) +
   scale_color_manual(values = c("Mouse only" = "white",
                              "Human only" = "white",
-                             "Shared" = "white", 
+                             "Shared" = "white",
                                "BTMs" = "white",
                              "All" = "black")) +
   scale_x_discrete(expand = c(0.05, 0.05)) +
-  scale_y_continuous(expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01), 
+                     limits = c(50, 105)
+                     ) +
   theme_vaxgo() +
     theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 10),
           axis.text.y = element_text(size = 10),
@@ -5882,8 +5940,38 @@ alignments_human2mouse_histogram_all_global = alignments_human2mouse_all_global_
   labs(x = "Status",
        y = "%Identity (Human-to-Mouse)",
        color = "",
-       fill = "")
+       fill = "") +
+  geom_label_repel(aes(label = gene), 
+                  max.overlaps = 10000,
+                  size = 3, 
+                  direction = c("y"),
+                  nudge_x = 0.2,
+                  hjust = 0,
+                  color = "black",
+                  fill = "white", 
+                  box.padding = unit(0, "cm"), 
+                  label.padding = unit(0.1, "cm"), 
+                  data = bind_rows(
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      group_by(status) %>%
+                      arrange(-identity_human2mouse, -n) %>%
+                      slice_head(n = 5),
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(n > 3) %>% 
+                      arrange(identity_human2mouse) %>% 
+                      group_by(status) %>% 
+                      slice_min(identity_human2mouse, n = 5) ,
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(status == "BTMs") %>%
+                      slice_min(identity_human2mouse, n = 5),
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(status == "All") %>%
+                      slice_min(identity_human2mouse, n = 5) 
+                  )
+  )
 
+alignments_human2mouse_histogram_all_global 
+  
 alignments_human2mouse_pointrange_histogram = (alignments_human2mouse_pointrange_all_global /
 alignments_human2mouse_histogram_all_global) +
   plot_layout(heights = c(0.25, 0.75),
@@ -5891,16 +5979,12 @@ alignments_human2mouse_histogram_all_global) +
               # axes = "collect",
               axis_titles = "collect"
               )
+alignments_human2mouse_pointrange_histogram
 
-alignments_human2mouse_pointrange_all_global
-alignments_human2mouse_histogram_all_global
-
-# alignments_human2mouse_pointrange_histogram
-
-# alignments_human2mouse_pointrange_histogram %>%
-# ggsave(filename = here("Figures", "all_human_mouse_gsea_LEGs_alignment_btms_human2mouse_violinplot_all_global.png"),
-#          width = 6,
-#          height = 12)
+alignments_human2mouse_pointrange_histogram %>%
+ggsave(filename = here("Figures", "all_human_mouse_gsea_LEGs_alignment_btms_human2mouse_violinplot_all_global.png"),
+         width = 6,
+         height = 12)
 ```
 
 
