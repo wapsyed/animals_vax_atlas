@@ -5540,88 +5540,7 @@ select_status = "All"
 
 ```
 
-Get local identity
 
-```{r}
-library(biomaRt)
-library(tidyverse)
-
-# 1. Setup biomaRt (Human as reference)
-human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-
-# Your list of shared genes (placeholder)
-shared_genes <- c("HEMGN", "IFNG", "CD3E", "STAT1", "TNF") 
-
-# 2. Retrieve Pfam domains, GO terms, and Identity
-# We include homology identity to correlate directly
-shared_info_domains <- getBM(
-  attributes = c(
-    "hgnc_symbol",
-    "pfam",
-    "pfam_start",
-    "pfam_end",
-    "name_1006",             # GO Term Name
-    "definition_1006",
-    "interpro_description"
-  ),
-  filters = "hgnc_symbol",
-  values = shared_genes,
-  mart = human_mart
-)
-
-shared_info_identity <- getBM(
-  attributes = c("external_gene_name", 
-                 "mmusculus_homolog_perc_id_r1"),
-  filters = "hgnc_symbol",
-  values = shared_genes,
-  mart = human_mart
-) %>% 
-  rename(hgnc_symbol = external_gene_name,
-         identity = mmusculus_homolog_perc_id_r1)
-
-# 3. Join the tables
-shared_info <- left_join(shared_info_identity, shared_info, by = "hgnc_symbol")
-
-# biomaRt::listAttributes(human_mart) %>% 
-#   View()
-
-# 3. Aggregate by Pfam Domain
-pfam_analysis <- shared_info %>%
-  filter(pfam != "") %>% # Remove empty entries
-  group_by(pfam, interpro_description) %>%
-  summarise(
-    Mean_Identity = mean(identity, na.rm = TRUE),
-    Gene_Count = n_distinct(hgnc_symbol),
-    Genes = paste(unique(hgnc_symbol), collapse = ", ")
-  ) %>%
-  arrange(desc(Mean_Identity))
-
-# 4. Find Top (Highest identity) and Bottom (Lowest identity) Domains
-top_conserved_domains <- head(pfam_analysis, 10)
-low_conserved_domains <- tail(pfam_analysis, 10)
-
-print("Top 10 Most Conserved Pfam Domains:")
-print(top_conserved_domains)
-
-print("Top 10 Least Conserved Pfam Domains:")
-print(low_conserved_domains)
-
-# Visualizing top and bottom domains
-bind_rows(
-  top_conserved_domains %>% mutate(Category = "High Conservation"),
-  low_conserved_domains %>% mutate(Category = "Low Conservation")
-) %>%
-  ggplot(aes(x = reorder(interpro_description, Mean_Identity), y = Mean_Identity, fill = Category)) +
-  geom_col() +
-  coord_flip() +
-  labs(
-    title = "Conservation by Functional Domain (Pfam)",
-    x = "Pfam Description",
-    y = "Mean Identity (Human-to-Mouse) %"
-  ) +
-  theme_minimal() +
-  scale_fill_manual(values = c("High Conservation" = "#d7191c", "Low Conservation" = "#2b83ba"))
-```
 
 
 
@@ -6076,6 +5995,18 @@ ggsave(filename = here("Figures", "all_human_mouse_gsea_LEGs_alignment_btms_huma
 ```
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 Line plot, All, by pathogen
 ```{r fig.height=3, fig.width=12}
 #Line plot, All, by pathogen
@@ -6208,6 +6139,214 @@ alignments_human2mouse_lineplot_all %>%
          height = 12)
 
 ```
+
+
+
+
+####### Align most conserved genes
+Get local identity
+
+```{r}
+library(biomaRt)
+library(tidyverse)
+
+shared_genes = bind_rows(alignments_human2mouse_all_global_df_nshared %>%
+                      group_by(status) %>%
+                      arrange(-identity_human2mouse, -n) %>%
+                      slice_head(n = 5),
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(n > 3) %>% 
+                      arrange(identity_human2mouse) %>% 
+                      group_by(status) %>% 
+                      slice_min(identity_human2mouse, n = 5) ,
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(status == "BTMs") %>%
+                      slice_min(identity_human2mouse, n = 5),
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(status == "All") %>%
+                      slice_min(identity_human2mouse, n = 5)) %>% 
+  pull(gene) %>% 
+  unique()
+
+# 1. Setup biomaRt
+human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+mouse_mart <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+
+
+# Your list of shared genes (placeholder)
+shared_genes <- c("TNF") 
+
+# 2. Retrieve Pfam domains, GO terms, and Identity
+# We include homology identity to correlate directly
+domains_human <- getBM(
+  attributes = c(
+    "hgnc_symbol",
+    "pfam",
+    "pfam_start",
+    "pfam_end",
+    "peptide",
+    # "name_1006",             # GO Term Name
+    # "definition_1006",
+    "interpro_description"
+  ),
+  filters = "hgnc_symbol",
+  values = shared_genes,
+  mart = human_mart
+)
+
+identity_human <- getBM(
+  attributes = c("external_gene_name", 
+                 "mmusculus_homolog_perc_id_r1",
+                 "mmusculus_homolog_goc_score",
+                 "mmusculus_homolog_orthology_confidence"),
+  filters = "hgnc_symbol",
+  values = shared_genes,
+  mart = human_mart
+) %>% 
+  rename(hgnc_symbol = external_gene_name,
+         identity = mmusculus_homolog_perc_id_r1)
+
+# 3. Join the tables
+domains_identitygene_human <- left_join(identity_human, 
+                                        domains_human, by = "hgnc_symbol") %>% 
+  drop_na(identity)
+
+
+#Mouse
+domains_mouse <- getBM(
+  attributes = c("mgi_symbol", "pfam", "pfam_start", "pfam_end", "peptide", "interpro_description"),
+  filters = "mgi_symbol",
+  values = shared_genes, 
+  mart = mouse_mart
+) %>% 
+  mutate(hgnc_symbol = str_to_upper(mgi_symbol))
+
+```
+
+
+```{r}
+library(msa)
+library(seqinr)
+library(tidyverse)
+
+local_results <- list()
+
+# Identificando combinações únicas de Gene e Pfam na sua tabela de entrada
+# Removemos linhas sem Pfam ou sem sequência (peptide)
+unique_domains <- domains_identitygene_human %>% 
+  filter(pfam != "", !is.na(peptide)) %>% 
+  distinct(hgnc_symbol, pfam)
+
+for (i in 1:nrow(unique_domains)) {
+  current_gene <- unique_domains$hgnc_symbol[i]
+  p <- unique_domains$pfam[i]
+  
+  # 1. Match com dados do camundongo (domains_mouse)
+  # Filtramos pelo gene e pelo domínio específico
+  mouse_match <- domains_mouse %>% 
+    filter(hgnc_symbol == current_gene, pfam == p, !is.na(peptide))
+  
+  if (nrow(mouse_match) == 0) next
+  
+  # 2. Extrair subsets (slice 1 para evitar redundância de isoformas)
+  h_sub <- domains_identitygene_human %>% 
+    filter(hgnc_symbol == current_gene, pfam == p) %>% 
+    slice(1)
+  
+  m_sub <- mouse_match %>% slice(1)
+  
+  # 3. Cortar as sequências para o alinhamento local
+  # Usamos substr() com as coordenadas de início e fim baixadas do BioMart
+  h_seq_local <- substr(h_sub$peptide, h_sub$pfam_start, h_sub$pfam_end)
+  m_seq_local <- substr(m_sub$peptide, m_sub$pfam_start, m_sub$pfam_end)
+  
+  # 4. Validar se as sequências não estão vazias
+  if (nchar(h_seq_local) > 5 & nchar(m_seq_local) > 5) {
+    
+    # Criar objeto para o msa
+    to_align <- AAStringSet(c(Human = h_seq_local, Mouse = m_seq_local))
+    
+    # Alinhamento Local com ClustalOmega
+    # O Clustal é excelente para proteínas homólogas próximas
+    aln <- msa(to_align, method = "ClustalOmega")
+    
+    # Cálculo da Identidade Local
+    aln_conv <- msaConvert(aln, type = "seqinr::alignment")
+    dist_val <- seqinr::dist.alignment(aln_conv, matrix = "identity")
+    local_id <- (1 - as.numeric(dist_val)^2) * 100
+    
+    # 5. Construir a linha da tabela final com todas as colunas solicitadas
+    local_results[[paste0(current_gene, "_", p)]] <- data.frame(
+      gene = current_gene,
+      pfam_id = p,
+      description = h_sub$interpro_description,
+      identity_local = round(local_id, 2),
+      identity_global = round(h_sub$identity, 2), # Extraído diretamente da tabela domains_identitygene_human
+      # Coordenadas e Sequência - Humano
+      h_pfam_start = h_sub$pfam_start,
+      h_pfam_end = h_sub$pfam_end,
+      h_sequence = h_seq_local,
+      # Coordenadas e Sequência - Camundongo
+      m_pfam_start = m_sub$pfam_start,
+      m_pfam_end = m_sub$pfam_end,
+      m_sequence = m_seq_local,
+      stringsAsFactors = FALSE
+    )
+  }
+}
+
+# Consolidar lista em data frame
+final_local_df <- bind_rows(local_results)
+
+# Conferir o resultado
+glimpse(final_local_df)
+```
+
+
+```{r}
+# 3. Aggregate by Pfam Domain
+pfam_analysis <- final_local_df %>%
+  filter(pfam_id != "") %>% # Remove empty entries
+  group_by(pfam_id, description) %>%
+  summarise(
+    Mean_identity_local = mean(identity_local, na.rm = TRUE),
+    Gene_Count = n_distinct(gene),
+    Genes = paste(unique(gene), collapse = ", ")
+  ) %>%
+  arrange(desc(Mean_identity_local))
+
+# 4. Find Top (Highest identity) and Bottom (Lowest identity) Domains
+top_conserved_domains <- head(pfam_analysis, 10)
+low_conserved_domains <- tail(pfam_analysis, 10)
+
+print("Top 10 Most Conserved Pfam Domains:")
+print(top_conserved_domains)
+
+print("Top 10 Least Conserved Pfam Domains:")
+print(low_conserved_domains)
+
+# Visualizing top and bottom domains
+bind_rows(
+  top_conserved_domains %>% mutate(Category = "High Conservation"),
+  low_conserved_domains %>% mutate(Category = "Low Conservation")
+) %>%
+  ggplot(aes(x = reorder(description, Mean_identity_local), y = Mean_identity_local, fill = Category)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Conservation by Functional Domain (Pfam)",
+    x = "Pfam Description",
+    y = "Mean Identity (Human-to-Mouse) %"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c("High Conservation" = "#d7191c", "Low Conservation" = "#2b83ba"))
+```
+
+
+
+
+
+
 
 
 ###### Module-level, BTMs
