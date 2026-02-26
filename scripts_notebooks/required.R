@@ -109,7 +109,8 @@ theme_vaxgo = function(){
       axis.ticks.x = element_line(size = 0.5, color = "black"),
       axis.ticks.y = element_line(size = 0.5, color = "black"),
       panel.grid.minor = element_blank(),
-      plot.margin = margin(0.5, 0.2, 0.2, 0.2, "cm")
+      plot.margin = margin(0.1, 0.1, 0.1, 0.1, "cm"),
+      ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
     )}
 
 

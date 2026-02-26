@@ -2108,10 +2108,7 @@ btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"
  
 all_degs_human_mouse %>% 
   dplyr::count(timepoint, organism, treatment, pathogen) 
-```
 
-
-```{r}
 #Pivot wider
 human_mouse_log2fc_avg_wide = all_degs_human_mouse %>% 
   select(pathogen, organism, human_symbol, timepoint_comparison, mean_log2fc = mean_l2fc, p_adj = adj_p_val, tstatistic = t) %>% 
@@ -2188,11 +2185,7 @@ gene_sets_list <- list(
                                           filter(module_category == "immune") %>% 
                                           pull(symbol) %>% unique()))
 )
-```
 
-
-
-```{r}
 # Data Preparation: Long format to Wide Matrix
   genes_samples_long <- genes_log2fc_input %>%
     select(pathogen, organism, human_symbol, timepoint, log2fc) %>%
@@ -2208,10 +2201,7 @@ gene_sets_list <- list(
     distinct() %>%
     pivot_wider(names_from = "condition", values_from = "log2fc", values_fn = mean) %>%
     column_to_rownames("human_symbol")
-```
 
-
-```{r}
 # 2. Main Processing Loop ----------------------------------------------------
 # map_dfr iterates through "AllGenes" and "Immune", stacking the results
 final_correlations <- map_dfr(names(gene_sets_list), function(set_name) {
@@ -2315,26 +2305,6 @@ correlation_filtered
 ```
 
 
-```{r}
- correlation_filtered %>% 
-  filter(treatment == "Vaccination",
-         gene_set == "All genes",
-         pathogen == "Influenza") %>% 
-  # filter(rho <1.0) %>% 
-  ggplot() +
-  aes(x = timepoint2,
-      y = timepoint1) +
-  #Facet
-  facet_nested_wrap(~gene_set+treatment+pathogen,
-                    scales = "free",
-                    nrow = 3,
-                    strip = strip_nested(size = "variable")) +
-  labs(x = "Mouse",
-       y = "Human") +
-  geom_tile(aes(fill = rho)) +
-  geom_text(aes(label = round(rho, 2)), size = 3, 
-                  color = "black") 
-```
 
 ```{r fig.height=8, fig.width=10}
 correlation_heatmap = correlation_filtered %>% 
@@ -2351,15 +2321,12 @@ correlation_heatmap = correlation_filtered %>%
   labs(x = "Mouse",
        y = "Human") +
   geom_tile(aes(fill = rho)) +
-  # geom_shadowtext(aes(label = round(rho, 2)), size = 3, 
-  #                 color = "black",
-  #                 bg.color = "white") +
   geom_text(aes(label = round(rho, 2)), size = 3, 
                   color = "black") +
   scale_x_discrete(expand = c(0,0)) +
   scale_y_discrete(expand = c(0,0)) +
   scale_fill_gradientn(
-        colors = c("#4361ee", "white","#46eec6"),
+        colors = c("#4DBBD5FF", "white","#4361ee"),
         values = scales::rescale(seq(-1, 1, length.out = 10)),
         limits = c(-1, 1),
         name = "Spearman's rho",
@@ -2378,7 +2345,6 @@ correlation_heatmap = correlation_filtered %>%
         strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
         legend.position = "top",
         legend.direction = "horizontal",
-        legend.title = element_text(vjust = 0.5),
         legend.margin=margin(0,0,0,0),
         legend.box.margin=margin(0,0,-10,0),
         panel.spacing.y = unit(0, "lines"),
@@ -5766,6 +5732,67 @@ leading_edges_plots_short %>%
 
 
 ###### Annotate with sequence identity
+Import from biomart R
+```{r}
+# 1. Setup biomaRt
+human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+mouse_mart <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+
+# 2. Retrieve Pfam domains, GO terms, and Identity
+# We include homology identity to correlate directly
+
+identity_human <- getBM(
+  attributes = c("external_gene_name", 
+                 "mmusculus_homolog_perc_id_r1",
+                 "mmusculus_homolog_goc_score",
+                 "mmusculus_homolog_orthology_confidence"),
+  filters = "hgnc_symbol",
+  values = shared_genes,
+  mart = human_mart
+) %>% 
+  rename(hgnc_symbol = external_gene_name,
+         identity = mmusculus_homolog_perc_id_r1,
+         mouse_orthology_confidence_0_low_1_high = mmusculus_homolog_orthology_confidence)
+
+# 3. Join the tables
+domains_identitygene_human <- left_join(identity_human, 
+                                        domains_human, by = "hgnc_symbol") %>% 
+  drop_na(identity)
+
+
+#Mouse
+genes_mouse <- getBM(
+  attributes = c("external_gene_name", 
+                 "hsapiens_homolog_associated_gene_name"),
+  filters = "external_gene_name",
+  values = shared_genes,
+  mart = mouse_mart
+) %>% 
+  rename(mgi_symbol = external_gene_name,
+         hgnc_symbol = hsapiens_homolog_associated_gene_name)
+
+domains_mouse <- getBM(
+  attributes = c("external_gene_name",
+                 "interpro", 
+                 "interpro_start", 
+                 "interpro_end", 
+                 "peptide"
+                 # "interpro_short_description"
+                 ),
+  filters = "external_gene_name",
+  values = genes_mouse$mgi_symbol,
+  mart = mouse_mart
+)
+
+genes_domain_mouse_human <- genes_mouse %>% 
+  inner_join(domains_mouse, by = join_by(mgi_symbol == external_gene_name)) %>% 
+  inner_join(domains_identitygene_human,
+             join_by(hgnc_symbol), suffix = c("_mouse", "_human")) %>% 
+  drop_na(peptide_mouse, peptide_human)
+
+glimpse(genes_domain_mouse_human)
+```
+
 
 Import and annotate
 ```{r fig.height=5, fig.width=12}
@@ -5779,6 +5806,7 @@ dge_btm_process_genes_correlation_bygene =
   readRDS(file = here("tables", "all_human_mouse_dge_btm_process_genes_correlation_bygene.rds"))
 all_alignments = read_csv(here("tables","human_to_mouse_alignment_mart_export.txt"))
 
+#BTMs 
 alignments_human2mouse = all_alignments %>% 
     clean_names() %>% 
   filter(mouse_orthology_confidence_0_low_1_high == 1) %>% 
@@ -5795,6 +5823,7 @@ alignments_human2mouse = all_alignments %>%
   inner_join(gsea_btm_results_core_joined,
              by = join_by(gene)) 
 
+#All orthologs in the database
 alignments_human2mouse_all = all_alignments %>% 
   clean_names() %>% 
   filter(mouse_orthology_confidence_0_low_1_high == 1) %>% 
@@ -5807,6 +5836,23 @@ alignments_human2mouse_all = all_alignments %>%
   group_by(gene) %>% 
   summarise(identity_human2mouse = median(identity_human2mouse)) %>% 
   ungroup() 
+
+set.seed(123) 
+
+alignments_null = alignments_human2mouse_all %>%
+  mutate(
+    identity_random = runif(n(), min = 0, max = 100),
+    type = "Null (Uniform)"
+  )
+alignments_null %>% 
+  ggplot() +
+  aes(x = identity_random) +
+  geom_histogram(alpha = 0.5) +
+  geom_histogram(aes(x = identity_human2mouse),
+                 fill = "red")
+
+#Create a random distribution
+alignments_human2mouse_all %>% 
 
 ```
 
