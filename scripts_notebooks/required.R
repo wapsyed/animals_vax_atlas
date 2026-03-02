@@ -412,10 +412,25 @@ colors = list(organism = c("FIT" = "#4361ee",
                            "Immune" = "#f72585",
                            "Human" = "black",
                            "Permutation" = "gray80"),
+              #Fill
               comparison = c("Mouse only" = "gray50",
+                             "Mouse\nonly" = "gray50",
                              "Human only" = "black",
+                             "Human\nonly" = "black",
                              "Shared" = "#4DBBD5FF",
-                             "Not core" = "gray90"),
+                             "Not core" = "gray90",
+                             "Not\ncore" = "gray90",
+                             "BTMs" = "#4361ee"),
+              #Color
+              comparison_color = c("Mouse only" = "black",
+                             "Mouse\nonly" = "black",
+                             "Human only" = "white",
+                             "Human\nonly" = "white",
+                             "Shared" = "black",
+                             "Not core" = "black",
+                             "Not\ncore" = "black",
+                             "BTMs" = "black",
+                             "All" = "white"),
               comparison_versus = c("Human vs. Mouse" = "#4DBBD5FF",
                                     "Mouse vs. Mouse" = "gray50",
                                     "Human vs. Human" = "black"),
@@ -469,7 +484,7 @@ colors = list(organism = c("FIT" = "#4361ee",
                               "V-I" = "#ffadc7"))
 
 
-#Define colors
+W#Define colors
 
 btm_immune_groups = list(group = c("SIGNAL TRANSDUCTION" = "#708d81",
                                    "CELL CYCLE" = "#06d6a0",
