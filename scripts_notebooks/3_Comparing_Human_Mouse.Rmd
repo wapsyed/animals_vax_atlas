@@ -6635,38 +6635,14 @@ Get local identity
 library(biomaRt)
 library(tidyverse)
 
-shared_genes_df = bind_rows(alignments_human2mouse_all_global_df_nshared %>%
-                      group_by(status) %>%
-                      arrange(-identity_human2mouse, -n) %>%
-                      slice_head(n = 1),
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(n > 3) %>% 
-                      arrange(identity_human2mouse) %>% 
-                      group_by(status) %>% 
-                      slice_min(identity_human2mouse, n = 1) ,
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(status == "BTMs") %>%
-                      slice_min(identity_human2mouse, n = 1),
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(status == "All") %>%
-                      slice_min(identity_human2mouse, n = 1))
+shared_genes_df = alignments_human2mouse_annotated_filtered %>% 
+  select(filter, status, everything()) %>% 
+  group_by(filter, status) %>% 
+  slice_head(n  = 1) %>% 
+  ungroup()
 
 
-shared_genes = bind_rows(alignments_human2mouse_all_global_df_nshared %>%
-                      group_by(status) %>%
-                      arrange(-identity_human2mouse, -n) %>%
-                      slice_head(n = 1),
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(n > 3) %>% 
-                      arrange(identity_human2mouse) %>% 
-                      group_by(status) %>% 
-                      slice_min(identity_human2mouse, n = 1) ,
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(status == "BTMs") %>%
-                      slice_min(identity_human2mouse, n = 1),
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(status == "All") %>%
-                      slice_min(identity_human2mouse, n = 1)) %>% 
+shared_genes = shared_genes_df %>% 
   pull(gene) %>% 
   unique()
 ```
@@ -6858,6 +6834,70 @@ resultado_final <- tibble(
 )
 
 ```
+
+
+```{r fig.height=4, fig.width=8}
+library(tidyverse)
+
+# 1. Preparação dos dados (Incluindo a Proteína Total como um "domínio")
+gene_info <- genes_domain_mouse_human %>%
+  filter(hgnc_symbol == "ABCE1") %>%
+  mutate(
+    len_mouse = nchar(peptide_mouse),
+    len_human = nchar(peptide_human)
+  )
+
+# Criar a linha da "Proteína Total"
+full_protein <- gene_info %>%
+  distinct(hgnc_symbol, len_mouse, len_human) %>%
+  pivot_longer(cols = starts_with("len_"), names_to = "species", values_to = "end") %>%
+  mutate(
+    species = str_remove(species, "len_"),
+    start = 1,
+    interpro_short_description_human = "Full Protein"
+  )
+
+# Preparar os domínios específicos
+plot_domains <- gene_info %>%
+  select(hgnc_symbol, interpro_short_description_human,
+         interpro_start_mouse, interpro_end_mouse, 
+         interpro_start_human, interpro_end_human) %>%
+  pivot_longer(cols = starts_with("interpro_start"), 
+               names_to = "species_start", values_to = "start") %>%
+  pivot_longer(cols = starts_with("interpro_end"), 
+               names_to = "species_end", values_to = "end") %>%
+  mutate(species_start = str_remove(species_start, "interpro_start_"),
+         species_end = str_remove(species_end, "interpro_end_")) %>%
+  filter(species_start == species_end) %>%
+  rename(species = species_start) %>%
+  bind_rows(full_protein) %>%
+  # Ordenar o Eixo Y: "Full Protein" no topo (ou base)
+  mutate(interpro_short_description_human = fct_relevel(interpro_short_description_human, "Full Protein"))
+
+# 2. Gerar o gráfico
+ggplot(plot_domains) +
+  geom_rect(aes(xmin = start, 
+                xmax = end, 
+                ymin = as.numeric(interpro_short_description_human) - 0.35, 
+                ymax = as.numeric(interpro_short_description_human) + 0.35, 
+                fill = interpro_short_description_human), 
+            alpha = 0.85, color = "black", size = 0.3) +
+  # Configurar os nomes no eixo Y
+  scale_y_continuous(breaks = 1:length(levels(plot_domains$interpro_short_description_human)), 
+                     labels = levels(plot_domains$interpro_short_description_human)) +
+  scale_x_continuous(expand = c(0.01, 0.01), n.breaks = unique(full_protein$end)/60) +
+  # Facet por espécie para comparar lado a lado
+  facet_wrap(~str_to_title(species), ncol = 1) +
+  # Estética
+  scale_fill_viridis_d(option = "mako", guide = "none") + 
+  theme_vaxgo() +
+  labs(title = paste("InterPro domains:", unique(plot_domains$hgnc_symbol)),
+       x = "Residue position", 
+       y = "InterPro domains")  +
+  theme(axis.text.x = element_text(size = 10))
+
+```
+
 
 
 
