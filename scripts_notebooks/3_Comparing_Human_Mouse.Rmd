@@ -4821,7 +4821,8 @@ correlation_processes_bypathogen_time_df = dge_btm_process_genes_correlation %>%
   ungroup() %>% 
   inner_join(btm_annotation_genes %>% select(process, group),
              by = "process") %>% 
-  distinct()
+  distinct() %>% 
+  drop_na(cor_value)
 ```
 
 
@@ -4986,7 +4987,6 @@ Heatmap
 ```{r fig.height=20, fig.width=10}
 btm_correlation_process_heatmap =
   correlation_processes_bypathogen_time_df %>% 
-  drop_na(cor_value) %>% 
   mutate(
     process = fct_reorder(process, cor_value, .fun = mean),
     timepoint = as.factor(timepoint)
@@ -5040,6 +5040,7 @@ ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_intramodule_
 Are the leading edges in mice the same in humans?
 
 ```{r}
+#Are the leading edges in mice the same in humans? ----------
 gsea_btm_results_core = gsea_btm_results_all_matched %>% 
   separate_rows(core_enrichment, sep = "/")
 
@@ -5310,8 +5311,9 @@ btm_correlation_setsize_plot %>%
 
 
 
-
+Bubbleplot
 ```{r fig.height=20, fig.width=10}
+#Percentage shared - Bubbleplot
 shared_perc_plot =  shared_perc_df_plot %>% 
   mutate(process = fct_reorder(process, n),
          group = fct_relevel(group, immune_order)) %>% 
@@ -5913,8 +5915,12 @@ alignments_human2mouse_all_global_df = alignments_human2mouse %>%
             ) %>% 
   mutate(status = fct_relevel(status, "Human only", "Mouse only", "Shared", "BTMs", "All")) %>% 
   left_join(dge_btm_process_genes_correlation_bygene,
-             by = join_by(gene == symbol))
+             by = join_by(gene == symbol)) %>% 
+  filter(status %in% c("All", "BTMs") | !is.na(cor_value))
+```
 
+
+```{r fig.height=5, fig.width=6}
 alignments_human2mouse_all_global_df_nshared = alignments_human2mouse_all_global_df %>% 
   group_by(status, gene) %>% 
   dplyr::summarize(n = n()) %>% 
@@ -5922,7 +5928,7 @@ alignments_human2mouse_all_global_df_nshared = alignments_human2mouse_all_global
   inner_join(alignments_human2mouse_all_global_df %>% 
                select(gene, identity_human2mouse, cor_value:cor_label) %>% 
                distinct(),
-             by = "gene")
+             by = "gene") 
 
 alignments_human2mouse_all_global_df_filtered = alignments_human2mouse_all_global_df %>% 
   select(gene, status, identity_human2mouse) %>% 
@@ -6083,8 +6089,8 @@ gene_info_human %>%
 
 
 Distributions
-```{r fig.height=10, fig.width=6}
-#Histogram and violin
+```{r fig.height=8, fig.width=12}
+#Point range of mean
 alignments_human2mouse_pointrange_all_global = alignments_human2mouse_all_global_df_filtered %>%
   mutate(analysis = "Mean Conservation") %>%
   ggplot() +
@@ -6141,6 +6147,77 @@ alignments_human2mouse_pointrange_all_global = alignments_human2mouse_all_global
        fill = "")
 
 alignments_human2mouse_pointrange_all_global
+```
+
+
+```{r fig.height=8, fig.width=8}
+#Histogram, violin, filtered genes
+alignments_human2mouse_annotated_filtered = bind_rows(
+  
+                    #Genes with high positive correlation, high frequency, high identity
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(p_value <= 0.05) %>% 
+                      group_by(status) %>%
+                      filter(n > 3) %>% 
+                      filter(cor_value >= 0) %>% 
+                      filter(identity_human2mouse > 90) %>%
+                      arrange(-cor_value, -n) %>%
+                      slice_head(n = 5) %>% 
+                      mutate(filter = "High correlation,\nHigh %Identity"),
+                    
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(status == "BTMs") %>%
+                      slice_max(identity_human2mouse, n = 5,  with_ties = F) %>% 
+                      mutate(filter = "High %Identity"),
+                    
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(status == "All") %>%
+                      slice_max(identity_human2mouse, n = 5,  with_ties = F) %>% 
+                      mutate(filter = "High %Identity"),
+                    
+                    #BOTTOM
+                    #Genes with high correlation, high frequency, low identity
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(n > 3) %>% 
+                      filter(p_value <= 0.05) %>% 
+                      arrange(-cor_value, identity_human2mouse) %>% 
+                      group_by(status) %>% 
+                      slice_min(identity_human2mouse, n = 5)  %>% 
+                      mutate(filter = "High correlation,\nLow %Identity"),
+                    
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(status == "BTMs") %>%
+                      slice_min(identity_human2mouse, n = 5,  with_ties = F) %>% 
+                      mutate(filter = "Low %Identity"),
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(status == "All") %>%
+                      slice_min(identity_human2mouse, n = 5, with_ties = F) %>% 
+                      mutate(filter = "Low %Identity"),
+                    
+                    #LEFT
+                    #TOP
+                    #Genes with low positive correlation, high frequency, high identity
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(p_value <= 0.05) %>% 
+                      filter(cor_value >= 0) %>% 
+                      filter(identity_human2mouse > 90) %>%
+                      group_by(status) %>%
+                      arrange(cor_value, -n) %>%
+                      slice_head(n = 5) %>% 
+                      ungroup() %>% 
+                      mutate(filter = "Low correlation,\nHigh %Identity"),
+                    #BOTTOM
+                    #Genes with high positive correlation, high frequency, low identity
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(p_value <= 0.05) %>% 
+                      filter(cor_value >= 0) %>% 
+                      filter(identity_human2mouse < 90) %>%
+                      group_by(status) %>%
+                      arrange(-cor_value, -n) %>%
+                      slice_head(n = 5) %>% 
+                      ungroup() %>% 
+                      mutate(filter = "Low correlation,\nLow %Identity")
+)
 
 #Histogram and violin
 alignments_human2mouse_histogram_all_global = alignments_human2mouse_all_global_df_filtered %>%
@@ -6160,39 +6237,35 @@ alignments_human2mouse_histogram_all_global = alignments_human2mouse_all_global_
                width = 0.1,
                fill = NA,
                outliers = F) +
+  scale_fill_manual(name = "Status",
+                    values = c(colors$comparison,
+                               "BTMs" = "#4361ee",
+                               "All" = "white"), ) +
+  scale_color_manual(
+    name = "Status",
+    values = c(
+    "Mouse only" = "white",
+    "Human only" = "white",
+    "Shared" = "white",
+    "BTMs" = "white",
+    "All" = "black")) +
   #Get top and bottom genes
-  geom_point(data = bind_rows(
-                    #Top
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(p_value <= 0.05) %>% 
-                      group_by(status) %>%
-                      filter(n > 3) %>% 
-                      arrange(-identity_human2mouse, -cor_value,  -n) %>%
-                      slice_head(n = 10),
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(status == "BTMs") %>%
-                      slice_max(identity_human2mouse, n = 5,  with_ties = F),
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(status == "All") %>%
-                      slice_max(identity_human2mouse, n = 5,  with_ties = F),
-                    #Bottom
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(n > 3) %>% 
-                      filter(p_value <= 0.05) %>% 
-                      arrange(-cor_value, identity_human2mouse) %>% 
-                      group_by(status) %>% 
-                      slice_min(identity_human2mouse, n = 5) ,
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(status == "BTMs") %>%
-                      slice_min(identity_human2mouse, n = 5,  with_ties = F),
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(status == "All") %>%
-                      slice_min(identity_human2mouse, n = 5, with_ties = F) 
-                  ),
-             color = "black",
+  new_scale_color() + 
+  scale_color_manual(
+     name = "Filter",
+     values = c(
+    "High %Identity" = "#4361ee",
+    "High correlation,\nHigh %Identity" = "#4DBBD5FF",
+    "Low correlation,\nHigh %Identity" = "#7209b7",
+    
+    "Low %Identity" = "red",
+    "High correlation,\nLow %Identity" = "#CA6702",
+    "Low correlation,\nLow %Identity" = "#AE2012"
+  )) +
+  geom_point(data = alignments_human2mouse_annotated_filtered,
+             aes(color = filter),
              pch = 21,
-             fill = "white"
-                              ) +
+             fill = "white") +
   stat_summary(
     fun = median, 
     geom = "label", 
@@ -6202,54 +6275,19 @@ alignments_human2mouse_histogram_all_global = alignments_human2mouse_all_global_
     color = "black",
     fill = "white",
   ) +
-  geom_label_repel(aes(label = gene), 
+  geom_label_repel(aes(label = gene,
+                       color = filter), 
                   max.overlaps = 10000,
-                  size = 3, 
+                  size = 2, 
                   direction = c("y"),
-                  nudge_x = 0.2,
+                  nudge_x = -0.4,
                   hjust = 0,
-                  color = "black",
                   fill = "white", 
                   box.padding = unit(0, "cm"), 
                   label.padding = unit(0.1, "cm"), 
-                  data = bind_rows(
-                    #Top
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(p_value <= 0.05) %>% 
-                      group_by(status) %>%
-                      filter(n > 3) %>% 
-                      arrange(-identity_human2mouse, -cor_value,  -n) %>%
-                      slice_head(n = 10),
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(status == "BTMs") %>%
-                      slice_max(identity_human2mouse, n = 5,  with_ties = F),
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(status == "All") %>%
-                      slice_max(identity_human2mouse, n = 5,  with_ties = F),
-                    #Bottom
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(n > 3) %>% 
-                      filter(p_value <= 0.05) %>% 
-                      arrange(-cor_value, identity_human2mouse) %>% 
-                      group_by(status) %>% 
-                      slice_min(identity_human2mouse, n = 5) ,
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(status == "BTMs") %>%
-                      slice_min(identity_human2mouse, n = 5,  with_ties = F),
-                    alignments_human2mouse_all_global_df_nshared %>%
-                      filter(status == "All") %>%
-                      slice_min(identity_human2mouse, n = 5, with_ties = F) 
-                  )
-  ) +
-  scale_fill_manual(values = c(colors$comparison,
-                               "BTMs" = "#4361ee",
-                               "All" = "white")) +
-  scale_color_manual(values = c("Mouse only" = "white",
-                             "Human only" = "white",
-                             "Shared" = "white",
-                               "BTMs" = "white",
-                             "All" = "black")) +
-  scale_x_discrete(expand = c(0.05, 0.05)) +
+                  data = alignments_human2mouse_annotated_filtered) +
+  
+  scale_x_discrete(expand = c(0.1, 0.1)) +
   scale_y_continuous(expand = c(0.01, 0.01), 
                      limits = c(50, 105)
                      ) +
@@ -6260,8 +6298,8 @@ alignments_human2mouse_histogram_all_global = alignments_human2mouse_all_global_
           strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
           panel.spacing = unit(1.1, "lines"),
           plot.margin = margin(0.3, 0.3, 0, 0, unit = "cm"),
-          legend.position = "none",
-          legend.direction = "horizontal",
+          legend.position = "top",
+          legend.direction = "vertical",
           legend.margin=margin(0,0,0,0),
           legend.box.margin=margin(0,0,-10,0),
           legend.text = element_text(size = 10, hjust = 0),
@@ -6272,22 +6310,26 @@ alignments_human2mouse_histogram_all_global = alignments_human2mouse_all_global_
        y = "%Identity (Human-to-Mouse)",
        color = "",
        fill = "") 
+  # guides(color = guide_legend(nrow = 3, byrow = T),
+  #        fill = guide_legend(nrow = 3, byrow = T))
 
 alignments_human2mouse_histogram_all_global 
   
+# #Unite
 alignments_human2mouse_pointrange_histogram = (alignments_human2mouse_pointrange_all_global /
 alignments_human2mouse_histogram_all_global) +
   plot_layout(heights = c(0.25, 0.75),
               guides = "collect",
               # axes = "collect",
               axis_titles = "collect"
-              )
+              ) +
+  plot_annotation(theme = theme(legend.position = "right"))
 alignments_human2mouse_pointrange_histogram
 
 alignments_human2mouse_pointrange_histogram %>%
 ggsave(filename = here("Figures", "all_human_mouse_gsea_LEGs_alignment_btms_human2mouse_violinplot_all_global.png"),
-         width = 6,
-         height = 10)
+         width = 8,
+         height = 8)
 ```
 
 
@@ -6593,6 +6635,23 @@ Get local identity
 library(biomaRt)
 library(tidyverse)
 
+shared_genes_df = bind_rows(alignments_human2mouse_all_global_df_nshared %>%
+                      group_by(status) %>%
+                      arrange(-identity_human2mouse, -n) %>%
+                      slice_head(n = 1),
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(n > 3) %>% 
+                      arrange(identity_human2mouse) %>% 
+                      group_by(status) %>% 
+                      slice_min(identity_human2mouse, n = 1) ,
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(status == "BTMs") %>%
+                      slice_min(identity_human2mouse, n = 1),
+                    alignments_human2mouse_all_global_df_nshared %>%
+                      filter(status == "All") %>%
+                      slice_min(identity_human2mouse, n = 1))
+
+
 shared_genes = bind_rows(alignments_human2mouse_all_global_df_nshared %>%
                       group_by(status) %>%
                       arrange(-identity_human2mouse, -n) %>%
@@ -6610,10 +6669,13 @@ shared_genes = bind_rows(alignments_human2mouse_all_global_df_nshared %>%
                       slice_min(identity_human2mouse, n = 1)) %>% 
   pull(gene) %>% 
   unique()
+```
 
+
+```{r}
 # 1. Setup biomaRt
-human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl", verbose = T)
-mouse_mart <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+# human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+# mouse_mart <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
 
 # 2. Retrieve Pfam domains, GO terms, and Identity
 # We include homology identity to correlate directly
@@ -6623,13 +6685,27 @@ domains_human <- getBM(
     "interpro",
     "interpro_start",
     "interpro_end",
-    "peptide",
     "interpro_short_description"
   ),
   filters = "hgnc_symbol",
   values = shared_genes,
+  # values = "ABCE1",
   mart = human_mart
 )
+
+sequences_human = getBM(
+  attributes = c(
+    "hgnc_symbol",
+    "peptide",
+    "uniprotswissprot"
+  ),
+  filters = "hgnc_symbol",
+  values = shared_genes,
+  # values = "ABCE1",
+  mart = human_mart
+) %>% 
+  #Filter out non-canonical/annotated sequences
+  filter(uniprotswissprot != "")
 
 identity_human <- getBM(
   attributes = c("external_gene_name", 
@@ -6637,24 +6713,32 @@ identity_human <- getBM(
                  "mmusculus_homolog_goc_score",
                  "mmusculus_homolog_orthology_confidence"),
   filters = "hgnc_symbol",
+  # values = "ABCE1",
   values = shared_genes,
   mart = human_mart
 ) %>% 
   rename(hgnc_symbol = external_gene_name,
          identity = mmusculus_homolog_perc_id_r1)
 
-# 3. Join the tables
-domains_identitygene_human <- left_join(identity_human, 
-                                        domains_human, by = "hgnc_symbol") %>% 
-  drop_na(identity)
+# Join the tables
+domains_identity_sequence_human = 
+  sequences_human %>% 
+  inner_join(domains_human, 
+             by = "hgnc_symbol") %>% 
+  left_join(identity_human, 
+            domains_human,
+            by = "hgnc_symbol") %>% 
+  group_by(hgnc_symbol, interpro) %>% 
+  mutate(interpro_length = interpro_end - interpro_start) %>% 
+  slice_max(interpro_length, n = 1)
 
 
 #Mouse
-genes_mouse <- getBM(
+genes_mouse = getBM(
   attributes = c("external_gene_name", 
                  "hsapiens_homolog_associated_gene_name"),
   filters = "external_gene_name",
-  values = shared_genes,
+  values = str_to_title(shared_genes),
   mart = mouse_mart
 ) %>% 
   rename(mgi_symbol = external_gene_name,
@@ -6665,18 +6749,46 @@ domains_mouse <- getBM(
                  "interpro", 
                  "interpro_start", 
                  "interpro_end", 
-                 "peptide"
-                 # "interpro_short_description"
-                 ),
+                 "interpro_short_description"),
   filters = "external_gene_name",
+  # values = "Abce1",
   values = genes_mouse$mgi_symbol,
   mart = mouse_mart
 )
 
-genes_domain_mouse_human <- genes_mouse %>% 
-  inner_join(domains_mouse, by = join_by(mgi_symbol == external_gene_name)) %>% 
-  inner_join(domains_identitygene_human,
-             join_by(hgnc_symbol), suffix = c("_mouse", "_human")) %>% 
+sequences_mouse = getBM(
+  attributes = c(
+    "external_gene_name",
+    "peptide",
+    "uniprotswissprot"
+  ),
+  filters = "external_gene_name",
+  values = genes_mouse$mgi_symbol,
+  # values = "Abce1",
+  mart = mouse_mart
+) %>% 
+  #Filter out non-canonical/annotated sequences
+  filter(uniprotswissprot != "")
+
+#Merge
+domains_identity_sequence_mouse = 
+  sequences_mouse %>% 
+  inner_join(domains_mouse, 
+             by = "external_gene_name") %>% 
+  rename(mgi_symbol = external_gene_name) %>% 
+  left_join(genes_mouse, 
+            by = "mgi_symbol") %>% 
+  arrange(interpro_start) %>% 
+  group_by(mgi_symbol, interpro) %>% 
+  mutate(interpro_length = interpro_end - interpro_start) %>% 
+  slice_max(interpro_length, n = 1)
+
+
+#Merge Human and Mouse
+genes_domain_mouse_human <- domains_identity_sequence_mouse %>% 
+  inner_join(domains_identity_sequence_human, 
+             by = join_by(hgnc_symbol, interpro), 
+             suffix = c("_mouse", "_human")) %>% 
   drop_na(peptide_mouse, peptide_human)
 
 glimpse(genes_domain_mouse_human)
@@ -6690,121 +6802,63 @@ genes_domain_mouse_human %>%
 
 ```
 
-
+Import
 ```{r}
-library(msa)
-library(seqinr)
-library(tidyverse)
+genes_domain_mouse_human =
+  readRDS(file = here("tables", "all_human_mouse_gsea_leganalysis_alignment.rds"))
 
-# 1. Preparação dos dados: Expandir domínios do mouse e converter coordenadas
-# 1. Preparação robusta: Garantir que o número de elementos coincida
-data_prepared <- genes_domain_mouse_human %>%
-  # Removemos espaços extras que o BioMart às vezes coloca
-  mutate(across(c(interpro_mouse, interpro_start_mouse, interpro_end_mouse), ~str_trim(.))) %>%
-  # Filtro de segurança: Só mantemos linhas onde o número de ';' é igual para ID e Coordenadas
-  filter(
-    str_count(interpro_mouse, ";") == str_count(interpro_start_mouse, ";"),
-    str_count(interpro_mouse, ";") == str_count(interpro_end_mouse, ";")
-  ) %>%
-  # Agora o separate_rows não vai dar erro de 'recycle'
-  separate_rows(interpro_mouse, interpro_start_mouse, interpro_end_mouse, sep = ";") %>%
-  mutate(across(c(interpro_start_mouse, interpro_end_mouse), as.numeric)) %>%
-  filter(interpro_mouse == interpro_human)
-
-# 2. Execução do Alinhamento Local
-for (i in 1:nrow(data_prepared)) {
-  row <- data_prepared[i, ]
-  
-  # 1. Recorte com proteção: se as coordenadas forem NA, o substr retorna NA
-  h_seq <- substr(row$peptide_human, row$interpro_start_human, row$interpro_end_human)
-  m_seq <- substr(row$peptide_mouse, row$interpro_start_mouse, row$interpro_end_mouse)
-  
-  # 2. Verificação de segurança tripla:
-  # - Não pode ser NA
-  # - Não pode ser vazio
-  # - Deve ter mais de 5 caracteres
-  if (!is.na(h_seq) & !is.na(m_seq) && nchar(h_seq) > 5 && nchar(m_seq) > 5) {
-    
-    # Criar objeto Biostrings
-    to_align <- AAStringSet(c(Human = h_seq, Mouse = m_seq))
-    
-    # Alinhamento Local
-    # Nota: ClustalOmega é rápido, mas você pode usar method="Mafft" se preferir
-    aln <- msa(to_align, method = "ClustalOmega")
-    
-    # Cálculo da Identidade
-    aln_conv <- msaConvert(aln, type = "seqinr::alignment")
-    dist_val <- seqinr::dist.alignment(aln_conv, matrix = "identity")
-    local_id <- (1 - as.numeric(dist_val)^2) * 100
-    
-    # Limpeza da descrição
-    clean_desc <- str_split_i(row$interpro_short_description, ";", 1)
-    
-    # Salvar resultados
-    res_name <- paste0(row$hgnc_symbol, "_", row$interpro_human, "_", i)
-    local_results[[res_name]] <- data.frame(
-      gene = row$hgnc_symbol,
-      interpro_id = row$interpro_human,
-      description = clean_desc,
-      identity_local = round(local_id, 2),
-      identity_global = round(row$identity, 2),
-      h_seq = h_seq,
-      m_seq = m_seq,
-      stringsAsFactors = FALSE
-    )
-  } else {
-    # Opcional: Log de genes que falharam no recorte
-    # message(paste("Aviso: Sequência inválida ou NA para o gene", row$hgnc_symbol))
-  }
-}
-
-# 3. Consolidação Final
-final_local_df <- bind_rows(local_results)
-
-# Verificação dos resultados
-print(paste("Domínios alinhados:", nrow(final_local_df)))
-glimpse(final_local_df)
+#Align domains
+sequences_align_domains = genes_domain_mouse_human %>% 
+mutate(
+    # Cut sequence: peptide[start : end]
+    domain_seq_human = stringr::str_sub(peptide_human, interpro_start_human, interpro_end_human),
+    domain_seq_mouse = stringr::str_sub(peptide_mouse, interpro_start_mouse, interpro_end_mouse)
+  )
 ```
 
 
 ```{r}
-# 3. Aggregate by Pfam Domain
-pfam_analysis <- final_local_df %>%
-  filter(pfam_id != "") %>% # Remove empty entries
-  group_by(pfam_id, description) %>%
-  summarise(
-    Mean_identity_local = mean(identity_local, na.rm = TRUE),
-    Gene_Count = n_distinct(gene),
-    Genes = paste(unique(gene), collapse = ", ")
-  ) %>%
-  arrange(desc(Mean_identity_local))
+#Align full sequence
+sequences_align_gene <- genes_domain_mouse_human %>%
+  ungroup() %>% 
+  select(hgnc_symbol, peptide_human, peptide_mouse, identity) %>%
+  distinct()
 
-# 4. Find Top (Highest identity) and Bottom (Lowest identity) Domains
-top_conserved_domains <- head(pfam_analysis, 10)
-low_conserved_domains <- tail(pfam_analysis, 10)
+#Alignment
+gene_data <- sequences_align_gene[1, ]
 
-print("Top 10 Most Conserved Pfam Domains:")
-print(top_conserved_domains)
+# 2. Criando o objeto de sequências
+# (Transformamos as strings das colunas em um AAStringSet)
+input_seqs <- AAStringSet(c(gene_data$peptide_human, gene_data$peptide_mouse))
+names(input_seqs) <- c("Human", "Mouse")
 
-print("Top 10 Least Conserved Pfam Domains:")
-print(low_conserved_domains)
+# 3. Rodando o MUSCLE
+# O resultado 'aln' contém as sequências com os gaps (-)
+aln <- msa(input_seqs, method = "Muscle", type = "protein")
 
-# Visualizing top and bottom domains
-bind_rows(
-  top_conserved_domains %>% mutate(Category = "High Conservation"),
-  low_conserved_domains %>% mutate(Category = "Low Conservation")
-) %>%
-  ggplot(aes(x = reorder(description, Mean_identity_local), y = Mean_identity_local, fill = Category)) +
-  geom_col() +
-  coord_flip() +
-  labs(
-    title = "Conservation by Functional Domain (Pfam)",
-    x = "Pfam Description",
-    y = "Mean Identity (Human-to-Mouse) %"
-  ) +
-  theme_minimal() +
-  scale_fill_manual(values = c("High Conservation" = "#d7191c", "Low Conservation" = "#2b83ba"))
+# 4. Extraindo as sequências alinhadas
+# unmasked() remove a "máscara" do objeto msa e permite converter para texto
+seqs_alinhadas <- as.character(unmasked(aln))
+
+# 5. Calculando a identidade (PID)
+library(pwalign)
+# Comparamos as duas sequências originais
+identidade_global <- pwalign::pid(pwalign::pairwiseAlignment(gene_data$peptide_human, 
+                                          gene_data$peptide_mouse, 
+                                          substitutionMatrix = "BLOSUM62"))
+
+# 6. Criando a tabela final com o resultado
+resultado_final <- tibble(
+  hgnc_symbol = gene_data$hgnc_symbol,
+  seq_human_orig = gene_data$peptide_human,
+  seq_mouse_orig = gene_data$peptide_mouse,
+  seq_human_aligned = seqs_alinhadas["Human"],
+  seq_mouse_aligned = seqs_alinhadas["Mouse"],
+  identidade = identidade_global
+)
+
 ```
+
 
 
 
