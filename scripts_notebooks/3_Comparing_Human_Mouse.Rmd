@@ -4483,7 +4483,7 @@ correlation_long_all_btm_mouse_human_timepoints_summary_plot %>%
 
 BTMs correlation, intra- and inter-species Compare means and NES
 
-Import
+###### Import
 
 ```{r}
 #Import datasets ------
@@ -4661,6 +4661,11 @@ Plot genes by btm group
 
 
 ```{r}
+#########################
+#Prepare data
+#########################
+
+#For each process, get inter-species correlation by summarizing 
 #Convert to wide
 dge_btm_process_genes_wide =
   dge_btm_process_genes_matched  %>% 
@@ -4687,10 +4692,16 @@ dge_btm_process_genes_wide =
       group
     ) %>% 
   drop_na(Human, Mouse) 
-  
+
+#Check if all pathogens and timepoints are present  
 dge_btm_process_genes_wide %>% 
   dplyr::count(pathogen, timepoint)
 
+#########################
+#Function
+#########################
+
+#Correlation function to run without errors caused by low n
 safe_cor_test <- function(x, y, method) {
   # Remove NAs and infinite values first
   ok <- is.finite(x) & is.finite(y)
@@ -4710,30 +4721,28 @@ safe_cor_test <- function(x, y, method) {
   }
 }
 
-dge_btm_process_genes_correlation = dge_btm_process_genes_wide %>%
+#########################
+#Compute correlations
+#########################
+
+# Get correlation of processes, by correlating their genes values
+# Grouping: Pathogen, Timepoint, and Process (BTM)
+dge_btm_process_genes_correlation <- dge_btm_process_genes_wide %>%
+  # 1. Group and calculate Spearman correlation per BTM/Pathogen/Timepoint
   group_by(pathogen, timepoint, process) %>%
   summarise(
-    test_result = list(safe_cor_test(
-      x = Human, y = Mouse, method = "spearman"
-    )),
-    .groups = "drop",
     n_genes = n(),
-    # group
+    test_result = list(safe_cor_test(x = Human, y = Mouse, method = "spearman")),
+    .groups = "drop"
   ) %>%
 
-  mutate(test_result = purrr::map(
-    test_result,
-    ~ if (is.null(.x))
-      list(estimate = NA_real_, p.value = NA_real_)
-    else
-      .x 
-    )) %>%
+  # 2. Extract statistics and handle potential NULLs from safe_cor_test
   mutate(
-    cor_value = purrr::map_dbl(test_result, ~ .x$estimate),
-    p_value   = purrr::map_dbl(test_result, ~ .x$p.value)
+    cor_value = map_dbl(test_result, ~ .x$estimate %||% NA_real_),
+    p_value   = map_dbl(test_result, ~ .x$p.value %||% NA_real_)
   ) %>%
-  select(-test_result) %>%
-  # Labels
+
+  # 3. Compute R² and generate significance labels (p-value thresholds)
   mutate(
     r_squared = cor_value^2,
     p_label = case_when(
@@ -4742,49 +4751,45 @@ dge_btm_process_genes_correlation = dge_btm_process_genes_wide %>%
       p_value <= 0.10 ~ "*",
       TRUE            ~ "ns"
     ),
-    cor_label = paste0(
-      "r=",
-      round(cor_value, 2),
-      ", R²=",
-      round(r_squared, 2),
-      ", ",
-      p_label
-    )
+    # Use sprintf for cleaner string formatting and rounding
+    cor_label = sprintf("r=%.2f, R²=%.2f, %s", cor_value, r_squared, p_label)
   ) %>%
+  
+  # 4. Final organization
+  select(-test_result) %>%
   arrange(timepoint) %>% 
   distinct()
 
+#Check
 dge_btm_process_genes_correlation %>% 
   dplyr::count(pathogen, timepoint)
 
-dge_btm_process_genes_correlation_bygene = dge_btm_process_genes_wide %>%
+#Save
+dge_btm_process_genes_correlation %>% 
+  saveRDS(file = here("tables", "all_human_mouse_dge_btm_process_genes_correlation.rds"))
+
+# Get correlation for each gene across different pathogens/conditions
+dge_btm_process_genes_correlation_bygene <- dge_btm_process_genes_wide %>%
+  # 1. Filter and isolate relevant data points
   select(symbol, pathogen, timepoint, Mouse, Human) %>% 
   filter(!pathogen %in% c("Influenza", "Hepatitis B")) %>% 
   distinct() %>% 
-  arrange(symbol) %>% 
+
+  # 2. Group by gene symbol and compute Spearman correlation
   group_by(symbol) %>%
   summarise(
-    test_result = list(safe_cor_test(
-      x = Human, y = Mouse, method = "spearman"
-    )),
-    .groups = "drop",
     n_pathogens = n(),
-    # group
+    test_result = list(safe_cor_test(x = Human, y = Mouse, method = "spearman")),
+    .groups = "drop"
   ) %>%
 
-  mutate(test_result = purrr::map(
-    test_result,
-    ~ if (is.null(.x))
-      list(estimate = NA_real_, p.value = NA_real_)
-    else
-      .x 
-    )) %>%
+  # 3. Extract statistics and handle NULL results
   mutate(
-    cor_value = purrr::map_dbl(test_result, ~ .x$estimate),
-    p_value   = purrr::map_dbl(test_result, ~ .x$p.value)
+    cor_value = map_dbl(test_result, ~ .x$estimate %||% NA_real_),
+    p_value   = map_dbl(test_result, ~ .x$p.value   %||% NA_real_)
   ) %>%
-  select(-test_result) %>%
-  # Labels
+
+  # 4. Generate R² and significance labels
   mutate(
     r_squared = cor_value^2,
     p_label = case_when(
@@ -4793,62 +4798,47 @@ dge_btm_process_genes_correlation_bygene = dge_btm_process_genes_wide %>%
       p_value <= 0.10 ~ "*",
       TRUE            ~ "ns"
     ),
-    cor_label = paste0(
-      "r=",
-      round(cor_value, 2),
-      ", R²=",
-      round(r_squared, 2),
-      ", ",
-      p_label
-    )
+    cor_label = sprintf("r=%.2f, R²=%.2f, %s", cor_value, r_squared, p_label)
   ) %>%
+
+  # 5. Final organization sorted by correlation strength
+  select(-test_result) %>%
   arrange(cor_value) %>% 
   distinct()
 
 dge_btm_process_genes_correlation_bygene
-
+#Save
 dge_btm_process_genes_correlation_bygene %>% 
   saveRDS(file = here("tables", "all_human_mouse_dge_btm_process_genes_correlation_bygene.rds"))
 ```
 
 
 ```{r fig.height = 10, fig.width=16}
-correlation_processes_bypathogen_time_df = dge_btm_process_genes_correlation %>% 
+#Clean and rank by absolute correlation strength
+correlation_processes_bypathogen_time_df <- dge_btm_process_genes_correlation %>% 
+  # 1. Clean and rank by absolute correlation strength
+  drop_na(cor_value) %>% 
   group_by(pathogen, timepoint) %>% 
-  arrange(process, 
-          -abs(cor_value)) %>% 
+  arrange(process, -abs(cor_value)) %>% 
   distinct() %>% 
   ungroup() %>% 
-  inner_join(btm_annotation_genes %>% select(process, group),
-             by = "process") %>% 
-  distinct() %>% 
-  drop_na(cor_value)
+
+  # 2. Map processes to functional groups
+  inner_join(
+    btm_annotation_genes %>% select(process, group),
+    by = "process"
+  ) %>% 
+  
+  # 3. Final cleanup
+  distinct()
 ```
 
-
+Plot processes correlation by timepoint and pathogen/condition
+Plot distributions
 ```{r fig.height = 10, fig.width=16}
-#Histogram and violin
-correlation_processes_bypathogen_time = correlation_processes_bypathogen_time_df %>%
-  ggplot() +
-  aes(x = timepoint,
-      y = cor_value,
-      fill = timepoint,
-      color = timepoint) +
-  facet_nested_wrap(~pathogen, scales = "free_x") +
-  geom_violin(color = NA,
-              fill = "black",
-              alpha = 0.1) +
-  geom_violin(color = NA,
-              data = . %>% 
-                filter(p_value <= 0.05),
-              # fill = "black",
-              alpha = 0.3) + 
-  geom_boxplot(color = "black",
-               width = 0.1,
-               fill = NA,
-               outliers = F) +
-  #Get top and bottom genes
-  geom_point(data = bind_rows(
+#Plot processes correlation by timepoint and pathogen/condition
+#Select important processes by correlation and significance
+selected_processes_df = bind_rows(
                     #Top, cor > 0
                     correlation_processes_bypathogen_time_df %>%
                       filter(p_value <= 0.05,
@@ -4881,7 +4871,30 @@ correlation_processes_bypathogen_time = correlation_processes_bypathogen_time_df
                       filter(n_genes > 3) %>% 
                       arrange(cor_value,  -n_genes) %>%
                       slice_head(n = 2)
-                  ),
+                  )
+
+#Histogram and violin
+correlation_processes_bypathogen_time = correlation_processes_bypathogen_time_df %>%
+  ggplot() +
+  aes(x = timepoint,
+      y = cor_value,
+      fill = timepoint,
+      color = timepoint) +
+  facet_nested_wrap(~pathogen, scales = "free_x") +
+  geom_violin(color = NA,
+              fill = "black",
+              alpha = 0.1) +
+  geom_violin(color = NA,
+              data = . %>% 
+                filter(p_value <= 0.05),
+              # fill = "black",
+              alpha = 0.3) + 
+  geom_boxplot(color = "black",
+               width = 0.1,
+               fill = NA,
+               outliers = F) +
+  #Get top and bottom genes
+  geom_point(data = selected_processes_df,
              color = "black",
              pch = 21,
              fill = "white"
@@ -4897,40 +4910,7 @@ correlation_processes_bypathogen_time = correlation_processes_bypathogen_time_df
                   fill = "white",  lineheight = 0.6,
                   box.padding = unit(0, "cm"), 
                   label.padding = unit(0.1, "cm"), 
-                  data = bind_rows(
-                    #Top, cor > 0
-                    correlation_processes_bypathogen_time_df %>%
-                      filter(p_value <= 0.05,
-                             cor_value >0) %>% 
-                      group_by(pathogen, timepoint) %>%
-                      filter(n_genes > 3) %>% 
-                      arrange(-cor_value,  -n_genes) %>%
-                      slice_head(n = 3),
-                     #Top, cor < 0
-                    correlation_processes_bypathogen_time_df %>%
-                      filter(p_value <= 0.05,
-                             cor_value <0) %>% 
-                      group_by(pathogen, timepoint) %>%
-                      filter(n_genes > 3) %>% 
-                      arrange(cor_value,  -n_genes) %>%
-                      slice_head(n = 3),
-                    #Bottom, cor > 0
-                    correlation_processes_bypathogen_time_df %>%
-                      filter(p_value <= 0.05,
-                             cor_value >0) %>% 
-                      group_by(pathogen, timepoint) %>%
-                      filter(n_genes > 3) %>% 
-                      arrange(cor_value,  -n_genes) %>%
-                      slice_head(n = 3),
-                    #Bottom, cor < 0
-                    correlation_processes_bypathogen_time_df %>%
-                      filter(p_value <= 0.05,
-                             cor_value < 0) %>% 
-                      group_by(pathogen, timepoint) %>%
-                      filter(n_genes > 3) %>% 
-                      arrange(cor_value,  -n_genes) %>%
-                      slice_head(n = 3)
-                  ) %>% 
+                  data = selected_processes_df %>% 
                    mutate(process = str_wrap(process, width = 10))
   ) +
   stat_summary(
@@ -4965,26 +4945,22 @@ correlation_processes_bypathogen_time = correlation_processes_bypathogen_time_df
   labs(x = "Time",
        y = "Correlation, Spearman",
        color = "",
-       fill = "") 
+       fill = "",
+       title = "Correlation of biological processes by gene expression, stratified by pathogen and time.",
+       subtitle = "Gray distribution: All observed values (unfiltered).\nColored distribution: Significant positive correlations (r > 0, p<=0.05)") 
 
 
 correlation_processes_bypathogen_time
 
-correlation_processes_bypathogen_time %>% 
+correlation_processes_bypathogen_time %>%
   ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_intramodule_correlation_violinplot_labeled.png"),
-         width = 16, 
+         width = 16,
          height = 10)
 ```
 
-
-
-Does the choice of using DEGs or all genes affect the correlation?
-
-
-
-Heatmap
-
+Plot heatmap
 ```{r fig.height=20, fig.width=10}
+#Heatmap
 btm_correlation_process_heatmap =
   correlation_processes_bypathogen_time_df %>% 
   mutate(
@@ -5037,6 +5013,7 @@ ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_intramodule_
 
 
 
+###### Leading edge analysis
 Are the leading edges in mice the same in humans?
 
 ```{r}
@@ -5081,39 +5058,26 @@ gsea_btm_results_core_joined %>%
 ```
 
 Get shared percentage
-
-
 ```{r fig.height = 3, fig.width=16}
-shared_perc = gsea_btm_results_core_joined %>% 
+#Get percent LEGs, by status, process, pathogen and timepoint
+legs_perc = gsea_btm_results_core_joined %>% 
   distinct() %>% 
   group_by(pathogen, timepoint, process, status) %>% 
   summarise(n = n(), .groups = "drop_last") %>% 
   mutate(percent = (n / sum(n)) * 100,
          ntotal = sum(n),
          percent = percent %>% round(0)) %>% 
-  ungroup() %>% 
-  filter(status == "Shared")
-
-#Which are the processes that share most of the core genes?
-shared_perc %>% 
-  arrange(-n, -percent)
+  ungroup() 
 
 #What is the mean percentage?
-mean_percentage_shared = shared_perc %>% 
-  group_by(pathogen, timepoint) %>% 
+mean_percentage_legs = legs_perc %>% 
+  group_by(pathogen, timepoint, status) %>% 
   summarise(mean_perc = mean(percent),
             median_perc = median(percent)) 
 
-mean_percentage_shared %>% 
-  ungroup() %>% 
-  summarise(mean_perc = mean(mean_perc))
-
-
-# shared_perc_df_plot %>%
-#   dplyr::count(pathogen, timepoint, status) %>%
-#   distinct()
-
-shared_perc_plot_df = shared_perc %>%
+#Prepare the plot df
+shared_perc_plot_df = legs_perc %>% 
+  filter(status == "Shared") %>% 
   mutate(process = fct_reorder(process, percent),
          treatment = case_when(pathogen %in% c("Hepatitis B", "Influenza") ~ "Vaccination",
                       pathogen %in% c( "Saureus", "Ecoli") ~ "Infection",
@@ -5157,6 +5121,7 @@ shared_processes_bypathogen_time = shared_perc_plot_df %>%
              pch = 21,
              fill = "white"
                               ) +
+  #Show top and bottom processes by percent shared LEGs and total of LEGs 
   geom_text_repel(aes(label = process), 
                   max.overlaps = 10000,
                   size = 2, 
@@ -5214,99 +5179,18 @@ shared_processes_bypathogen_time = shared_perc_plot_df %>%
        y = "%Shared LEGs",
        color = "",
        fill = "") +
-  guides(fill = guide_legend(by.row = T, nrow = 1))
+  guides(fill = guide_legend(byrow = T, nrow = 1))
 
 shared_processes_bypathogen_time
 
-shared_processes_bypathogen_time %>%
-  ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_intramodule_shared_violinplot_percentage_labeled.png"),
-         width = 16,
-         height = 4)
+#Save
+# shared_processes_bypathogen_time %>%
+#   ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_intramodule_shared_violinplot_percentage_labeled.png"),
+#          width = 16,
+#          height = 4)
 ```
 
 
-
-
-
-
-Bubble plot
-```{r fig.height=5, fig.width=16}
-#What does the choice of using DEGs or all genes affect the correlation and the number of genes?
-shared_perc_df_plot = shared_perc %>%
-  inner_join(gsea_btm_results_core %>% select(pathogen, timepoint, process, group),
-             by = join_by("pathogen", "timepoint", "process")) %>%
-  # filter(status == "Shared") %>%
-  inner_join(mean_percentage_shared,
-             by = join_by(pathogen, timepoint, status)) %>%
-  mutate(process = fct_reorder(process, percent),
-         treatment = case_when(pathogen %in% c("Hepatits B", "Influenza") ~ "Vaccination",
-                      pathogen %in% c( "Saureus", "Ecoli") ~ "Infection",
-                      pathogen %in% c( "Burn", "Trauma") ~ "Injury",
-                      T ~ pathogen),
-         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury"),
-         timepoint = fct_relevel(timepoint, c("Early hours","2h", "4h", "6h", "12h", "24h",
-                                                    "Day 1", "Day 3", "Day 7")),
-         facet_label = paste0(timepoint, ",\n Mean Shared = ", round(mean_perc, 1), "%")) %>%
-  arrange(-n, -percent) %>%
-distinct()
-
-btm_correlation_setsize_plot = shared_perc_df_plot %>% 
-  inner_join(filter_1 %>% select(pathogen, timepoint, n_genes, process, cor_value, r_squared, p_label),
-             by = join_by(pathogen, timepoint, process)) %>% 
-  distinct() %>% 
-  ggplot() +
-  aes(y = cor_value, 
-      x = percent,
-      fill = group,
-      group = process) +
-  facet_nested_wrap(vars(pathogen, timepoint),
-                    scales = "free",
-                    nrow = 2,
-                    strip = strip_nested(size = "variable")) +
-  geom_point(aes(size = n_genes,
-                 color = group),
-             alpha = 1,
-             # color = "black"
-             ) +
-  geom_hline(yintercept = 0, linetype = 2) +
-  scale_fill_manual(values = immune_colors) +
-  scale_color_manual(values = immune_colors) +
-  theme_vaxgo() +
-  guides(fill = F,
-         color = guide_legend(override.aes = list(size = 3))) +
-  labs(color = "Group",
-       y = "Correlation",
-       x = "Shared (%)") +
-  #Theme
-    theme_vaxgo() +
-    theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 8),
-          axis.title.x = element_text(size = 8),
-          axis.text.y = element_text(size = 8),
-          axis.title.y = element_text(size = 8),
-          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
-          strip.text.x = element_text(angle = 0, hjust = 0., vjust = 0.5, size = 8),
-          legend.position = "top",
-          legend.direction = "horizontal", 
-          legend.text = element_text(size = 8, hjust = 0),
-          legend.title = element_text(size = 8),
-          legend.spacing.x = unit(0, 'cm'),
-          legend.spacing.y = unit(0, 'cm'),
-          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
-          legend.box.spacing = unit(0, "cm"),
-          panel.spacing.y = unit(0, "lines"), 
-          panel.spacing.x = unit(0, "lines"), 
-          plot.margin = margin(0, 0.3, 0, 0, unit = "cm"),
-          
-          ) 
-
-btm_correlation_setsize_plot
-
-btm_correlation_setsize_plot %>% 
-  ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_intramodule_correlation_setsize_shared.png"),
-         width = 16,
-         height = 5)
-  
-```
 
 
 
@@ -5314,7 +5198,11 @@ btm_correlation_setsize_plot %>%
 Bubbleplot
 ```{r fig.height=20, fig.width=10}
 #Percentage shared - Bubbleplot
-shared_perc_plot =  shared_perc_df_plot %>% 
+shared_perc_plot =  shared_perc_plot_df %>% 
+  inner_join(btm_annotation_genes %>% 
+               select(process, group) %>% 
+               distinct(),
+             by = "process") %>% 
   mutate(process = fct_reorder(process, n),
          group = fct_relevel(group, immune_order)) %>% 
   ggplot() +
@@ -5364,57 +5252,62 @@ shared_perc_plot %>%
 Do these leading edges have the same log2fc?
 
 ```{r}
-#Do these leading edges have the same log2fc?
+###########################################################
+#Compare log2FC and ranks of Leading Edge genes across species
+#Evaluate if Leading Edge (core) genes maintain consistent log_2FC and ranks between species for a specific process.
+###########################################################
+# 1. Define target process
+process_selected <- "immune activation - generic cluster"
 
-process_selected = "immune activation - generic cluster"
-
-df_test =
-  dge_btm_process_genes_wide %>% 
-  filter(process == process_selected) %>% 
+df_test <- dge_btm_process_genes_wide %>%
+  filter(process == process_selected) %>%
   
-  # Join com os genes core
+  # 2. Join with GSEA core enrichment (Leading Edge) genes
   full_join(
     gsea_btm_results_core_joined %>% 
       filter(process == process_selected),
-    by = join_by("pathogen", "process", "timepoint", symbol == gene)
+    by = join_by(pathogen, process, timepoint, symbol == gene)
   ) %>% 
   
-  # join com shared %
+  # 3. Integrate shared percentage metrics
   inner_join(
     shared_perc %>% 
-    filter(process == process_selected,
-             status == "Shared") %>%
-      rename(percent = percent,
-             status_percent = status),
-    by = join_by("pathogen", "process", "timepoint")
+      filter(process == process_selected, status == "Shared") %>%
+      rename(status_percent = status), # 'percent' is already clear
+    by = join_by(pathogen, process, timepoint)
   ) %>%
   
-  # join com NES
+  # 4. Integrate Normalized Enrichment Scores (NES)
   inner_join(
     dge_btm_gsea_mean_wide %>% 
       ungroup() %>% 
       filter(process == process_selected) %>% 
-      select(process, pathogen, timepoint, nes_Mouse, nes_Human),
-    by = join_by("pathogen", "process", "timepoint")
+      select(process, pathogen, timepoint, starts_with("nes_")),
+    by = join_by(pathogen, process, timepoint)
   ) %>% 
   
-  mutate(
-    nes_Mouse = round(nes_Mouse, 2),
-    nes_Human = round(nes_Human, 2)
+  # 5. Integrate correlation statistics
+  inner_join(
+    dge_btm_process_genes_correlation %>% 
+      select(timepoint, pathogen, process, cor_value, r_squared, p_label, cor_label),
+    by = join_by(pathogen, process, timepoint)
   ) %>% 
-  mutate(status = if_else(is.na(status), "Not core", status)) %>% 
-  
-  inner_join(dge_btm_process_genes_correlation %>% 
-               select(timepoint, pathogen, process, cor_value, r_squared, p_label, cor_label),
-             by = join_by("pathogen", "process", "timepoint")) %>% 
+
+  # 6. Data cleaning and dynamic label generation for faceting
   mutate(
-    facet_label = paste0(timepoint, ",\nShared = ", percent, "%,\n",
-      "NES Mouse = ", nes_Mouse, ",\nNES Human = ", nes_Human)) %>% 
+    across(starts_with("nes_"), ~ round(.x, 2)),
+    status = if_else(is.na(status), "Not core", status),
+    facet_label = sprintf(
+      "%s\nShared = %s%%\nNES Mouse = %.2f\nNES Human = %.2f",
+      timepoint, percent, nes_Mouse, nes_Human
+    )
+  ) %>% 
   arrange(timepoint) %>% 
   mutate(facet_label = fct_inorder(facet_label))
 
 df_test
 
+#Check
 dge_btm_gsea_mean_wide %>% 
   ungroup() %>% 
   select(pathogen, timepoint) %>% 
@@ -5425,7 +5318,11 @@ dge_btm_gsea_mean_wide %>%
 
 Positions using ranks
 ```{r fig.height=6, fig.width=20}
-#Positions using ranks
+#########################################################################
+# Plot gene positions across species using ranks to evaluate conservation
+#########################################################################
+
+# 1. Prepare data for ranking and categorical grouping
 df_test_ranked <- df_test %>%
   pivot_longer(
     names_to = "organism",
@@ -5435,62 +5332,63 @@ df_test_ranked <- df_test %>%
   group_by(pathogen, organism) %>%
   mutate(rank = rank(-log2fc, ties.method = "first")) %>%   
   ungroup() %>% 
-  arrange(rank) %>% 
   drop_na(log2fc) %>% 
-  mutate(
-    facet_label = paste0(timepoint, ",\n", cor_label, ",\nShared = ", percent, "%,\n",
-      "NES Mouse = ", nes_Mouse, ",\nNES Human = ", nes_Human
-    )) %>% 
-    arrange(timepoint) %>% 
-  mutate(facet_label = fct_inorder(facet_label),
-    organism = if_else(organism == "Human", "H", "M"),
-    treatment = case_when(pathogen %in% c("Hepatitis B", "Influenza") ~ "Vaccination",
-                               pathogen %in% c( "Saureus", "Ecoli") ~ "Infection",
-                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
-                               T ~ pathogen),
-         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
-    )
 
-df_test_ranked_plot = df_test_ranked %>% 
-  ggplot() +
-  aes(x = organism,
-      y = rank,
-      fill = status,
-      group = symbol,
-      color = status) +
-  facet_nested_wrap(~process + treatment + pathogen + facet_label,
-                    scales = "free",
-                    nrow = 2,
-                    strip = strip_nested(size = "variable")) +
-  geom_line(size = 0.5, alpha = 0.5, data = . %>% filter(status == "Not core")) +
-  geom_line(size = 0.5,alpha = 0.5,  data = . %>% filter(!(status %in% c("Not core", "Shared")))) +
-  geom_line(size = 0.5, alpha = 1,  data = . %>% filter((status %in% c("Shared")))) +
-  theme_vaxgo() +
-  scale_fill_manual(values = colors$comparison) +
+  # 2. Refine labels and categorical grouping (Vaccination, Infection, Injury)
+  mutate(
+    facet_label = sprintf(
+      "%s\n%s\nShared = %s%%\nNES M=%.2f, H=%.2f",
+      timepoint, cor_label, percent, nes_Mouse, nes_Human
+    ),
+    organism = if_else(organism == "Human", "H", "M"),
+    treatment = case_when(
+      pathogen %in% c("Hepatitis B", "Influenza") ~ "Vaccination",
+      pathogen %in% c("Saureus", "Ecoli")         ~ "Infection",
+      pathogen %in% c("Burn", "Trauma")           ~ "Injury",
+      TRUE                                        ~ pathogen
+    ),
+    treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
+  ) %>% 
+  arrange(timepoint) %>% 
+  mutate(facet_label = fct_inorder(facet_label))
+
+# 3. Generate slope plot with nested faceting
+df_test_ranked_plot <- ggplot(df_test_ranked) +
+  aes(x = organism, y = rank, group = symbol, color = status) +
+  
+  # Nested faceting by Process, Treatment, Pathogen, and stats
+  facet_nested_wrap(
+    ~process + treatment + pathogen + facet_label,
+    scales = "free",
+    nrow = 2,
+    strip = strip_nested(size = "variable")
+  ) +
+  
+  # Layered lines: Shared genes are drawn last (on top) with full opacity
+  geom_line(size = 0.5, alpha = 0.3, data = . %>% filter(status == "Not core")) +
+  geom_line(size = 0.5, alpha = 0.5, data = . %>% filter(!status %in% c("Not core", "Shared"))) +
+  geom_line(size = 0.7, alpha = 1.0, data = . %>% filter(status == "Shared")) +
+  
+  # Scales and Labels
   scale_color_manual(values = colors$comparison) +
-  labs(fill = "Core",
-       color = "Core",
-       y = "Rank",
-       x = "") +
-  scale_x_discrete(expand = c(0.01, 0.01)) +
-  scale_y_continuous(labels = label_number(suffix = "k", scale = 1e-3), transform = "reverse") +
+  scale_x_discrete(expand = c(0.05, 0.05)) +
+  scale_y_continuous(
+    labels = label_number(suffix = "k", scale = 1e-3), 
+    transform = "reverse" 
+  ) +
+  labs(color = "Core Status", y = "Rank (Descending log2FC)", x = NULL) +
+  
+  # Theme and Legend styling
+  theme_vaxgo() +
   guides(color = guide_legend(override.aes = list(linewidth = 3))) +
-  #Theme
-    theme_vaxgo() +
-    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, size = 8),
-          axis.text.y = element_text(size = 8),
-          strip.text.x = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 8),
-          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 8),
-          panel.spacing = unit(0, "lines"),
-          legend.position = "top",
-          legend.direction = "horizontal",
-          legend.title = element_text(vjust = 0.5, size = 8),
-        legend.margin=margin(0,0,0,0),
-        legend.box.margin=margin(0,0,-10,0),
-        plot.margin = margin(0, 0.5, 0, 0, unit = "cm"),
-          legend.text = element_text(size = 8, hjust = 0),
-           ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-          ) 
+  theme(
+    axis.text = element_text(size = 8),
+    strip.text = element_text(size = 8, hjust = 0),
+    panel.spacing = unit(0.2, "lines"),
+    legend.position = "top",
+    legend.margin = margin(0, 0, -10, 0),
+    ggh4x.facet.nestline = element_line(colour = "black")
+  )
 
 # df_test_ranked_plot +
 #   geom_text_repel(
@@ -5526,16 +5424,23 @@ df_test_ranked_plot = df_test_ranked %>%
 #   ) +
 #   coord_cartesian(clip = "off")
 
-df_test_ranked_plot %>%
-ggsave(filename = here("Figures", paste0("all_human_mouse_gsea_btm_results_leadingedge_core_ranks_lineplot_", process_selected, ".png")),
-         width = 20,
-         height = 6)
+# df_test_ranked_plot %>%
+# ggsave(filename = here("Figures", paste0("all_human_mouse_gsea_btm_results_leadingedge_core_ranks_lineplot_", process_selected, ".png")),
+#          width = 20,
+#          height = 6)
 
-# df_test_ranked_plot
+df_test_ranked_plot
 ```
 
 
+
+
+
+Unite
 ```{r fig.height=16, fig.width=20}
+#Unite plots
+
+#All plots
 leading_edges_plots = (
   (df_test_scatter + theme(legend.position = "top")) / 
   plot_spacer() / 
@@ -5563,10 +5468,7 @@ leading_edges_plots %>%
   ggsave(filename = here("Figures", paste0("all_human_mouse_gsea_btm_results_leadingedge_core_", process_selected, ".png")),
          width = 20,
          height = 16)
-```
 
-
-```{r fig.height=12, fig.width=20}
 #Shortened version
 leading_edges_plots_short = (
   (df_test_scatter + theme(legend.position = "top")) / 
@@ -5623,6 +5525,8 @@ gsea_btm_results_core_joined =
 #BTM gene correlation
 dge_btm_process_genes_correlation_bygene = 
   readRDS(file = here("tables", "all_human_mouse_dge_btm_process_genes_correlation_bygene.rds"))
+
+
 #Homologs
 all_alignments = read_csv(here("tables","human_to_mouse_alignment_mart_export.txt"))
 #BTMs
@@ -5634,23 +5538,29 @@ btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"
 ################
 
 #BTMs 
+# Get correlation of processes, by correlating their genes values
 alignments_human2mouse = all_alignments %>% 
-    clean_names() %>% 
+  clean_names() %>% 
+  #Filter for high-confidence orthologs with valid names
   filter(mouse_orthology_confidence_0_low_1_high == 1) %>% 
   drop_na(mouse_gene_name) %>%
+  
+  #Select relevant identity and homology columns
   select(gene = mouse_gene_name, mouse_homology_type,
          identity_human2mouse = percent_id_query_gene_identical_to_target_mouse_gene,
          identity_mouse2human = percent_id_target_mouse_gene_identical_to_query_gene) %>% 
   mutate(gene = str_to_upper(gene)) %>% 
-  #Filter genes with multiple identity scores
+  
+  #Resolve multiple identity scores by taking the median per gene
   group_by(gene) %>% 
   summarise(identity_human2mouse = median(identity_human2mouse)) %>% 
   ungroup() %>% 
-  #Append BTM processes
+  
+  #Filter and append BTM processes via inner join
   inner_join(gsea_btm_results_core_joined,
              by = join_by(gene)) 
 
-#All orthologs in the database
+# --- Reference: All orthologs in the database ---
 alignments_human2mouse_all = all_alignments %>% 
   clean_names() %>% 
   filter(mouse_orthology_confidence_0_low_1_high == 1) %>% 
@@ -5697,11 +5607,13 @@ gene_info_human =
 
 
 
-
+Compare sequence identity distributions across high-level functional groups (BTM groups).
 Box plot, independent, by process 
+
 ```{r fig.height=3, fig.width=4}
 
-#Box plot, independent, by process 
+# Get correlation of processes, by correlating their genes values
+# Calculate the mean identity per group to define the plot order
 group_order_mean = alignments_human2mouse %>% 
   select(process, group, gene, identity_human2mouse) %>% 
   group_by(group) %>% 
@@ -5709,8 +5621,10 @@ group_order_mean = alignments_human2mouse %>%
   arrange(mean)
 
 
+# Create the distribution plot (Violin + Boxplot + Pointrange)
 alignments_human2mouse_pointrange_group_btm = alignments_human2mouse %>% 
   select(process, group, gene, identity_human2mouse) %>% 
+  # Reorder groups based on the previously calculated means
   mutate(group = fct_relevel(group, group_order_mean$group)) %>% 
   distinct() %>% 
   ggplot() +
@@ -5718,42 +5632,54 @@ alignments_human2mouse_pointrange_group_btm = alignments_human2mouse %>%
       y = group,
       fill = group,
       color = group) +
+  
+  # Violin plot for density distribution
   geom_violin() +
+  
+  # Subtle boxplot for quartiles
   geom_boxplot(alpha = 0.1,
                width = 0.1,
                fill = NA,
-               color = "white")+
+               color = "white") +
+  
+  # Bootstrapped mean and confidence intervals (pointrange)
   stat_summary(fun.data = "mean_cl_boot",
                geom = "pointrange",
                size = 1,
                fatten = 0.5, 
-               # mapping = aes(color = group),
-               color = "black", show.legend = F)+
+               color = "black", show.legend = F) +
+  
+  # Styling and Scales
   scale_fill_manual(values = immune_colors) +
   scale_color_manual(values = immune_colors) +
   scale_y_discrete(expand = c(0.05, 0.05)) +
   scale_x_continuous(expand = c(0.01, 0.01)) +
   theme_vaxgo() +
-    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 10),
-          axis.text.y = element_text(size = 10),
-          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
-          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
-          panel.spacing = unit(0, "lines"),
-          plot.margin = margin(0, 0.3, 0, 0, unit = "cm"),
-          legend.position = "none",
-          legend.direction = "horizontal",
-          legend.margin=margin(0,0,0,0),
-          legend.box.margin=margin(0,0,-10,0),
-          legend.text = element_text(size = 10, hjust = 0),
-          legend.title = element_text(size = 10),
-          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-    ) +
+  
+  # Detailed theme adjustments for publication readiness
+  theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 10),
+        axis.text.y = element_text(size = 10),
+        strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+        panel.spacing = unit(0, "lines"),
+        plot.margin = margin(0, 0.3, 0, 0, unit = "cm"),
+        legend.position = "none",
+        legend.direction = "horizontal",
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(0,0,-10,0),
+        legend.text = element_text(size = 10, hjust = 0),
+        legend.title = element_text(size = 10),
+        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+  ) +
   labs(x = "%Identity (Human-to-Mouse)",
        y = "",
        color = "Group",
        fill = "Group")
 
+# Display the final plot
 alignments_human2mouse_pointrange_group_btm
+
+#Save
 # alignments_human2mouse_pointrange_group_btm %>%
 # ggsave(filename = here("Figures", "all_human_mouse_gsea_LEGs_alignment_btms_human2mouse_violinplot_group.png"),
 #          width = 12,
@@ -5761,25 +5687,28 @@ alignments_human2mouse_pointrange_group_btm
 ```
 
 
-Box plot, independent, by process 
+Integrate sequence identity with cross-species gene correlation, organized by functional hierarchy.
 ```{r fig.height=18, fig.width=10}
-#Box plot, independent, by process 
+# Get correlation of processes, by correlating their genes values
+# Establish process order based on median sequence identity
 process_order_median = alignments_human2mouse %>% 
   select(process, group, gene, identity_human2mouse) %>% 
   group_by(process) %>% 
   summarise(median = median(identity_human2mouse)) %>% 
   arrange(median)
 
+# Prepare the detailed process-level dataframe with correlation stats
 alignments_human2mouse_process_cor = alignments_human2mouse %>% 
   select(process, group, gene, identity_human2mouse) %>% 
   mutate(process = fct_relevel(process, process_order_median$process),
          group = fct_relevel(group, group_order_mean$group) %>% fct_rev()) %>% 
   distinct() %>% 
+  # Join with gene-level Spearman correlation results
   left_join(dge_btm_process_genes_correlation_bygene,
              by = join_by(gene == symbol)) %>% 
   drop_na(cor_value)
 
-#Summarise by group
+# Create a group-level summary dataset (duplicating 'group' as 'process')
 alignments_human2mouse_group_btm_summary_process = alignments_human2mouse %>% 
   select(process, group, gene, identity_human2mouse) %>% 
   mutate(group = fct_relevel(group, group_order_mean$group) %>% fct_rev()) %>% 
@@ -5790,59 +5719,70 @@ alignments_human2mouse_group_btm_summary_process = alignments_human2mouse %>%
          process = fct_relevel(process, alignments_human2mouse$group %>% unique())) %>% 
   drop_na(cor_value) 
 
-#Bind
+# Bind both levels into a single dataframe for integrated plotting
 alignments_human2mouse_process_cor_withsummary = alignments_human2mouse_process_cor %>% 
   bind_rows(alignments_human2mouse_group_btm_summary_process)
 
 ```
 
-
+Visualize sequence identity distributions for individual processes within their functional groups.
 ```{r fig.height=18, fig.width=10}
-#Box plot, independent, by process 
-alignments_human2mouse_pointrange_process_btm =  alignments_human2mouse_process_cor_withsummary %>% 
+# Get correlation of processes, by correlating their genes values
+# Generate the detailed per-process sequence identity plot
+alignments_human2mouse_pointrange_process_btm = alignments_human2mouse_process_cor_withsummary %>% 
   ggplot() +
   aes(x = identity_human2mouse,
       y = process,
       fill = group,
       color = group) +
+  
+  # Vertical faceting by group with proportional spacing
   facet_grid(group~., 
-             scales = "free_y",
+             scales = "free_y", 
              space = "free_y") +
-  # geom_violin(alpha = 0.2) +
-  geom_boxplot(alpha = 0)+
+  
+  # Boxplot for distribution and Pointrange for mean CI
+  geom_boxplot(alpha = 0) +
   stat_summary(fun.data = "mean_cl_boot",
                geom = "pointrange",
                size = 1,
                fatten = 0.5, 
-               # mapping = aes(color = group),
-               color = "black", show.legend = F)+
+               color = "black", show.legend = F) +
+  
+  # Scales and Colors
   scale_fill_manual(values = immune_colors) +
   scale_color_manual(values = immune_colors) +
   scale_y_discrete(expand = c(0.05, 0.05)) +
   scale_x_continuous(expand = c(0.01, 0.01)) +
+  
+  # theme
   theme_vaxgo() +
-    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 8),
-          axis.text.y = element_text(size = 8),
-          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
-          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
-          axis.line.y.right = element_line(color = "black", linetype = 1),
-          panel.spacing = unit(0, "lines"),
-          plot.margin = margin(0, 0.3, 0, 0, unit = "cm"),
-          legend.position = "top",
-          legend.direction = "horizontal",
-          legend.margin=margin(0,0,0,0),
-          legend.box.margin=margin(0,0,-10,0),
-          legend.text = element_text(size = 8, hjust = 0),
-          legend.title = element_text(size = 8),
-          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-    ) +
+  theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 8),
+        axis.text.y = element_text(size = 8),
+        strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+        axis.line.y.right = element_line(color = "black", linetype = 1),
+        panel.spacing = unit(0, "lines"),
+        plot.margin = margin(0, 0.3, 0, 0, unit = "cm"),
+        legend.position = "top",
+        legend.direction = "horizontal",
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(0,0,-10,0),
+        legend.text = element_text(size = 8, hjust = 0),
+        legend.title = element_text(size = 8),
+        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+  ) +
   labs(x = "%Identity (Human-to-Mouse)",
        y = "",
        color = "Group",
        fill = "Group") +
+  
+  # Legend layout control
   guides(color = guide_legend(nrow = 2, byrow = T))
 
+# Display 
 alignments_human2mouse_pointrange_process_btm
+
 # alignments_human2mouse_pointrange_process_btm %>%
 # ggsave(filename = here("Figures", "all_human_mouse_gsea_LEGs_alignment_btms_human2mouse_lineplot_processes.png"),
 #          width = 10,
@@ -5851,328 +5791,16 @@ alignments_human2mouse_pointrange_process_btm
 ```
 
 
-
-
-
-```{r fig.height=5, fig.width=6}
-#Line plot, All, Global
-alignments_human2mouse_all_global_df = alignments_human2mouse %>% 
-  select(gene:pathogen, timepoint, status) %>% 
-  distinct() %>% 
-  mutate(gene_set = "Human vs. Mouse") %>% 
-  # filter(!pathogen %in% c("Influenza", "Hepatitis B")) %>%
-  bind_rows(
-            alignments_human2mouse %>% 
-              mutate(gene_set = "BTMs",
-                     #Separate by group (Immune vs Not immune)
-                     status = case_when(
-                                        group %in% c("ENERGY METABOLISM",
-                                                     "ECM AND MIGRATION",
-                                                     "CELL CYCLE",
-                                                     "SIGNAL TRANSDUCTION",
-                                                     "PLATELETS"
-                                                     ) ~ "Non-Immune BTMs",
-                                       # group %in% c("ENERGY METABOLISM",
-                                       #               "ECM AND MIGRATION",
-                                       #               "CELL CYCLE",
-                                       #               "SIGNAL TRANSDUCTION",
-                                       #               "PLATELETS"
-                                       #               ) ~ group,
-                                        group %in% c("NEUTROPHILS",
-                                                               "T CELLS",
-                                                               "MONOCYTES",
-                                                               "B CELLS",
-                                                               "INNATE RESPONSE",
-                                                               "NK CELLS",
-                                                               "IFN") ~ "Immune BTMs",
-                                                  T ~ status)
-                     ) %>% 
-              select(gene, status, identity_human2mouse, gene_set) %>% 
-              distinct(),
-            gene_info_human %>% 
-              distinct() %>% 
-              mutate(status = "All",
-                     gene_set = "All") %>% 
-              select(gene, status, identity_human2mouse, gene_set) %>% 
-              distinct()
-            ) %>% 
-  mutate(status = fct_relevel(status, "Human only", "Mouse only", "Shared", 
-                              "Immune BTMs", "ENERGY METABOLISM", "ECM AND MIGRATION", "CELL CYCLE", "SIGNAL TRANSDUCTION", "PLATELETS", 
-                              "All")) %>% 
-  left_join(dge_btm_process_genes_correlation_bygene,
-             by = join_by(gene == symbol)) %>% 
-  filter(gene_set ==  "Human vs. Mouse" | !is.na(cor_value))
-
-#Get frequency across conditions
-alignments_human2mouse_all_global_df_nshared = alignments_human2mouse_all_global_df %>% 
-  group_by(status, gene) %>% 
-  dplyr::summarize(n = n()) %>% 
-  ungroup() %>% 
-  inner_join(alignments_human2mouse_all_global_df %>% 
-               select(gene, identity_human2mouse, cor_value:cor_label) %>% 
-               distinct(),
-             by = "gene") 
-
-alignments_human2mouse_all_global_df_filtered = alignments_human2mouse_all_global_df %>% 
-  select(gene, status, identity_human2mouse) %>% 
-  distinct()
+By group, get important processes
+```{r}
+alignments_human2mouse_process_cor %>% 
+  group_by(group, process) %>% 
+  summarise(identity_human2mouse = mean(identity_human2mouse, na.rm = T),
+            n)
 ```
 
-
-Correlation between variables?
 
 ```{r}
-alignments_human2mouse_all_global_df %>%
-  select(-pathogen, -timepoint) %>%
-  distinct() %>% 
-  # filter(p_value <= 0.05) %>%
-  filter(cor_value > 0) %>%
-  ggplot() +
-  aes(x = identity_human2mouse,
-      y = cor_value,
-      color = -log(p_value),
-      ) +
-  geom_point() +
-  geom_smooth(method = "lm") +
-  theme_vaxgo() +
-  labs(x = "%Identity",
-       y = "Rho")
-
-alignments_human2mouse_all_global_df %>%
-  select(-pathogen, -timepoint) %>% 
-  distinct() %>% 
-  drop_na(n_pathogens) %>% 
-  mutate(n_pathogens_f = fct_reorder(as.character(n_pathogens), n_pathogens)) %>% 
- drop_na(cor_value) %>% 
-  filter(p_value <= 0.05) %>%
-  filter(cor_value > 0) %>%
-  ggplot() +
-  aes(x = n_pathogens_f,
-      y = cor_value
-      ) +
-  geom_boxplot(aes(fill = status)) +
-  geom_point(aes(color = status))
-
-alignments_human2mouse_all_global_df %>%
-  select(-pathogen, -timepoint) %>% 
-  distinct() %>% 
-  drop_na(n_pathogens) %>% 
-  mutate(n_pathogens_f = fct_reorder(as.character(n_pathogens), n_pathogens)) %>% 
-  drop_na(cor_value) %>% 
-  filter(p_value <= 0.05) %>%
-  filter(cor_value > 0) %>%
-  ggplot() +
-  aes(x = n_pathogens_f,
-      y = identity_human2mouse,
-      color = cor_value
-      ) +
-  geom_boxplot() +
-  geom_point()
-```
-
-
-```{r fig.height=3, fig.width=4}
-#Is there an overrepresentation of gene biotypes over identity? ---------
-gene_info_human %>% 
-  select(hgnc_symbol, gene_biotype, identity_human2mouse) %>% 
-  distinct() %>% 
-  group_by(gene_biotype) %>% 
-  mutate(median_identity = median(identity_human2mouse)) %>% 
-  ungroup() %>%
-  filter(gene_biotype %in% c("miRNA", "protein_coding",
-                             "processed_pseudogene",
-                             "snoRNA",
-                             "lncRNA",
-                             "unprocessed_pseudogene")) %>% 
-  arrange(median_identity) %>%
-  mutate(gene_biotype = fct_inorder(gene_biotype)) %>% 
-  ggplot() +
-  aes(x = identity_human2mouse,
-      y = gene_biotype,) +
-  # facet_wrap(~gene_biotype,
-  #            scales = "free") +
-    # geom_point(alpha = 0.2,
-    #           size = 0.1,
-    #           color = "black") +
-  geom_violin(fill = "#4DBBD5FF",
-              alpha = 0.2,
-              color = NA, width = 2) +
-  geom_boxplot(width = 0.3,
-               fill = NA) +
-  theme_vaxgo() +
-  labs(x = "%Identity",
-       y = "",
-       title = "Biotype and %Identity of mouse orthologs")
-```
-
-How LEGs are associated with identity, by gene cellular component ontology?
-```{r fig.height=3, fig.width=12}
-#How LEGs are associated with identity, by gene cellular component ontology? ------
-#Point range of 
-gene_info_human %>%
-   inner_join(alignments_human2mouse_all_global_df_filtered %>% 
-               select(-identity_human2mouse),
-             by = join_by("hgnc_symbol"==gene)) %>% 
-  filter(go_domain == "cellular_component",
-         go_name %in% c("nucleus", "cytoplasm", "membrane", "extracellular region")) %>% 
-  select(hgnc_symbol, go_name, identity_human2mouse, status) %>% 
-  distinct() %>% 
-  arrange(identity_human2mouse) %>% 
-  mutate(status = str_replace(status, " ", "\n")) %>%
-  mutate(status = fct_relevel(
-    status,
-    "Human\nonly",
-    "Mouse\nonly",
-    "Shared",
-    "All",
-    "Non-Immune\nBTMs",
-    "Immune\nBTMs"
-  )) %>% 
-  ggplot() +
-  aes(x = status,
-      y = identity_human2mouse,
-      fill = status,
-      color = status) +
-  facet_wrap(~str_to_title(go_name),
-             nrow = 1,
-             axes = "all") +
-  stat_summary(fun.data = "mean_cl_boot",
-               geom = "pointrange") +
-  theme_vaxgo() +
-  theme(legend.position = "top",
-        axis.text.x = element_blank()) +
-  scale_color_manual(values = colors$comparison) +
-  scale_fill_manual(values = colors$comparison) +
-  labs(color = "Status",
-       y = "%Identity",
-       x = "") +
-    guides(color = guide_legend(nrow = 1, byrow = T),
-           fill = "none")
-
-gene_info_human %>%
-   inner_join(alignments_human2mouse_all_global_df_filtered %>% 
-               select(-identity_human2mouse),
-             by = join_by("hgnc_symbol"==gene)) %>% 
-  filter(go_domain == "cellular_component",
-         go_name %in% c("nucleus", "cytoplasm", "membrane", "extracellular region")) %>% 
-  select(hgnc_symbol, go_name, identity_human2mouse, status) %>% 
-  distinct() %>% 
-  arrange(identity_human2mouse) %>% 
-  mutate(status = str_replace(status, " ", "\n")) %>% 
-    mutate(status = fct_relevel(
-    status,
-    "Human\nonly",
-    "Mouse\nonly",
-    "Shared",
-    "All",
-    "Non-Immune\nBTMs",
-    "Immune\nBTMs"
-  )) %>% 
-  ggplot() +
-  aes(x = status,
-      y = identity_human2mouse,
-      fill = status,
-      color = status) +
-  facet_wrap(~str_to_title(go_name),
-             scales = "free",
-             nrow = 1,
-             axes = "all") +
-  geom_violin(alpha = 0.2,
-              color = NA) +
-  geom_boxplot(width = 0.2) +
-  theme_vaxgo() +
-  theme(axis.text.x = element_blank(),
-        legend.position = "top") +
-  scale_color_manual(values = c(colors$comparison_color,
-                                "All" = "black")) +
-  scale_fill_manual(values = c(colors$comparison,
-                                "All" = "black")) +
-  theme(axis.title.x = element_blank()) +
-  guides(color = "none",
-         fill = guide_legend(nrow = 1, byrow = T)) +
-  labs(fill = "Status",
-       y = "%Identity",
-       x = "")
-
-```
-
-
-
-
-Distributions
-```{r fig.height=8, fig.width=12}
-#Point range of mean
-alignments_human2mouse_pointrange_all_global = alignments_human2mouse_all_global_df_filtered %>%
-   mutate(
-    status = str_replace(status, " ", "\n"),
-    status = fct_relevel(
-    status,
-    "Human\nonly",
-    "Mouse\nonly",
-    "Shared",
-    "All",
-    "Non-Immune\nBTMs",
-    "Immune\nBTMs"
-  )) %>% 
-  mutate(analysis = "Mean Conservation, Bootstrap") %>%
-  ggplot() +
-  aes(x = status,
-      y = identity_human2mouse,
-      fill = status,
-      color = status,
-      group = status) +
-  facet_wrap(~analysis) +
-  stat_summary(fun.data = "mean_cl_boot",
-               geom = "pointrange",
-               size = 1,
-               fatten = 2,
-               stroke = 0.5,
-               pch = 21,
-               mapping = aes(color = status),
-               position = position_dodge2(0)
-               )+
-  stat_summary(fun.data = "mean_cl_boot", 
-               geom = "text", 
-               aes(label = after_stat(round(y, 1))), 
-               hjust = -0.2, 
-               size = 3,
-               color = "black"
-  ) +
-  scale_fill_manual(values = c(colors$comparison,
-                               "BTMs" = "#4361ee",
-                               "All" = "white")) +
-  scale_color_manual(values = c(colors$comparison,
-                               "BTMs" = "#4361ee",
-                               "All" = "black")) +
-  scale_x_discrete(expand = c(0.05, 0.05)) +
-  scale_y_continuous(expand = c(0.01, 0.01),
-                     # limits = c(82, 86)
-                     ) +
-  theme_vaxgo() +
-    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 10),
-          axis.text.y = element_text(size = 10),
-          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
-          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
-          panel.spacing = unit(1.1, "lines"),
-          plot.margin = margin(0.3, 0.3, 0, 0, unit = "cm"),
-          legend.position = "none",
-          legend.direction = "horizontal",
-          legend.margin=margin(0,0,0,0),
-          legend.box.margin=margin(0,0,-10,0),
-          legend.text = element_text(size = 10, hjust = 0),
-          legend.title = element_text(size = 10),
-          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-    ) +
-  labs(x = "Status",
-       y = "%Identity (Human-to-Mouse)",
-       color = "",
-       fill = "")
-
-alignments_human2mouse_pointrange_all_global
-```
-
-
-```{r fig.height=8, fig.width=8}
 #Histogram, violin, filtered genes
 alignments_human2mouse_genes_filtered = bind_rows(
   
@@ -6364,15 +5992,501 @@ alignments_human2mouse_histogram_all_global = alignments_human2mouse_all_global_
        y = "%Identity (Human-to-Mouse)",
        color = "",
        fill = "") 
-  # guides(color = guide_legend(nrow = 3, byrow = T),
-  #        fill = guide_legend(nrow = 3, byrow = T))
 
-alignments_human2mouse_histogram_all_global
+
+#Box plot, independent, by process 
+alignments_human2mouse_pointrange_process_btm =  alignments_human2mouse_process_cor_withsummary %>% 
+  ggplot() +
+  aes(x = identity_human2mouse,
+      y = process,
+      fill = group,
+      color = group) +
+  facet_grid(group~., 
+             scales = "free_y",
+             space = "free_y") +
+  # geom_violin(alpha = 0.2) +
+  geom_boxplot(alpha = 0)+
+  stat_summary(fun.data = "mean_cl_boot",
+               geom = "pointrange",
+               size = 1,
+               fatten = 0.5, 
+               # mapping = aes(color = group),
+               color = "black", show.legend = F)+
+  scale_fill_manual(values = immune_colors) +
+  scale_color_manual(values = immune_colors) +
+  scale_y_discrete(expand = c(0.05, 0.05)) +
+  scale_x_continuous(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 8),
+          axis.text.y = element_text(size = 8),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+          axis.line.y.right = element_line(color = "black", linetype = 1),
+          panel.spacing = unit(0, "lines"),
+          plot.margin = margin(0, 0.3, 0, 0, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.margin=margin(0,0,0,0),
+          legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 8, hjust = 0),
+          legend.title = element_text(size = 8),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+    ) +
+  labs(x = "%Identity (Human-to-Mouse)",
+       y = "",
+       color = "Group",
+       fill = "Group") +
+  guides(color = guide_legend(nrow = 2, byrow = T))
+
+alignments_human2mouse_pointrange_process_btm
 ```
 
 
-```{r fig.height=8, fig.width=8}
-# #Unite
+
+
+```{r fig.height=5, fig.width=6}
+# Get correlation of processes, by correlating their genes values
+# 1. Construct the Global comparison dataframe (All genes vs BTMs vs Orthologs)
+alignments_human2mouse_all_global_df = alignments_human2mouse %>% 
+  select(gene:pathogen, timepoint, status) %>% 
+  distinct() %>% 
+  mutate(gene_set = "Human vs. Mouse") %>% 
+  # Bind with specialized BTM categories
+  bind_rows(
+    alignments_human2mouse %>% 
+      mutate(gene_set = "BTMs",
+             # Aggregate BTM groups into functional "Immune" and "Non-Immune" blocks
+             status = case_when(
+               group %in% c("ENERGY METABOLISM", "ECM AND MIGRATION", "CELL CYCLE", 
+                            "SIGNAL TRANSDUCTION", "PLATELETS") ~ "Non-Immune BTMs",
+               group %in% c("NEUTROPHILS", "T CELLS", "MONOCYTES", "B CELLS", 
+                            "INNATE RESPONSE", "NK CELLS", "IFN") ~ "Immune BTMs",
+               TRUE ~ status)
+      ) %>% 
+      select(gene, status, identity_human2mouse, gene_set) %>% 
+      distinct(),
+    # Bind with the total ortholog reference set
+    gene_info_human %>% 
+      distinct() %>% 
+      mutate(status = "All", gene_set = "All") %>% 
+      select(gene, status, identity_human2mouse, gene_set) %>% 
+      distinct()
+  ) %>% 
+  # 2. Relevel status for logical visualization flow
+  mutate(status = fct_relevel(status, "Human only", "Mouse only", "Shared", 
+                              "Immune BTMs", "ENERGY METABOLISM", "ECM AND MIGRATION", 
+                              "CELL CYCLE", "SIGNAL TRANSDUCTION", "PLATELETS", "All")) %>% 
+  # 3. Integrate with functional correlation results
+  left_join(dge_btm_process_genes_correlation_bygene,
+            by = join_by(gene == symbol)) %>% 
+  filter(gene_set == "Human vs. Mouse" | !is.na(cor_value))
+
+# 4. Calculate gene frequency (How many conditions/pathogens each gene appears in)
+alignments_human2mouse_all_global_df_nshared = alignments_human2mouse_all_global_df %>% 
+  group_by(status, gene) %>% 
+  dplyr::summarize(n = n(), .groups = "drop") %>% 
+  inner_join(alignments_human2mouse_all_global_df %>% 
+               select(gene, identity_human2mouse, cor_value:cor_label) %>% 
+               distinct(),
+             by = "gene") 
+
+# 5. Final cleaned reference for identity distribution
+alignments_human2mouse_all_global_df_filtered = alignments_human2mouse_all_global_df %>% 
+  select(gene, status, identity_human2mouse) %>% 
+  distinct()
+```
+
+
+Correlation between variables?
+
+```{r}
+alignments_human2mouse_all_global_df %>%
+  select(-pathogen, -timepoint) %>%
+  distinct() %>% 
+  # filter(p_value <= 0.05) %>%
+  filter(cor_value > 0) %>%
+  ggplot() +
+  aes(x = identity_human2mouse,
+      y = cor_value,
+      color = -log(p_value),
+      ) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  theme_vaxgo() +
+  labs(x = "%Identity",
+       y = "Rho")
+
+alignments_human2mouse_all_global_df %>%
+  select(-pathogen, -timepoint) %>% 
+  distinct() %>% 
+  drop_na(n_pathogens) %>% 
+  mutate(n_pathogens_f = fct_reorder(as.character(n_pathogens), n_pathogens)) %>% 
+ drop_na(cor_value) %>% 
+  filter(p_value <= 0.05) %>%
+  filter(cor_value > 0) %>%
+  ggplot() +
+  aes(x = n_pathogens_f,
+      y = cor_value
+      ) +
+  geom_boxplot(aes(fill = status)) +
+  geom_point(aes(color = status))
+
+alignments_human2mouse_all_global_df %>%
+  select(-pathogen, -timepoint) %>% 
+  distinct() %>% 
+  drop_na(n_pathogens) %>% 
+  mutate(n_pathogens_f = fct_reorder(as.character(n_pathogens), n_pathogens)) %>% 
+  drop_na(cor_value) %>% 
+  filter(p_value <= 0.05) %>%
+  filter(cor_value > 0) %>%
+  ggplot() +
+  aes(x = n_pathogens_f,
+      y = identity_human2mouse,
+      color = cor_value
+      ) +
+  geom_boxplot() +
+  geom_point()
+```
+
+###### Gene biotype
+```{r fig.height=3, fig.width=4}
+#Is there an overrepresentation of gene biotypes over identity? ---------
+gene_info_human %>% 
+  select(hgnc_symbol, gene_biotype, identity_human2mouse) %>% 
+  distinct() %>% 
+  group_by(gene_biotype) %>% 
+  mutate(median_identity = median(identity_human2mouse)) %>% 
+  ungroup() %>%
+  filter(gene_biotype %in% c("miRNA", "protein_coding",
+                             "processed_pseudogene",
+                             "snoRNA",
+                             "lncRNA",
+                             "unprocessed_pseudogene")) %>% 
+  arrange(median_identity) %>%
+  mutate(gene_biotype = fct_inorder(gene_biotype)) %>% 
+  ggplot() +
+  aes(x = identity_human2mouse,
+      y = gene_biotype,) +
+  # facet_wrap(~gene_biotype,
+  #            scales = "free") +
+    # geom_point(alpha = 0.2,
+    #           size = 0.1,
+    #           color = "black") +
+  geom_violin(fill = "#4DBBD5FF",
+              alpha = 0.2,
+              color = NA, width = 2) +
+  geom_boxplot(width = 0.3,
+               fill = NA) +
+  theme_vaxgo() +
+  labs(x = "%Identity",
+       y = "",
+       title = "Biotype and %Identity of mouse orthologs")
+```
+
+###### Cellular component ontology
+Evaluate sequence identity of Leading Edge Genes (LEGs) and other categories across major subcellular compartments.
+```{r fig.height=3, fig.width=12}
+# --- How LEGs are associated with identity, by gene cellular component ontology ---
+
+gene_info_human %>%
+  # 1. Integrate GO annotations with global identity and status data
+  inner_join(
+    alignments_human2mouse_all_global_df_filtered %>% 
+      select(-identity_human2mouse),
+    by = join_by("hgnc_symbol" == gene)
+  ) %>% 
+  
+  # 2. Filter for specific Cellular Component domains
+  filter(
+    go_domain == "cellular_component",
+    go_name %in% c("nucleus", "cytoplasm", "membrane", "extracellular region")
+  ) %>% 
+  
+  # 3. Clean and reformat status labels for plotting
+  select(hgnc_symbol, go_name, identity_human2mouse, status) %>% 
+  distinct() %>% 
+  mutate(status = str_replace(status, " ", "\n")) %>%
+  mutate(status = fct_relevel(
+    status,
+    "Human\nonly", "Mouse\nonly", "Shared", "All", 
+    "Non-Immune\nBTMs", "Immune\nBTMs"
+  )) %>% 
+  
+  # 4. Visualization: Compare identity across GO categories using facets
+  ggplot() +
+  aes(x = status,
+      y = identity_human2mouse,
+      fill = status,
+      color = status) +
+  facet_wrap(~str_to_title(go_name),
+             nrow = 1,
+             axes = "all") +
+  
+  # 5. Statistical Summary: Mean and 95% CI via bootstrapping
+  stat_summary(fun.data = "mean_cl_boot",
+               geom = "pointrange") +
+  
+  # 6. Styling, Scales, and Legends
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        axis.text.x = element_blank()) +
+  scale_color_manual(values = colors$comparison) +
+  scale_fill_manual(values = colors$comparison) +
+  labs(color = "Status",
+       y = "%Identity",
+       x = "") +
+  guides(color = guide_legend(nrow = 1, byrow = T),
+         fill = "none")
+
+# Distribution, boxplot and violin
+gene_info_human %>%
+  # 1. Join with global filtered identity data (excluding redundant column)
+  inner_join(
+    alignments_human2mouse_all_global_df_filtered %>% 
+      select(-identity_human2mouse),
+    by = join_by("hgnc_symbol" == gene)
+  ) %>% 
+  
+  # 2. Filter for major subcellular domains (Gene Ontology)
+  filter(
+    go_domain == "cellular_component",
+    go_name %in% c("nucleus", "cytoplasm", "membrane", "extracellular region")
+  ) %>% 
+  
+  # 3. Clean and reorder categories for consistent visualization
+  select(hgnc_symbol, go_name, identity_human2mouse, status) %>% 
+  distinct() %>% 
+  arrange(identity_human2mouse) %>% 
+  mutate(status = str_replace(status, " ", "\n")) %>% 
+  mutate(status = fct_relevel(
+    status,
+    "Human\nonly", "Mouse\nonly", "Shared", "All", 
+    "Non-Immune\nBTMs", "Immune\nBTMs"
+  )) %>% 
+  
+  # 4. Visualization: Layered distribution per compartment
+  ggplot() +
+  aes(x = status,
+      y = identity_human2mouse,
+      fill = status,
+      color = status) +
+  facet_wrap(~str_to_title(go_name),
+             scales = "free",
+             nrow = 1,
+             axes = "all") +
+  
+  # 5. Geoms: Violin for density + Boxplot for summary stats
+  geom_violin(alpha = 0.2, color = NA) +
+  geom_boxplot(width = 0.2) +
+  
+  # 6. Styling and Custom Color Scales
+  theme_vaxgo() +
+  theme(axis.text.x = element_blank(),
+        legend.position = "top",
+        axis.title.x = element_blank()) +
+  scale_color_manual(values = c(colors$comparison_color, "All" = "black")) +
+  scale_fill_manual(values = c(colors$comparison, "All" = "black")) +
+  
+  # 7. Legend and Labels
+  guides(color = "none",
+         fill = guide_legend(nrow = 1, byrow = T)) +
+  labs(fill = "Status",
+       y = "%Identity",
+       x = "")
+
+```
+
+
+
+
+Visualize the global distribution of sequence identity while highlighting specific "exemplar" genes of interest
+```{r fig.height=8, fig.width=12}
+# --- Global Statistical Summary: Mean Conservation (Bootstrap) ---
+alignments_human2mouse_pointrange_all_global = alignments_human2mouse_all_global_df_filtered %>%
+  # 1. Clean labels and establish the logical factor order for the comparison
+  mutate(
+    status = str_replace(status, " ", "\n"),
+    status = fct_relevel(
+      status,
+      "Human\nonly", "Mouse\nonly", "Shared", "All", 
+      "Non-Immune\nBTMs", "Immune\nBTMs"
+    )
+  ) %>% 
+  mutate(analysis = "Mean Conservation, Bootstrap") %>%
+  
+  # 2. Setup the visualization: Aesthetics and Faceting
+  ggplot() +
+  aes(x = status,
+      y = identity_human2mouse,
+      fill = status,
+      color = status,
+      group = status) +
+  facet_wrap(~analysis) +
+  
+  # 3. Layer 1: Pointrange with bootstrapped Mean and CI
+  stat_summary(fun.data = "mean_cl_boot",
+               geom = "pointrange",
+               size = 1,
+               fatten = 2,
+               stroke = 0.5,
+               pch = 21,
+               mapping = aes(color = status),
+               position = position_dodge2(0)) +
+  
+  # 4. Layer 2: Text labels for the precise mean values
+  stat_summary(fun.data = "mean_cl_boot", 
+               geom = "text", 
+               aes(label = after_stat(round(y, 1))), 
+               hjust = -0.2, 
+               size = 3,
+               color = "black") +
+  
+  # 5. Custom scales for fill and color (Mapping status to your project colors)
+  scale_fill_manual(values = c(colors$comparison,
+                               "BTMs" = "#4361ee",
+                               "All" = "white")) +
+  scale_color_manual(values = c(colors$comparison,
+                                "BTMs" = "#4361ee",
+                                "All" = "black")) +
+  
+  # 6. Adjust scales and coordinate system
+  scale_x_discrete(expand = c(0.05, 0.05)) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  
+  # 7. Final Theme and Legend Cleanup
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 10),
+        axis.text.y = element_text(size = 10),
+        strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+        panel.spacing = unit(1.1, "lines"),
+        plot.margin = margin(0.3, 0.3, 0, 0, unit = "cm"),
+        legend.position = "none",
+        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) +
+  labs(x = "Status",
+       y = "%Identity (Human-to-Mouse)",
+       color = "",
+       fill = "")
+#Display
+alignments_human2mouse_pointrange_all_global
+
+# --- Create a filtered dataset of exemplar genes based on identity and correlation ---
+
+alignments_human2mouse_genes_filtered = bind_rows(
+  
+  # 1. TOP TIER: High positive correlation, high frequency (n > 3), high identity (>90%)
+  alignments_human2mouse_all_global_df_nshared %>%
+    filter(p_value <= 0.05, n > 3, cor_value >= 0, identity_human2mouse > 90) %>% 
+    group_by(status) %>%
+    arrange(-cor_value, -n) %>%
+    slice_head(n = 5) %>% 
+    mutate(filter = "High correlation,\nHigh %Identity"),
+  
+  # 2. SEQUENCE EXTREMES: Max identity per specific group (Immune, Non-Immune, All)
+  alignments_human2mouse_all_global_df_nshared %>%
+    filter(status %in% c("Immune BTMs", "Non-Immune BTMs", "All")) %>%
+    group_by(status) %>% 
+    slice_max(identity_human2mouse, n = 5, with_ties = F) %>% 
+    mutate(filter = "High %Identity"),
+  
+  # 3. TRANSCRIPTIONAL RESILIENCE: High correlation but Low identity
+  alignments_human2mouse_all_global_df_nshared %>%
+    filter(n > 3, p_value <= 0.05) %>% 
+    arrange(-cor_value, identity_human2mouse) %>% 
+    group_by(status) %>% 
+    slice_min(identity_human2mouse, n = 5)  %>% 
+    mutate(filter = "High correlation,\nLow %Identity"),
+  
+  # 4. SEQUENCE DIVERGENCE: Min identity per specific group
+  alignments_human2mouse_all_global_df_nshared %>%
+    filter(status %in% c("Immune BTMs", "Non-Immune BTMs", "All")) %>%
+    group_by(status) %>% 
+    slice_min(identity_human2mouse, n = 5, with_ties = F) %>% 
+    mutate(filter = "Low %Identity"),
+
+  # 5. QUADRANT CHECK: Low correlation but High identity (>90%)
+  alignments_human2mouse_all_global_df_nshared %>%
+    filter(p_value <= 0.05, cor_value >= 0, identity_human2mouse > 90) %>% 
+    group_by(status) %>%
+    arrange(cor_value, -n) %>%
+    slice_head(n = 5) %>% 
+    ungroup() %>% 
+    mutate(filter = "Low correlation,\nHigh %Identity"),
+
+  # 6. QUADRANT CHECK: Low correlation and Low identity (<90%)
+  alignments_human2mouse_all_global_df_nshared %>%
+    filter(p_value <= 0.05, cor_value >= 0, identity_human2mouse < 90) %>% 
+    group_by(status) %>%
+    arrange(-cor_value, -n) %>%
+    slice_head(n = 5) %>% 
+    ungroup() %>% 
+    mutate(filter = "Low correlation,\nLow %Identity")
+) %>% 
+  # Final label cleaning and factor releveling
+  mutate(
+    status = str_replace(status, " ", "\n"),
+    status = fct_relevel(status, "Human\nonly", "Mouse\nonly", "Shared", 
+                         "All", "Non-Immune\nBTMs", "Immune\nBTMs")
+  )
+
+#Histogram and violin
+# --- Global Distribution of Conservation with Highlighted Exemplar Genes ---
+alignments_human2mouse_histogram_all_global = alignments_human2mouse_all_global_df_filtered %>%
+  # 1. Prepare categories and factor levels
+  mutate(analysis = "Distribution of conservation",
+         status = str_replace(status, " ", "\n"),
+         status = fct_relevel(status, "Human\nonly", "Mouse\nonly", "Shared", 
+                              "All", "Non-Immune\nBTMs", "Immune\nBTMs")) %>% 
+  
+  ggplot() +
+  aes(x = status, y = identity_human2mouse, fill = status, color = status, group = status) +
+  facet_wrap(~analysis) +
+  
+  # 2. Main Layers: Violin for density and transparent Boxplot
+  geom_violin(color = "black", alpha = 0.7) +
+  geom_boxplot(mapping = aes(color = status), width = 0.1, fill = NA, outliers = F) +
+  
+  # 3. First Color Scale: Category status
+  scale_fill_manual(name = "Status", values = c(colors$comparison, "All" = "white")) +
+  scale_color_manual(name = "Status", 
+                     values = c("Mouse\nonly" = "white", "Human\nonly" = "white", "Shared" = "white", 
+                                "Immune\nBTMs" = "white", "Non-Immune\nBTMs" = "white", "All" = "black")) +
+  
+  # 4. Secondary Color Scale: Custom filters for highlighted genes
+  new_scale_color() + 
+  scale_color_manual(
+     name = "Filter",
+     values = c("High %Identity" = "#4361ee", "High correlation,\nHigh %Identity" = "#4DBBD5FF",
+                "Low correlation,\nHigh %Identity" = "#7209b7", "Low %Identity" = "red",
+                "High correlation,\nLow %Identity" = "#CA6702", "Low correlation,\nLow %Identity" = "#AE2012")) +
+  
+  # 5. Adding highlighted genes as points and labels
+  geom_point(data = alignments_human2mouse_genes_filtered, aes(color = filter), pch = 21, fill = "white") +
+  
+  # 6. Statistical annotation: Median identity labels
+  stat_summary(fun = median, geom = "label", aes(label = after_stat(round(y, 1))),
+               size = 3, hjust = -0.2, color = "black", fill = "white") +
+  
+  # 7. Gene Labeling: Repel prevents overlapping names
+  geom_label_repel(data = alignments_human2mouse_genes_filtered,
+                   aes(label = gene, color = filter), 
+                   max.overlaps = 10000, size = 2, direction = "y", nudge_x = -0.4,
+                   hjust = 0, fill = "white", box.padding = unit(0, "cm"), label.padding = unit(0.1, "cm")) +
+  
+  # 8. Scales, Theme, and Layout
+  scale_x_discrete(expand = c(0.1, 0.1)) +
+  scale_y_continuous(expand = c(0.01, 0.01), limits = c(50, 105)) +
+  theme_vaxgo() +
+  theme(axis.text = element_text(size = 10),
+        legend.position = "top", legend.direction = "vertical",
+        legend.margin = margin(0,0,0,0), legend.box.margin = margin(0,0,-10,0),
+        plot.margin = margin(0.3, 0.3, 0, 0, unit = "cm")) +
+  labs(x = "Status", y = "%Identity (Human-to-Mouse)", color = "", fill = "")
+
+#Display
+alignments_human2mouse_histogram_all_global
+
+#Unite summary and distribution plots
 alignments_human2mouse_pointrange_histogram = (alignments_human2mouse_pointrange_all_global /
 alignments_human2mouse_histogram_all_global) +
   plot_layout(heights = c(0.25, 0.75),
@@ -6384,22 +6498,12 @@ alignments_human2mouse_histogram_all_global) +
                                 legend.justification = "top"))
 alignments_human2mouse_pointrange_histogram
 
+#Save
 alignments_human2mouse_pointrange_histogram %>%
 ggsave(filename = here("Figures", "all_human_mouse_gsea_LEGs_alignment_btms_human2mouse_violinplot_all_global.png"),
          width = 8,
          height = 8)
 ```
-
-
-
-
-
-
-
-
-
-
-
 
 
 
