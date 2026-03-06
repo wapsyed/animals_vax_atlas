@@ -6984,80 +6984,216 @@ mutations_mouse <- mutations_base %>%
   mutate(species = "mouse", x_pos = pos_real_mouse, y_pos = y_full_prot)
 
 # Prepare table for ggplot
-mutations_plot <- bind_rows(mutations_human, mutations_mouse) 
-
+mutations_plot <- bind_rows(mutations_human, mutations_mouse) %>% 
+  rename(organism = species) %>% 
+  mutate(gene = gene_info$hgnc_symbol %>% unique(),
+         organism = str_to_title(organism),
+         type = "Alignment",
+         description = "Mutations")
 
 ```
 
 
-```{r fig.height=4, fig.width=8}
-# Plot
-plot_domains %>% 
-  mutate(filter = str_replace(filter, "\n", " ")) %>% 
-ggplot() +
-  geom_rect(aes(xmin = start, 
-                xmax = end, 
-                ymin = as.numeric(interpro_short_description_human) - 0.3, 
-                ymax = as.numeric(interpro_short_description_human) + 0.3, 
-                fill = interpro_short_description_human), 
-            alpha = 0.5, color = "black", size = 0.1) +
-    # Facet por espécie para comparar lado a lado
-  facet_wrap(~str_to_title(species), ncol = 1) +
+
+
+draw proteins
+```{r fig.height=4, fig.width= 10, paged.print=TRUE}
+library(drawProteins)
+
+
+# Get uniprot data
+prot_data <- drawProteins::get_features("P06729 P08920") %>% 
+             drawProteins::feature_to_dataframe() %>% 
+  mutate(description = case_when(type == "TRANSMEM" ~ "TM",
+                                 type == "TOPO_DOM" & description == "Extracellular" ~ "EC",
+                                 type == "TOPO_DOM" & description == "Cytoplasmic" ~ "CP",
+                                 description == "NONE" ~ type,
+                                 description == "" ~ type,
+                                 T ~ description)) %>% 
+  separate(entryName, sep = "_", into = c("gene", "organism"), remove = F) %>% 
+  mutate(organism = str_to_title(organism))
+
+# Definindo as alturas (Y) para cada trilha
+# Trilha 1 (Topo/TM) ficará na posição Y = 1
+# Trilha 2 (Domínios/Funções) ficará na posição Y = 2
+prot_name <- unique(prot_data$entryName)
+
+df_topology <- prot_data %>% 
+  filter(type %in% c("TOPO_DOM", "TRANSMEM", "SIGNAL")) %>%
+  mutate(y_pos = 1)
+
+df_features <- prot_data %>% 
+  filter(type %in% c("DOMAIN", "REGION", "MOTIF", "RECEPT_DOM")) %>%
+  mutate(y_pos = 1.5)
+
+df_modifications <- prot_data %>% 
+  filter(type %in% c("MOD_RES", "PHOSPHO", "VARIANT")) %>%
+  mutate(y_pos = 1.61) 
+
+df_mutations = mutations_plot
+
+
+# Create a summary dataframe to define the background line length for each facet
+background_lines <- prot_data %>%
+  group_by(organism, gene) %>%
+  summarise(max_end = max(end), .groups = 'drop') %>%
+  # Duplicate rows to draw lines at both y=1 and y=2
+  tidyr::crossing(y_val = c(1, 1.5))
+
+
+# --- UNIPROT PROTEIN ANNOTATION PLOT ---
+drawprotein_uniprot_ggplot = ggplot() +
+  # --- MAIN CHAIN BACKGROUND (Dynamic length per facet) ---
+  geom_segment(data = background_lines,
+               aes(x = 1, xend = max_end, y = y_val, yend = y_val), 
+               color = "grey80", size = 2) +
+  
+  # --- TRACK 1: TOPOLOGY (TOPO_DOM and TRANSMEM) ---
+  # Drawing rectangles for extracellular, cytoplasmic, and transmembrane regions
+  geom_rect(data = df_topology,
+            aes(xmin = begin, xmax = end, 
+                ymin = y_pos - 0.1, ymax = y_pos + 0.1, 
+                fill = description,
+                labels = description),
+            color = "black", size = 0.2) +
+  
+  # Faceting by organism and gene for multi-protein comparison
+  facet_wrap(~paste(organism, sep = " ", gene), ncol = 1) +
+  
+  # Manual color scale for the first 'fill' aesthetic (Topology)
+  scale_fill_manual(values = c("EC" = "#4cc9f0", 
+                               "CP" = "#3a86ff", 
+                               "TM" = "#90A4AEFF",
+                               "SIGNAL" = "#f72585"), 
+                    name = "Topology") +
+  
+  # --- SCALE RESET ---
+  # Critical: Specify 'fill' to allow a second independent fill scale
+  ggnewscale::new_scale_fill() + 
+  
+  # --- TRACK 2: DOMAINS AND FUNCTIONS ---
+  # Drawing rectangles for functional domains and regions
+  geom_rect(data = df_features,
+            aes(xmin = begin, xmax = end, 
+                ymin = y_pos - 0.1, ymax = y_pos + 0.1, 
+                fill = description,
+                labels = description),
+            color = "black", 
+            size = 0.2,
+            alpha = 0.5) +
+  
+  # Second fill
+  scale_fill_viridis_d(option = "mako", name = "Domains") +
+  
+  # --- POINTS: MODIFICATIONS (Phosphorylation / Variants) ---
+  # Adding Diamond shapes slightly offset from the domain line
+  geom_point(data = df_modifications,
+             aes(x = begin, y = y_pos + 0.02, color = type,
+                 labels = description), 
+             size = 3, shape = 18) +
+  
+  # Color scale for points (PTMs and Mutations)
+  scale_color_manual(values = c("PHOSPHO" = "yellow", "VARIANT" = "red"), 
+                     name = "PTMs") +
+  
+  new_scale_color() +
+  
+  # MUTATIONS (Violin + Points) ---
   geom_violin(data = mutations_plot,
-             aes(x = x_pos, y = y_pos),
-             fill = NA,
-             color = "black",
-             size = 0.5, width = 1,
-             scale = "count",
-             adjust = .1,
-             alpha = 1) +
+              aes(x = x_pos, y = 1.5, color = "Mutations"),
+              fill = NA, size = 0.4, width = 0.3, scale = "count", adjust = .1) +
   geom_point(data = mutations_plot,
-             aes(x = x_pos, y = y_pos),
-             color = "black",
-             shape = 124,
-             size = 1,
-             alpha = 1) +
-  # Configurar os nomes no eixo Y
-  scale_y_continuous(breaks = 1:length(levels(plot_domains$interpro_short_description_human)), 
-                     labels = levels(plot_domains$interpro_short_description_human)) +
-  scale_x_continuous(expand = c(0.01, 0.01), n.breaks = 10) +
-#   geom_density_ridges(
-#   data = mutations_plot,
-#   aes(
-#     x = start, 
-#     y = y_pos, 
-#     height = after_stat(count)
-#   ),
-#   stat = "density",
-#   fill = NA,
-#   color = "red",
-#   jittered_points = TRUE,
-#   position = position_points_jitter(width = 0.05, height = 0),
-#   point_shape = '|',
-#   point_size = 3,
-#   point_alpha = 1,
-#   size = 0.5,
-#   alpha = 1
-# ) 
-  # Estética
-  scale_color_brewer(palette = "Blues") +
-  scale_fill_brewer(palette = "Blues") +
+             aes(x = x_pos, y = 1.5, color = "Mutations",
+                 label = paste(align_pos, res_h, res_m)),
+             shape = 124, size = 1, alpha = 0.6) +
+  scale_color_manual(values = c("Mutations" = "red"), name = "Alignment") +
+  
+  # --- AXIS AND THEME FORMATTING ---
+  # Mapping the custom y_pos values to descriptive labels
+  scale_y_continuous(breaks = c(unique(df_topology$y_pos), unique(df_features$y_pos)), 
+                     labels = c("Topology", "Domains")) +
+
+  
+  # Custom lab theme and final adjustments
   theme_vaxgo() +
-  labs(title = paste0("InterPro domains: ", unique(plot_domains$hgnc_symbol),
-                      unique(plot_domains$filter),
-                      ", Status: ", unique(plot_domains$status), 
+  theme(axis.text.y = element_text(size = 10),
+        strip.text.y = element_text(angle = 0, hjust = 0),
+        panel.grid.minor = element_blank(),
+        legend.position = "right",
+        legend.justification = "top",
+        legend.spacing.y = unit(0, "cm"),
+        plot.margin = margin(1, 1, 2, 1)) +
+  labs(x = "Residue position", 
+       y = "Features",
+       title = paste0("Gene: ", prot_data$gene,
+                      ", UNIPROT: ", prot_data$accession, 
+                      ". Status: ", unique(plot_domains$status), 
+                      ". Filter: ", str_replace(unique(plot_domains$filter), "\n", " "), 
                       ", Correlation: ", unique(plot_domains$cor_label),
-                     ",\nIdentity (MUSCLE, BLOSUM62): ", round(unique(plot_domains$identity), 1),
-                     ", Identity (BioMart): ", round(unique(plot_domains$identity_biomart), 1)),
-       x = "Residue position", 
-       y = "InterPro domains"
-       )  +
-  theme(axis.text.x = element_text(size = 10),
-        axis.title.y = element_blank(),
-        legend.position = "none",
-        panel.spacing.y = unit(0, "lines"))
+                     "\nIdentity (MUSCLE, BLOSUM62): ", round(unique(plot_domains$identity), 1),
+                     ". Identity (BioMart): ", round(unique(plot_domains$identity_biomart), 1)))
+
+# Display the plot
+drawprotein_uniprot_ggplot 
 
 ```
+
+
+VIsualize 3d 
+```{r}
+
+library(NGLVieweR)
+# --- 1. Map Topology Colors ---
+topo_colors <- c("EC" = "#4cc9f0", "CP" = "#3a86ff", "TM" = "#90A4AE", "SIGNAL" = "#f72585")
+
+df_topology_3d <- df_topology %>%
+  mutate(
+    color_3d = topo_colors[description],
+    selection = paste0(begin, "-", end, ":A")
+  )
+
+# --- 2. Map Domain Colors (Viridis Mako) ---
+# We use viridisLite to get the exact hex codes for the number of domains you have
+library(viridisLite)
+n_domains <- nrow(df_features)
+df_features_3d <- df_features %>%
+  mutate(
+    color_3d = mako(n_domains)[as.numeric(as.factor(description))],
+    selection = paste0(begin, "-", end, ":A")
+  )
+
+# --- 3. Map Mutation Selection ---
+df_mutations_3d <- mutations_plot %>%
+  mutate(selection = paste0(x_pos, ":A"))
+
+install.packages("bio3d")
+library(bio3d)
+
+# 1. Load the AlphaFold PDB
+pdb <- read.pdb(here::here("Structures", "CD2_HumanAF-P06729-F1-model_v6.pdb"))
+
+# 2. Reset B-factors (AlphaFold uses this for pLDDT, we will overwrite it for annotation)
+pdb$atom$b <- 0 
+
+# 3. Annotate Domains in the PDB object
+# Assign a unique numeric ID to each domain type for coloring
+for(i in seq_len(nrow(df_features_3d))){
+  # Select atoms belonging to the residue range
+  inds <- atom.select(pdb, resno = df_features_3d$begin[i]:df_features_3d$end[i])
+  # Assign a value (e.g., the index 'i') to the B-factor column
+  pdb$atom$b[inds$atom] <- i 
+}
+
+# 4. Annotate Mutations
+# Let's set a high value (e.g., 100) for mutation sites to make them "glow" in analysis
+mut_inds <- atom.select(pdb, resno = mutations_plot$x_pos)
+pdb$atom$b[mut_inds$atom] <- 100
+
+# 5. Save the Annotated PDB
+write.pdb(pdb, file = here("Structures", "CD2_human_Annotated_for_PyMOL.pdb"))
+```
+
+
 
 Display alignment with ggmsa
 ```{r fig.height=3, fig.width=16}
@@ -7099,119 +7235,6 @@ ggmsa(seqs_to_plot,
 
 
 ```
-
-draw proteins
-```{r fig.height=4, fig.width= 10, paged.print=TRUE}
-library(drawProteins)
-
-
-# Get uniprot data
-prot_data <- drawProteins::get_features("P06729 P08920") %>% 
-             drawProteins::feature_to_dataframe() %>% 
-  mutate(description = case_when(type == "TRANSMEM" ~ "TM",
-                                 type == "TOPO_DOM" & description == "Extracellular" ~ "EC",
-                                 type == "TOPO_DOM" & description == "Cytoplasmic" ~ "CP",
-                                 description == "NONE" ~ type,
-                                 description == "" ~ type,
-                                 T ~ description)) %>% 
-  separate(entryName, sep = "_", into = c("gene", "organism"), remove = F)
-
-# Definindo as alturas (Y) para cada trilha
-# Trilha 1 (Topo/TM) ficará na posição Y = 1
-# Trilha 2 (Domínios/Funções) ficará na posição Y = 2
-prot_name <- unique(prot_data$entryName)
-
-df_topology <- prot_data %>% 
-  filter(type %in% c("TOPO_DOM", "TRANSMEM", "SIGNAL")) %>%
-  mutate(y_pos = 1)
-
-df_features <- prot_data %>% 
-  filter(type %in% c("DOMAIN", "REGION", "MOTIF", "RECEPT_DOM")) %>%
-  mutate(y_pos = 1.5)
-
-df_modifications <- prot_data %>% 
-  filter(type %in% c("MOD_RES", "PHOSPHO", "VARIANT")) %>%
-  mutate(y_pos = 1.61) 
-
-# Create a summary dataframe to define the background line length for each facet
-background_lines <- prot_data %>%
-  group_by(organism, gene) %>%
-  summarise(max_end = max(end), .groups = 'drop') %>%
-  # Duplicate rows to draw lines at both y=1 and y=2
-  tidyr::crossing(y_val = c(1, 1.5))
-
-# --- UNIPROT PROTEIN ANNOTATION PLOT ---
-drawprotein_uniprot_ggplot = ggplot() +
-  # --- MAIN CHAIN BACKGROUND (Dynamic length per facet) ---
-  geom_segment(data = background_lines,
-               aes(x = 1, xend = max_end, y = y_val, yend = y_val), 
-               color = "grey80", size = 2) +
-  
-  # --- TRACK 1: TOPOLOGY (TOPO_DOM and TRANSMEM) ---
-  # Drawing rectangles for extracellular, cytoplasmic, and transmembrane regions
-  geom_rect(data = df_topology,
-            aes(xmin = begin, xmax = end, 
-                ymin = y_pos - 0.1, ymax = y_pos + 0.1, 
-                fill = description),
-            color = "black", size = 0.2) +
-  
-  # Faceting by organism and gene for multi-protein comparison
-  facet_grid(organism ~ gene) +
-  
-  # Manual color scale for the first 'fill' aesthetic (Topology)
-  scale_fill_manual(values = c("EC" = "#4cc9f0", 
-                               "CP" = "#3a86ff", 
-                               "TM" = "#90A4AEFF",
-                               "SIGNAL" = "#f72585"), 
-                    name = "Topology") +
-  
-  # --- SCALE RESET ---
-  # Critical: Specify 'fill' to allow a second independent fill scale
-  ggnewscale::new_scale_fill() + 
-  
-  # --- TRACK 2: DOMAINS AND FUNCTIONS ---
-  # Drawing rectangles for functional domains and regions
-  geom_rect(data = df_features,
-            aes(xmin = begin, xmax = end, 
-                ymin = y_pos - 0.1, ymax = y_pos + 0.1, 
-                fill = description),
-            color = "black", size = 0.2) +
-  
-  # Second fill scale using Viridis palette for better contrast
-  scale_fill_viridis_d(option = "plasma", name = "Domains") +
-  
-  # --- POINTS: MODIFICATIONS (Phosphorylation / Variants) ---
-  # Adding Diamond shapes slightly offset from the domain line
-  geom_point(data = df_modifications,
-             aes(x = begin, y = y_pos + 0.02, color = type), 
-             size = 3, shape = 18) +
-  
-  # Color scale for points (PTMs and Mutations)
-  scale_color_manual(values = c("PHOSPHO" = "yellow", "VARIANT" = "red"), 
-                     name = "PTMs") +
-  
-  # --- AXIS AND THEME FORMATTING ---
-  # Mapping the custom y_pos values to descriptive labels
-  scale_y_continuous(breaks = c(unique(df_topology$y_pos), unique(df_features$y_pos)), 
-                     labels = c("Topology", "Domains")) +
-  
-  labs(x = "Residue position", 
-       y = "Features",
-       title = paste("UNIPROT annotation:", prot_name)) +
-  
-  # Custom lab theme and final adjustments
-  theme_vaxgo() +
-  theme(axis.text.y = element_text(size = 10),
-        strip.text.y = element_text(angle = 0, hjust = 0),
-        panel.grid.minor = element_blank())
-
-# Display the plot
-drawprotein_uniprot_ggplot
-
-```
-
-
-
 
 
 

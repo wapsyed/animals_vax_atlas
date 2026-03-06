@@ -5,7 +5,7 @@
 cran_packages = c(
   "tidyverse", "rentrez", "yardstick",  "shadowtext",
   # "ggridges", 
-  "here", "glue", "ggsci", 
+  "here", "glue", "ggsci", "NGLVieweR",
   "janitor", "readr", 
   # "paletteer", 
   # "beepr", 
