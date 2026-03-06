@@ -6845,57 +6845,68 @@ genes_domain_mouse_human =
 
 selected_gene = "CD2"
 
-#Align domains
-sequences_align_domains = genes_domain_mouse_human %>% 
-mutate(
-    # Cut sequence: peptide[start : end]
-    domain_seq_human = stringr::str_sub(peptide_human, interpro_start_human, interpro_end_human),
-    domain_seq_mouse = stringr::str_sub(peptide_mouse, interpro_start_mouse, interpro_end_mouse)
-  )
+# #Align domains
+# sequences_align_domains = genes_domain_mouse_human %>% 
+# mutate(
+#     # Cut sequence: peptide[start : end]
+#     domain_seq_human = stringr::str_sub(peptide_human, interpro_start_human, interpro_end_human),
+#     domain_seq_mouse = stringr::str_sub(peptide_mouse, interpro_start_mouse, interpro_end_mouse)
+#   )
+# 
+# #Align full sequence
+# sequences_align_gene <- genes_domain_mouse_human %>%
+#   filter(status == "Shared") %>% 
+#   ungroup() %>% 
+#   filter(hgnc_symbol == selected_gene) %>% 
+#   select(hgnc_symbol, peptide_human, peptide_mouse, status, cor_label) %>%
+#   distinct()
+# 
+# #Alignment
+# gene_data <- sequences_align_gene
+# 
+# # Create AAStringSet to run on msa
+# input_seqs <- AAStringSet(c(gene_data$peptide_human, gene_data$peptide_mouse))
+# names(input_seqs) <- c("Human", "Mouse")
+# 
+# # Run MSA
+# aln <- msa(input_seqs, method = "Muscle", type = "protein")
+# 
+# # Extract sequences
+# # Convert to text
+# seqs_alinhadas <- as.character(unmasked(aln))
 
-#Align full sequence
-sequences_align_gene <- genes_domain_mouse_human %>%
-  filter(status == "Shared") %>% 
-  ungroup() %>% 
-  filter(hgnc_symbol == selected_gene) %>% 
-  select(hgnc_symbol, peptide_human, peptide_mouse, status, cor_label) %>%
-  distinct()
-
-#Alignment
-gene_data <- sequences_align_gene
-
-# 2. Criando o objeto de sequências
-# (Transformamos as strings das colunas em um AAStringSet)
-input_seqs <- AAStringSet(c(gene_data$peptide_human, gene_data$peptide_mouse))
-names(input_seqs) <- c("Human", "Mouse")
-
-# 3. Rodando o MUSCLE
-# O resultado 'aln' contém as sequências com os gaps (-)
-aln <- msa(input_seqs, method = "Muscle", type = "protein")
-
-# 4. Extraindo as sequências alinhadas
-# unmasked() remove a "máscara" do objeto msa e permite converter para texto
-seqs_alinhadas <- as.character(unmasked(aln))
-
-# 5. Calculando a identidade (PID)
+# Pairwise sequence alignment
 library(pwalign)
-# Comparamos as duas sequências originais
-identidade_global <- pwalign::pid(pwalign::pairwiseAlignment(gene_data$peptide_human, 
-                                          gene_data$peptide_mouse, 
-                                          substitutionMatrix = "BLOSUM62"))
+#Compare two original sequences
+alignment <- pairwiseAlignment(
+  pattern = gene_data$peptide_human, 
+  subject = gene_data$peptide_mouse, 
+  substitutionMatrix = "BLOSUM62",
+  type = "global", # Garante alinhamento de ponta a ponta
+  gapOpening = 10,  # Penalidade padrão
+  gapExtension = 0.5
+)
 
-# 6. Criando a tabela final com o resultado
-resultado_final <- tibble(
-  hgnc_symbol = gene_data$hgnc_symbol,
-  seq_human_orig = gene_data$peptide_human,
-  seq_mouse_orig = gene_data$peptide_mouse,
-  seq_human_aligned = seqs_alinhadas["Human"],
-  seq_mouse_aligned = seqs_alinhadas["Mouse"],
-  identity = identidade_global
+# Get identity score
+identity_global <- pid(alignment, type = "PID1")
+
+#Convert to a df
+alignment_results_pairwise <- tibble(
+  hgnc_symbol       = gene_data$hgnc_symbol,
+  seq_human_orig    = gene_data$peptide_human,
+  seq_mouse_orig    = gene_data$peptide_mouse,
+  seq_human_aligned = as.character(pattern(alignment)),
+  seq_mouse_aligned = as.character(subject(alignment)),
+  identity          = identity_global
 ) %>% 
   inner_join(genes_domain_mouse_human %>% 
-               rename(identity_biomart = identity), 
-             by = "hgnc_symbol")
+  ungroup() %>% 
+  select(mgi_symbol, hgnc_symbol, identity_biomart = identity, peptide_mouse, peptide_human, uniprotswissprot_human,
+         filter, status, n, cor_value, p_value, r_squared, cor_label) %>% 
+  distinct(),
+  by = "hgnc_symbol")
+
+
 
 ```
 
@@ -6903,8 +6914,8 @@ resultado_final <- tibble(
 ```{r fig.height=4, fig.width=8}
 library(tidyverse)
 
-#Prepare data
-gene_info <- resultado_final %>%
+#Prepare data with biomart annotations  ===========
+gene_info <- alignment_results_pairwise %>%
   filter(hgnc_symbol == selected_gene) %>%
   mutate(
     len_mouse = nchar(seq_mouse_orig),
@@ -6931,30 +6942,22 @@ full_protein <- gene_info %>%
   ) %>% 
   distinct()
 
-#Prepare specific domains
-plot_domains <- gene_info %>%
-  filter(hgnc_symbol == selected_gene) %>% 
-  select(hgnc_symbol, interpro_short_description_human, identity, filter, status, cor_label,identity_biomart, interpro,
-         seq_human_orig, seq_mouse_orig, seq_human_aligned, seq_mouse_aligned,
-         interpro_start_mouse, interpro_end_mouse, 
-         interpro_start_human, interpro_end_human) %>%
-  pivot_longer(cols = starts_with("interpro_start"), 
-               names_to = "species_start", values_to = "start") %>%
-  pivot_longer(cols = starts_with("interpro_end"), 
-               names_to = "species_end", values_to = "end") %>%
-  mutate(species_start = str_remove(species_start, "interpro_start_"),
-         species_end = str_remove(species_end, "interpro_end_")) %>%
-  filter(species_start == species_end) %>%
-  rename(species = species_start) %>%
-  bind_rows(full_protein) %>%
-  mutate(interpro_short_description_human = fct_relevel(interpro_short_description_human, "Full Protein")) %>% 
-  drop_na(start)
-
+# Get uniprot data  ===========
+prot_data <- drawProteins::get_features("P06729 P08920") %>% 
+             drawProteins::feature_to_dataframe() %>% 
+  mutate(description = case_when(type == "TRANSMEM" ~ "TM",
+                                 type == "TOPO_DOM" & description == "Extracellular" ~ "EC",
+                                 type == "TOPO_DOM" & description == "Cytoplasmic" ~ "CP",
+                                 description == "NONE" ~ type,
+                                 description == "" ~ type,
+                                 T ~ description)) %>% 
+  separate(entryName, sep = "_", into = c("gene", "organism"), remove = F) %>% 
+  mutate(organism = str_to_title(organism))
 
 #Identify mutations ===========
 # Extract positions from alignment
-vec_h <- strsplit(unique(plot_domains$seq_human_aligned), "")[[1]]
-vec_m <- strsplit(unique(plot_domains$seq_mouse_aligned), "")[[1]]
+vec_h <- strsplit(unique(full_protein$seq_human_aligned), "")[[1]]
+vec_m <- strsplit(unique(full_protein$seq_mouse_aligned), "")[[1]]
 
 # Find divergences
 diff_idx <- which(vec_h != vec_m)
@@ -6971,17 +6974,14 @@ mutations_base <- tibble(
     pos_real_mouse = map_int(align_pos, ~sum(vec_m[1:.x] != "-"))
   )
 
-# 4. Descobrir o valor numérico exato do eixo Y para a "Full Protein"
-y_full_prot <- which(levels(plot_domains$interpro_short_description_human) == "Full Protein")
-
 # Separate by species
 mutations_human <- mutations_base %>%
   filter(res_h != "-") %>% 
-  mutate(species = "human", x_pos = pos_real_human, y_pos = y_full_prot)
+  mutate(species = "human", x_pos = pos_real_human)
 
 mutations_mouse <- mutations_base %>%
   filter(res_m != "-") %>%
-  mutate(species = "mouse", x_pos = pos_real_mouse, y_pos = y_full_prot)
+  mutate(species = "mouse", x_pos = pos_real_mouse)
 
 # Prepare table for ggplot
 mutations_plot <- bind_rows(mutations_human, mutations_mouse) %>% 
@@ -6998,24 +6998,7 @@ mutations_plot <- bind_rows(mutations_human, mutations_mouse) %>%
 ####### Structure
 draw proteins
 ```{r fig.height=4, fig.width= 10, paged.print=TRUE}
-library(drawProteins)
-
-
-# Get uniprot data
-prot_data <- drawProteins::get_features("P06729 P08920") %>% 
-             drawProteins::feature_to_dataframe() %>% 
-  mutate(description = case_when(type == "TRANSMEM" ~ "TM",
-                                 type == "TOPO_DOM" & description == "Extracellular" ~ "EC",
-                                 type == "TOPO_DOM" & description == "Cytoplasmic" ~ "CP",
-                                 description == "NONE" ~ type,
-                                 description == "" ~ type,
-                                 T ~ description)) %>% 
-  separate(entryName, sep = "_", into = c("gene", "organism"), remove = F) %>% 
-  mutate(organism = str_to_title(organism))
-
-# Definindo as alturas (Y) para cada trilha
-# Trilha 1 (Topo/TM) ficará na posição Y = 1
-# Trilha 2 (Domínios/Funções) ficará na posição Y = 2
+# Labeling y axis
 prot_name <- unique(prot_data$entryName)
 
 df_topology <- prot_data %>% 
@@ -7112,7 +7095,41 @@ drawprotein_uniprot_ggplot = ggplot() +
   # Mapping the custom y_pos values to descriptive labels
   scale_y_continuous(breaks = c(unique(df_topology$y_pos), unique(df_features$y_pos)), 
                      labels = c("Topology", "Domains")) +
+  scale_x_continuous(expand = c(0.01, 0.01)) +
 
+  
+  #Label the start and end of domains
+  geom_text(aes(label = begin,
+                      y = y_pos,
+                      x = begin),
+                  data = df_features,
+                  nudge_y = 0.15,
+                  segment.linetype = 0,
+                  hjust = 0.5,
+                  size = 3) +
+  geom_text(aes(label = end,
+                      y = y_pos,
+                      x = end),
+                  data = df_features,
+                  nudge_y = -0.15,
+                  segment.linetype = 0,
+                  hjust = 0.5,
+                  size = 3) +
+  #Label the start and end of topologies
+  geom_text(aes(label = begin,
+                      y = y_pos,
+                      x = begin),
+                  data = df_topology,
+                  nudge_y = 0.15,
+                  hjust = 0.5,
+                  size = 3) +
+  geom_text(aes(label = end,
+                      y = y_pos,
+                      x = end),
+                  data = df_topology,
+                  nudge_y = -0.15,
+                  hjust = 0.5,
+                  size = 3) 
   
   # Custom lab theme and final adjustments
   theme_vaxgo() +
@@ -7127,14 +7144,21 @@ drawprotein_uniprot_ggplot = ggplot() +
        y = "Features",
        title = paste0("Gene: ", prot_data$gene,
                       ", UNIPROT: ", prot_data$accession, 
-                      ". Status: ", unique(plot_domains$status), 
-                      ". Filter: ", str_replace(unique(plot_domains$filter), "\n", " "), 
-                      ", Correlation: ", unique(plot_domains$cor_label),
-                     "\nIdentity (MUSCLE, BLOSUM62): ", round(unique(plot_domains$identity), 1),
-                     ". Identity (BioMart): ", round(unique(plot_domains$identity_biomart), 1)))
+                      ". Status: ", unique(gene_info$status), 
+                      ". Filter: ", str_replace(unique(gene_info$filter), "\n", " "), 
+                      ", Correlation: ", unique(gene_info$cor_label),
+                     "\nIdentity (MUSCLE, BLOSUM62): ", round(unique(gene_info$identity), 1),
+                     ". Identity (BioMart): ", round(unique(gene_info$identity_biomart), 1)))
 
 # Display the plot
-drawprotein_uniprot_ggplot 
+drawprotein_uniprot_ggplot
+  
+
+#Save
+drawprotein_uniprot_ggplot %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_leganalysis_cd2_annotation_mutations.png"),
+         width = 10,
+         height = 4)
 
 ```
 
