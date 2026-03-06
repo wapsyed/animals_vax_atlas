@@ -7101,28 +7101,72 @@ ggmsa(seqs_to_plot,
 ```
 
 draw proteins
-```{r}
+```{r fig.height=4, fig.width= 10, paged.print=TRUE}
 library(drawProteins)
 
-# 1. Busca os dados da proteína (ex: p53 humana)
-prot_data <- drawProteins::get_features("P06729") %>% 
-             drawProteins::feature_to_dataframe()
 
-# 2. Desenha a estrutura básica
-# 2. Filtrar apenas domínios e regiões
-dominios <- prot_data %>% 
-  filter(type %in% c("DOMAIN", "REGION"))
+# Get uniprot data
+prot_data <- drawProteins::get_features("P06729 P08920") %>% 
+             drawProteins::feature_to_dataframe() %>% 
+  mutate(description = case_when(type == "TRANSMEM" ~ "TM",
+                                 type == "TOPO_DOM" & description == "Extracellular" ~ "EC",
+                                 type == "TOPO_DOM" & description == "Cytoplasmic" ~ "CP",
+                                 description == "NONE" ~ type,
+                                 description == "" ~ type,
+                                 T ~ description)) %>% 
+  separate(entryName, sep = "_", into = c("gene", "organism"), remove = F)
 
-draw_canvas(data = prot_data) %>% 
-  draw_chains(data = prot_data) %>% 
-  draw_domains(data = prot_data, type = "TOPO_DOM", ) %>% 
-  draw_domains(data = prot_data, type = "TRANSMEM") %>% 
-  draw_regions(data = prot_data, ) %>% 
-  draw_folding(data = prot_data) %>% 
-  # draw_motif(data = prot_data) %>% 
-  draw_recept_dom(data = prot_data) +
-  theme_minimal()
-  # draw_repeat(data = prot_data)
+# Definindo as alturas (Y) para cada trilha
+# Trilha 1 (Topo/TM) ficará na posição Y = 1
+# Trilha 2 (Domínios/Funções) ficará na posição Y = 2
+prot_name <- unique(prot_data$entryName)
+
+df_topology <- prot_data %>% 
+  filter(type %in% c("TOPO_DOM", "TRANSMEM", "SIGNAL")) %>%
+  mutate(y_pos = 1)
+
+df_features <- prot_data %>% 
+  filter(type %in% c("DOMAIN", "REGION", "MOTIF", "RECEPT_DOM")) %>%
+  mutate(y_pos = 1.5)
+
+df_modifications <- prot_data %>% 
+  filter(type %in% c("MOD_RES", "PHOSPHO", "VARIANT")) %>%
+  mutate(y_pos = 1.61) # Um pouco acima dos domínios
+
+#Plot
+drawprotein_uniprot_ggplot = ggplot() +
+  # --- TRILHA 1: TOPOLOGIA (TOPO_DOM e TRANSMEM) ---
+  geom_rect(data = df_topology,
+            aes(xmin = begin, xmax = end, ymin = y_pos - 0.1, ymax = y_pos + 0.1, fill = description),
+            color = "black", size = 0.2) +
+      facet_grid(~organism~gene) +
+  scale_fill_manual(values = c("EC" = "#3498db", 
+                               "CP" = "#e74c3c", 
+                               "TM" = "#2c3e50"), 
+                    name = "Topology") +
+  ggnewscale::new_scale() +
+  # --- TRILHA 2: DOMÍNIOS E FUNÇÕES ---
+  geom_rect(data = df_features,
+            aes(xmin = begin, xmax = end, ymin = y_pos - 0.1, ymax = y_pos + 0.1, fill = description),
+            color = "black", size = 0.2) +
+  scale_fill_viridis_d(option = "plasma", name = "Domains") +
+  
+  # --- PONTOS: MODIFICAÇÕES (Fosforilação / Mutações) ---
+  geom_point(data = df_modifications,
+             aes(x = begin, y = y_pos+0.02, color = type), size = 3, shape = 18) +
+  scale_color_manual(values = c("PHOSPHO" = "yellow", "VARIANT" = "red"), name = "PTMs") +
+  
+  # --- FORMATAÇÃO DOS EIXOS ---
+  scale_y_continuous(breaks = c(df_topology$y_pos %>% unique(), df_features$y_pos %>% unique()), 
+                     labels = c("Topology", "Domains")) +
+  labs(x = "Residue position", y = "Features",
+       title = paste("UNIPROT annotation:", prot_name)) +
+  theme_vaxgo() +
+  theme(axis.text.y = element_text(size = 10),
+        strip.text.y = element_text(angle = 0, hjust = 0),
+        panel.grid.minor = element_blank())
+
+drawprotein_uniprot_ggplot
 
 ```
 
