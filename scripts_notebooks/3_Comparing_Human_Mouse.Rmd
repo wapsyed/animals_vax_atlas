@@ -6995,7 +6995,7 @@ mutations_plot <- bind_rows(mutations_human, mutations_mouse) %>%
 
 
 
-
+####### Structure
 draw proteins
 ```{r fig.height=4, fig.width= 10, paged.print=TRUE}
 library(drawProteins)
@@ -7141,56 +7141,135 @@ drawprotein_uniprot_ggplot
 
 VIsualize 3d 
 ```{r}
+# 1. Definição de Cores Hex (Mais seguro que nomes)
+# Usei tons vibrantes para destacar bem na estrutura
+topo_colors <- list(
+  "EC" = "#4cc9f0",     # DeepSkyBlue
+  "CP" = "#3a86ff",     # OrangeRed
+  "TM" = "black",     # Gold
+  "SIGNAL" = "#FF1493"  # DeepPink
+)
 
-library(NGLVieweR)
-# --- 1. Map Topology Colors ---
-topo_colors <- c("EC" = "#4cc9f0", "CP" = "#3a86ff", "TM" = "#90A4AE", "SIGNAL" = "#f72585")
-
+# 2. Preparação dos Dados (Limpando os vetores)
 df_topology_3d <- df_topology %>%
   mutate(
-    color_3d = topo_colors[description],
-    selection = paste0(begin, "-", end, ":A")
+    # Forçamos a conversão para caractere simples para evitar erros de JSON
+    color_3d = as.character(topo_colors[description]),
+    # color_3d = as.character(mako(n())[as.numeric(as.factor(description))]),
+    selection = paste0(begin, "-", end)
   )
 
-# --- 2. Map Domain Colors (Viridis Mako) ---
-# We use viridisLite to get the exact hex codes for the number of domains you have
-library(viridisLite)
-n_domains <- nrow(df_features)
 df_features_3d <- df_features %>%
   mutate(
-    color_3d = mako(n_domains)[as.numeric(as.factor(description))],
-    selection = paste0(begin, "-", end, ":A")
+    selection = paste0(begin, "-", end),
+    # Gerando o Mako e garantindo que seja um vetor de texto limpo
+    color_hex = as.character(mako(n())[as.numeric(as.factor(description))])
   )
 
-# --- 3. Map Mutation Selection ---
-df_mutations_3d <- mutations_plot %>%
-  mutate(selection = paste0(x_pos, ":A"))
+# 3. Inicializando o Visualizador
+view_initial <- NGLVieweR(here::here("Structures", "CD2_HumanAF-P06729-F1-model_v6.pdb")) %>%
+  stageParameters(backgroundColor = "white") %>%
+  addRepresentation("ribbon", 
+                    param = list(color = "#D3D3D3", opacity = 0.2))
 
-install.packages("bio3d")
-library(bio3d)
+view_initial %>% 
+  setRotation(10, 0, 0)
+```
 
-# 1. Load the AlphaFold PDB
-pdb <- read.pdb(here::here("Structures", "CD2_HumanAF-P06729-F1-model_v6.pdb"))
 
-# 2. Reset B-factors (AlphaFold uses this for pLDDT, we will overwrite it for annotation)
-pdb$atom$b <- 0 
+```{r}
+# 4. Loop de Topologia (Corrigindo a atribuição de cor)
+view_topology = view_initial
+for(i in seq_len(nrow(df_topology_3d))){
+  # IMPORTANTE: Verificamos se a cor existe antes de aplicar
+  current_color <- df_topology_3d$color_3d[i]
+  if(!is.na(current_color)){
+    view_topology <- view_topology %>%
+      addRepresentation("cartoon", param = list(
+        sele = df_topology_3d$selection[i],
+        color = current_color,
+        opacity = 0.5
+      ))
+  }
+}
+view_topology
 
-# 3. Annotate Domains in the PDB object
-# Assign a unique numeric ID to each domain type for coloring
-for(i in seq_len(nrow(df_features_3d))){
-  # Select atoms belonging to the residue range
-  inds <- atom.select(pdb, resno = df_features_3d$begin[i]:df_features_3d$end[i])
-  # Assign a value (e.g., the index 'i') to the B-factor column
-  pdb$atom$b[inds$atom] <- i 
+# 6. Mutações (Esferas Vermelhas)
+# --- FIXED MUTATION RENDER BLOCK ---
+if(nrow(mutations_plot) > 0){
+  
+  # 1. Ensure x_pos is treated as a clean character vector
+  # Using 'unique' prevents drawing the same sphere twice if mutations overlap
+  mut_residues <- unique(as.character(mutations_plot$x_pos))
+  
+  # 2. Use a more robust selection string
+  # Adding ".*" or ".CA" (Alpha Carbon) ensures NGL finds a specific point to attach the sphere
+  mut_sele <- paste(mut_residues, collapse = " OR ")
+  
+  # 3. Use 'sphere' instead of 'spacefill' for better control over the radius
+  view_mutations <- view_topology %>%
+    addRepresentation("cartoon", param = list(
+      sele = mut_sele,
+      color = "#FF0000", # Pure Red Hex
+      opacity = 1
+    ))
 }
 
-# 4. Annotate Mutations
-# Let's set a high value (e.g., 100) for mutation sites to make them "glow" in analysis
-mut_inds <- atom.select(pdb, resno = mutations_plot$x_pos)
-pdb$atom$b[mut_inds$atom] <- 100
+view_mutations
+```
 
-# 5. Save the Annotated PDB
-write.pdb(pdb, file = here("Structures", "CD2_human_Annotated_for_PyMOL.pdb"))
+
+```{r}
+library(NGLVieweR)
+library(dplyr)
+
+# --- 1. DEFINIÇÃO MANUAL DE CORES PARA DOMÍNIOS ---
+# Escolhi cores distintas para garantir que cada domínio apareça
+domain_colors <- colors_all
+
+# --- 2. PREPARAÇÃO DA TABELA ---
+df_features_3d <- df_features %>%
+  mutate(
+    # Atribui uma cor da lista para cada linha da tabela
+    color_3d = domain_colors[1:n()], 
+    selection = paste0(begin, "-", end)
+  )
+
+# --- 3. INICIALIZAÇÃO DO VISUALIZADOR ---
+view_domain <- NGLVieweR(here::here("Structures", "CD2_HumanAF-P06729-F1-model_v6.pdb")) %>%
+  stageParameters(
+    backgroundColor = "white",
+    cameraType = "orthographic",
+    clipDist = 0,
+    sampleLevel = 4,   # Melhora a qualidade (Antialias)
+    preserveDrawingBuffer = TRUE
+  ) %>%
+  # Proteína base em cinza claro e bem transparente
+  addRepresentation("cartoon", param = list(color = "#D3D3D3", opacity = 0.2))
+
+# --- 4. LOOP DE DOMÍNIOS (CORES FIXAS) ---
+for(i in seq_len(nrow(df_features_3d))){
+  
+  current_color <- as.character(df_features_3d$color_3d[i])
+  current_sele  <- as.character(df_features_3d$selection[i])
+  
+  if(!is.na(current_color)){
+    view_domain <- view_domain %>%
+      addRepresentation("cartoon", param = list(
+        sele = current_sele,
+        color = current_color,
+        opacity = 1
+      ))
+  }
+}
+
+view_domain 
+view_domain <- view_domain %>%
+  NGLVieweR::setRotation(c(0, 1.57, 0)) %>%
+  NGLVieweR::setSelection("*")
+
+view_domain %>%
+  NGLVieweR::snapShot(fileName = "CD2_Structure_PhD_Final", param = list(antialias = TRUE, transparent = TRUE))
 ```
 
 
