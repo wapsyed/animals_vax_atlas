@@ -2161,6 +2161,7 @@ degs_immune_nonimmune_summary
 ```
 #### Matrix plot
 
+Compute correlation for intra-species and inter-species comparisons
 ```{r}
 genes_shared <- all_degs_human_mouse %>%
   select(organism, pathogen, human_symbol) %>% 
@@ -2271,7 +2272,7 @@ final_correlations <- map_dfr(names(gene_sets_list), function(set_name) {
 
 final_correlations
 
-correlation_filtered <- final_correlations %>% 
+correlation_filtered_inter <- final_correlations %>% 
   # Keep Human as reference for cross-species comparisons
   filter(organism1 == "Human" & organism2 == "Mouse") %>% 
   mutate(comparison = paste0(organism1, " vs. ", organism2),
@@ -2300,14 +2301,41 @@ correlation_filtered <- final_correlations %>%
                                T ~ pathogen),
          treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")) 
 
-correlation_filtered
+correlation_filtered_intra <- final_correlations %>% 
+  filter(organism1 == organism2) %>% 
+  mutate(comparison = paste0(organism1, " vs. ", organism2),
+         timepoint_comparison = paste0(timepoint1, "-", timepoint2)) %>% 
+  mutate(timepoint_label = if_else(pathogen %in% c("Staphylococcus aureus", "Escherichia coli"), 
+                                   timepoint2, timepoint1),
+         timepoint_label = as.character(timepoint_label),
+         timepoint_label = str_replace(timepoint_label,"Early hours", "Early\nhours"),
+         timepoint1 = str_replace(timepoint1,"Early hours", "Early\nhours"),
+         timepoint2 = str_replace(timepoint2,"Early hours", "Early\nhours"),
+         timepoint2 = str_replace(timepoint2,"Day ", "Day\n"),
+         timepoint = fct_relevel(timepoint_label, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         timepoint1 = fct_relevel(timepoint1, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         timepoint2 = fct_relevel(timepoint2, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day\n1", "Day\n3", "Day\n7")),
+         pathogen = as.character(pathogen),
+         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
+                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
+                              pathogen == "Escherichia coli" ~ "E. coli",
+                              T ~pathogen),
+          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         gene_set = str_replace(gene_set, "AllGenes", "All genes"),
+         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
+                               T ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")) 
+
+correlation_filtered_intra
 
 ```
 
 
-
+##### Interspecies
 ```{r fig.height=8, fig.width=10}
-correlation_heatmap = correlation_filtered %>% 
+correlation_heatmap = correlation_filtered_inter %>% 
   # filter(treatment == "Vaccination") %>% 
   # filter(rho <1.0) %>% 
   ggplot() +
@@ -2355,13 +2383,67 @@ correlation_heatmap = correlation_filtered %>%
 correlation_heatmap 
 
 correlation_heatmap %>%
-  ggsave(filename = here("Figures", "all_human_mouse_dge_correlation_matrixplot.png"),
+  ggsave(filename = here("Figures", "all_human_mouse_dge_correlation_interspecies_matrixplot.png"),
          width = 11, height = 8)
 
 
 ```
 
+#####Intraspecies
+```{r fig.height=3, fig.width=16}
+correlation_heatmap_intra = correlation_filtered_intra %>% 
+  filter(gene_set == "DEGs") %>% 
+  # View()
+  ggplot() +
+  aes(x = timepoint2,
+      y = timepoint1) +
+  #Facet
+  facet_nested_wrap(~organism1~gene_set+treatment+pathogen,
+                    scales = "free",
+                    nrow = 1, trim_blank = F,
+                    strip = strip_nested(size = "variable")) +
+  labs(x = "Mouse",
+       y = "Mouse") +
+  geom_tile(aes(fill = rho)) +
+  geom_text(aes(label = round(rho, 2)), size = 3, 
+                  color = "black") +
+  scale_x_discrete(expand = c(0,0)) +
+  scale_y_discrete(expand = c(0,0)) +
+  scale_fill_gradientn(
+        colors = c("#4DBBD5FF", "white","#4361ee"),
+        values = scales::rescale(seq(-1, 1, length.out = 10)),
+        limits = c(-1, 1),
+        name = "Spearman's rho",
+        guide = guide_colorbar(
+          barwidth = 15,
+          barheight = 1,
+          nbin = 10,
+          raster = FALSE
+        )
+      ) +
+  #Theme
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size =10),
+        axis.text.y = element_text(size = 10),
+        strip.text.x = element_text(size = 10),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+        legend.position = "top",
+        legend.direction = "horizontal",
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(0,0,-10,0),
+        panel.spacing.y = unit(0, "lines"),
+        panel.spacing.x = unit(0.5, "lines"),
+        plot.margin = margin(0, 0, 0, 0, unit = "cm"),
+        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) 
 
+correlation_heatmap_intra 
+
+correlation_heatmap_intra %>%
+  ggsave(filename = here("Figures", "all_human_mouse_dge_correlation_intraspecies_matrixplot.png"),
+         width = 16, height = 3)
+
+
+```
 
 
 #### Scatter plots
@@ -5019,6 +5101,7 @@ Are the leading edges in mice the same in humans?
 ```{r}
 #Are the leading edges in mice the same in humans? ----------
 gsea_btm_results_core = gsea_btm_results_all_matched %>% 
+  filter(p_adjust <=0.25) %>% 
   separate_rows(core_enrichment, sep = "/")
 
 gsea_btm_results_core_joined =
@@ -5242,10 +5325,10 @@ shared_perc_plot =  shared_perc_plot_df %>%
 
 shared_perc_plot
 
-shared_perc_plot %>% 
-  ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_leadingedge_core_shared_perc_heatmap.png"),
-         width = 10,
-         height = 20)
+# shared_perc_plot %>% 
+#   ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_leadingedge_core_shared_perc_heatmap.png"),
+#          width = 10,
+#          height = 20)
 ```
 
 
@@ -5271,7 +5354,7 @@ df_test <- dge_btm_process_genes_wide %>%
   
   # 3. Integrate shared percentage metrics
   inner_join(
-    shared_perc %>% 
+    legs_perc %>% 
       filter(process == process_selected, status == "Shared") %>%
       rename(status_percent = status), # 'percent' is already clear
     by = join_by(pathogen, process, timepoint)
@@ -5317,7 +5400,7 @@ dge_btm_gsea_mean_wide %>%
 
 
 Positions using ranks
-```{r fig.height=6, fig.width=20}
+```{r fig.height=4, fig.width=20}
 #########################################################################
 # Plot gene positions across species using ranks to evaluate conservation
 #########################################################################
@@ -5360,7 +5443,7 @@ df_test_ranked_plot <- ggplot(df_test_ranked) +
   facet_nested_wrap(
     ~process + treatment + pathogen + facet_label,
     scales = "free",
-    nrow = 2,
+    nrow = 1,
     strip = strip_nested(size = "variable")
   ) +
   
@@ -5428,6 +5511,11 @@ df_test_ranked_plot <- ggplot(df_test_ranked) +
 # ggsave(filename = here("Figures", paste0("all_human_mouse_gsea_btm_results_leadingedge_core_ranks_lineplot_", process_selected, ".png")),
 #          width = 20,
 #          height = 6)
+
+df_test_ranked_plot %>%
+ggsave(filename = here("Figures", paste0("all_human_mouse_gsea_btm_results_leadingedge_core_ranks_lineplot_", process_selected, "2.png")),
+         width = 20,
+         height = 3)
 
 df_test_ranked_plot
 ```

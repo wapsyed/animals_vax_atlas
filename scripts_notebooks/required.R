@@ -490,7 +490,7 @@ colors = list(organism = c("FIT" = "#4361ee",
                               "V-I" = "#ffadc7"))
 
 
-W#Define colors
+#Define colors
 
 btm_immune_groups = list(group = c("SIGNAL TRANSDUCTION" = "#708d81",
                                    "CELL CYCLE" = "#06d6a0",

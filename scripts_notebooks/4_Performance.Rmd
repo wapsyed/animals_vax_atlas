@@ -110,20 +110,20 @@ Inputs
 Double check the code
 ```{r fig.height=4, fig.width=10}
 set.seed(123)
-######## Input -----
-# filename = "all_human_mouse"
-# gene_set_filename = "All_OnlyImmune"
-# genes_df_input = bind_rows(
-#   genes_roc_allgenes %>% mutate(model_type = "Mouse"),
-#   genes_roc_allgenes_immunegenes %>% mutate(model_type = "Immune")
-# )
-
+# ######## Input -----
 filename = "all_human_mouse"
-gene_set_filename = "HumanDEGs_OnlyImmune"
+gene_set_filename = "All_OnlyImmune"
 genes_df_input = bind_rows(
-  genes_roc_DEGs_all %>% mutate(model_type = "Mouse"),
-  genes_roc_DEGs_immune %>% mutate(model_type = "Immune")
+  genes_roc_allgenes %>% mutate(model_type = "Mouse"),
+  genes_roc_allgenes_immunegenes %>% mutate(model_type = "Immune")
 )
+
+# filename = "all_human_mouse"
+# gene_set_filename = "HumanDEGs_OnlyImmune"
+# genes_df_input = bind_rows(
+#   genes_roc_DEGs_all %>% mutate(model_type = "Mouse"),
+#   genes_roc_DEGs_immune %>% mutate(model_type = "Immune")
+# )
 
 ```
 
@@ -165,7 +165,6 @@ truth_human_up = dge_long_genes_up %>%
   pivot_wider(names_from = organism, values_from = direction) %>% 
   rename(truth = Human) %>% 
   mutate(organism = "Human")
-
 
 
 truth_human_down = dge_long_genes_down %>% 
@@ -229,10 +228,6 @@ classified_df_probs_up = truth_human_up %>%
   ) %>% 
   distinct()
 
-classified_df_probs_up %>% 
-  dplyr::count(pathogen, model, timepoint)
-
-
 classified_df_probs_down = truth_human_down %>% 
   select(human_symbol, pathogen, timepoint, truth) %>%
   inner_join(models_down %>% 
@@ -241,11 +236,50 @@ classified_df_probs_down = truth_human_down %>%
   mutate(
     truth = factor(truth, levels = c("down", "not_down"))
   ) %>% 
-  distinct()
+  distinct() 
+
+
+classified_df_probs_up_DEGs = truth_human_up %>% 
+  select(human_symbol, pathogen, timepoint, truth) %>%
+  inner_join(models_up %>% 
+               select(human_symbol, organism, pathogen, timepoint, pred, prob, model),
+             by = join_by(human_symbol, timepoint, pathogen)) %>% 
+  mutate(
+    truth = factor(truth, levels = c("up", "not_up"))
+  ) %>% 
+  distinct() %>% 
+    inner_join(degs_genes_human %>% 
+               select(-organism), 
+             by = join_by(human_symbol, pathogen, timepoint))
+
+
+
+classified_df_probs_down_DEGs = truth_human_down %>% 
+  select(human_symbol, pathogen, timepoint, truth) %>%
+  inner_join(models_down %>% 
+               select(human_symbol, organism, pathogen, timepoint, pred, prob, model),
+             by = join_by(human_symbol, timepoint, pathogen)) %>% 
+  mutate(
+    truth = factor(truth, levels = c("down", "not_down"))
+  ) %>% 
+  distinct()  %>% 
+    inner_join(degs_genes_human %>% 
+               select(-organism), 
+             by = join_by(human_symbol, pathogen, timepoint))
+
+classified_df_probs_up %>% 
+  dplyr::count(pathogen, model, timepoint)
+classified_df_probs_up_DEGs %>% 
+  dplyr::count(pathogen, model, timepoint)
 
 classified_df_probs_down %>% 
   dplyr::count(pathogen, model, timepoint)
+classified_df_probs_down_DEGs %>% 
+  dplyr::count(pathogen, model, timepoint)
+```
 
+
+```{r fig.height=6, fig.width=10}
 #=====================================================
 #Compute ROC 
 #=====================================================
@@ -256,18 +290,54 @@ roc_curve_up_notup = classified_df_probs_up %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Up")
 
+roc_curve_up_notup_DEGs = classified_df_probs_up_DEGs %>% 
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
+  group_by(pathogen, model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Up")
+
 roc_curve_up_notup %>% 
   dplyr::count(pathogen, model, timepoint)
+
+roc_curve_up_notup_DEGs %>% 
+  dplyr::count(pathogen, model, timepoint)
+
 roc_curve_down_notdown = classified_df_probs_down %>% 
   filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Down")
 
+roc_curve_down_notdown_DEGs = classified_df_probs_down_DEGs %>% 
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
+  group_by(pathogen, model, timepoint) %>%
+  roc_curve(truth, prob) %>%
+  mutate(comparison = "Down")
+
+roc_curve_down_notdown %>% 
+  dplyr::count(pathogen, model, timepoint)
+
+roc_curve_down_notdown_DEGs %>% 
+  dplyr::count(pathogen, model, timepoint)
+
+```
+
+
+```{r fig.height=6, fig.width=10}
 #=====================================================
 #Compute AUC 
 #=====================================================
 auc_results_up = classified_df_probs_up %>% 
+  mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Human")) %>%
+  group_by(pathogen, model, timepoint) %>%
+  roc_auc(truth, prob) %>%
+  rename(auc = .estimate) %>%
+  mutate(comparison = "Up") %>% 
+  ungroup() %>% 
+  select(pathogen, model, timepoint, auc, comparison)
+
+auc_results_up_DEGs = classified_df_probs_up_DEGs %>% 
   mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
   filter(model %in% c("Mouse", "Immune", "Permutation", "Human")) %>%
   group_by(pathogen, model, timepoint) %>%
@@ -287,12 +357,40 @@ auc_results_down = classified_df_probs_down %>%
   ungroup() %>% 
   select(pathogen, model, timepoint, auc, comparison)
 
+auc_results_down_DEGs = classified_df_probs_down_DEGs %>% 
+  mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
+  group_by(pathogen, model, timepoint) %>%
+  roc_auc(truth, prob) %>%
+  rename(auc = .estimate) %>%
+  mutate(comparison = "Down") %>% 
+  ungroup() %>% 
+  select(pathogen, model, timepoint, auc, comparison)
+
 
 ##### Unite all results
-roc_curve_auc_df = bind_rows(auc_results_up,auc_results_down) %>% 
+roc_curve_auc_df = bind_rows(auc_results_up,
+                             auc_results_down) %>% 
   inner_join(
     roc_curve_up_notup %>% 
       bind_rows(roc_curve_down_notdown %>% 
+                  filter(model != "Human")),
+    by = join_by(pathogen, model, timepoint, comparison)) %>% 
+    mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
+         comparison = factor(comparison, levels = c("Up", "Down")),
+         # timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
+         timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
+                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
+                              pathogen == "Escherichia coli" ~ "E. coli",
+                              T ~ pathogen),
+         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
+  mutate(auc = round(auc, 2) %>% as.character())
+
+roc_curve_auc_df_DEGs = bind_rows(auc_results_up_DEGs,auc_results_down_DEGs) %>% 
+  inner_join(
+    roc_curve_up_notup_DEGs %>% 
+      bind_rows(roc_curve_down_notdown_DEGs %>% 
                   filter(model != "Human")),
     by = join_by(pathogen, model, timepoint, comparison)) %>% 
     mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
@@ -311,6 +409,14 @@ roc_curve_auc_df %>%
   filter(model == "Immune") %>% 
               distinct()
 
+roc_curve_auc_df_DEGs %>% 
+  select(pathogen, model, comparison, timepoint, auc) %>% 
+  filter(model == "Immune") %>% 
+              distinct()
+```
+
+Plot ROC curve
+```{r fig.height=6, fig.width=10}
 #Plot curves ------------------
 #PLOT ROC Curve
 roc_curve_plot = roc_curve_auc_df %>% 
@@ -528,14 +634,133 @@ auc_lineplot = auc_lineplot_df %>%
 
 auc_lineplot
 auc_lineplot %>%
-  ggsave(filename = here("Figures", paste0(filename, "_performance_roc_auc_lineplot_", gene_set_filename, ".png")),
+  ggsave(filename = here("Figures", "all_human_mouse_performance_roc_auc_lineplot_All_OnlyImmune.png"),
          width = 3,
          height = 12)
 
 ```
 
 
+```{r fig.height=12, fig.width=3}
+#Get n genes
+ngenes_DEGs = bind_rows(
+  classified_df_probs_up_DEGs  %>%
+    filter(pred == "up") %>% 
+  group_by(pathogen, timepoint, model) %>% 
+  summarise(n_genes = n(),
+            comparison = "Up") %>% 
+    ungroup(),
+  classified_df_probs_down_DEGs %>%
+    filter(pred == "down") %>% 
+  group_by(pathogen, timepoint, model) %>% 
+  summarise(n_genes = n(),
+            comparison = "Down") %>% 
+    ungroup(),
+)
 
+classified_df_probs_up %>% 
+  dplyr::count(pathogen, model, timepoint, pred)
+classified_df_probs_up_DEGs %>% 
+  dplyr::count(pathogen, model, timepoint, pred)
+```
+
+
+```{r fig.height=12, fig.width=3}
+# Visualize AUC
+auc_lineplot_df_DEGs <- bind_rows(auc_results_up_DEGs,
+                      auc_results_down_DEGs) %>%
+  inner_join(ngenes_DEGs, by = join_by(comparison, pathogen, timepoint, model)) %>% 
+  mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
+         comparison = factor(comparison, levels = c("Up", "Down")),
+         timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
+         timepoint = fct_relevel(timepoint, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
+                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
+                              pathogen == "Escherichia coli" ~ "E. coli",
+                              T ~ pathogen),
+         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
+                               T ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
+         ) 
+
+auc_lineplot_DEGs = auc_lineplot_df_DEGs %>% 
+  ggplot() +
+   aes(x = timepoint,
+      y = auc,
+      fill = model,
+      color = model,
+      group = model) + 
+  
+  facet_nested_wrap(~treatment+pathogen+comparison,
+                    scales = "free",
+                    ncol = 2,
+                    strip = strip_nested(size = "variable")
+                    ) +
+  
+  geom_line(width = 1,
+            aes(linetype = model)) +
+  
+  geom_point(size = 2,
+             pch = 21,
+             color = "black",
+             stroke = 0.5) + 
+  geom_text_repel(aes(label = n_genes), size = 2) +
+  # Add a reference line for random prediction (AUC = 0.5)
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "black", linewidth = 0.2) +
+  # geom_text_repel(aes(label = auc), 
+  #                 size = 2.5, 
+  #                 # direction = "y", 
+  #                 segment.alpha = 1) +
+
+  scale_x_discrete(expand = c(0.05, 0.05)) +
+  # scale_y_continuous(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  scale_linetype_manual(values = c(
+    "Mouse" = 1,
+    "Immune" = 1,
+    "Human" = 1,
+    "Permutation" = 2
+    )) +
+  scale_fill_manual(values = colors$organism) +
+  scale_color_manual(values = colors$organism) +
+  labs(
+    x = "Time",
+    y = "AUC",
+    fill = "Model",
+    shape = "Model",
+  ) +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 8),
+          axis.text.y = element_text(size = 8, hjust = 1),
+          axis.title.x = element_text(size = 8),
+          axis.title.y = element_text(size = 8),
+          strip.text = element_text(size = 8, margin = margin(1, 0, 1, 0)),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 8),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 8),
+          panel.spacing = unit(0, "lines"),
+          plot.margin = margin(0, 0.5, 0, 0, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.margin=margin(0,0,0,0),
+          legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 8, hjust = 0),
+          legend.title = element_text(size = 8),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1, size = 0.5)
+    ) +
+  guides(color = "none",
+         shape = "none",
+         linetype = "none",
+         fill = guide_legend(nrow = 2, by.row = T))
+
+auc_lineplot_DEGs
+auc_lineplot_DEGs %>%
+  ggsave(filename = here("Figures", "all_human_mouse_performance_roc_auc_lineplot_DEGs_OnlyImmune.png"),
+         width = 3,
+         height = 12)
+
+```
 
 
 
