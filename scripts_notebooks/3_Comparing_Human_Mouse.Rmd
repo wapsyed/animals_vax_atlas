@@ -6382,14 +6382,14 @@ alignments_human2mouse_genes_filtered = bind_rows(
     filter(p_value <= 0.05, n > 3, cor_value >= 0, identity_human2mouse > 90) %>% 
     group_by(status) %>%
     arrange(-cor_value, -n) %>%
-    slice_head(n = 5) %>% 
+    slice_head(n = 100) %>% 
     mutate(filter = "Positive correlation,\nHigh %Identity"),
   
   # 2. SEQUENCE EXTREMES: Max identity per specific group (Immune, Non-Immune, All)
   alignments_human2mouse_all_global_df_nshared %>%
     filter(status %in% c("Immune BTMs", "Non-Immune BTMs", "All")) %>%
     group_by(status) %>% 
-    slice_max(identity_human2mouse, n = 5, with_ties = F) %>% 
+    slice_max(identity_human2mouse, n = 100, with_ties = F) %>% 
     mutate(filter = "High %Identity"),
   
   # 3. TRANSCRIPTIONAL RESILIENCE: High correlation but Low identity
@@ -6397,14 +6397,14 @@ alignments_human2mouse_genes_filtered = bind_rows(
     filter(n > 3, p_value <= 0.05) %>% 
     arrange(-cor_value, identity_human2mouse) %>% 
     group_by(status) %>% 
-    slice_min(identity_human2mouse, n = 5)  %>% 
+    slice_min(identity_human2mouse, n = 100)  %>% 
     mutate(filter = "Positive correlation,\nLow %Identity"),
   
   # 4. SEQUENCE DIVERGENCE: Min identity per specific group
   alignments_human2mouse_all_global_df_nshared %>%
     filter(status %in% c("Immune BTMs", "Non-Immune BTMs", "All")) %>%
     group_by(status) %>% 
-    slice_min(identity_human2mouse, n = 5, with_ties = F) %>% 
+    slice_min(identity_human2mouse, n = 100, with_ties = F) %>% 
     mutate(filter = "Low %Identity"),
 
   # 5. QUADRANT CHECK: Low correlation but High identity (>90%)
@@ -6412,7 +6412,7 @@ alignments_human2mouse_genes_filtered = bind_rows(
     filter(p_value <= 0.05, cor_value < 0, identity_human2mouse > 90) %>% 
     group_by(status) %>%
     arrange(cor_value, -n) %>%
-    slice_head(n = 5) %>% 
+    slice_head(n = 100) %>% 
     ungroup() %>% 
     mutate(filter = "Negative correlation,\nHigh %Identity"),
 
@@ -6421,7 +6421,7 @@ alignments_human2mouse_genes_filtered = bind_rows(
     filter(p_value <= 0.05, cor_value < 0, identity_human2mouse < 90) %>% 
     group_by(status) %>%
     arrange(cor_value, -n) %>%
-    slice_head(n = 5) %>% 
+    slice_head(n = 100) %>% 
     ungroup() %>% 
     mutate(filter = "Negative correlation,\nLow %Identity")
 ) %>% 
@@ -6464,14 +6464,18 @@ alignments_human2mouse_histogram_all_global = alignments_human2mouse_all_global_
                 "Positive correlation,\nLow %Identity" = "#CA6702", "Negative correlation,\nLow %Identity" = "#AE2012")) +
   
   # 5. Adding highlighted genes as points and labels
-  geom_point(data = alignments_human2mouse_genes_filtered, aes(color = filter), pch = 21, fill = "white") +
+  geom_point(data = alignments_human2mouse_genes_filtered %>% 
+               group_by(status, filter) %>% 
+               slice_head(n = 5), aes(color = filter), pch = 21, fill = "white") +
   
   # 6. Statistical annotation: Median identity labels
   stat_summary(fun = median, geom = "label", aes(label = after_stat(round(y, 1))),
                size = 3, hjust = -0.2, color = "black", fill = "white") +
   
   # 7. Gene Labeling: Repel prevents overlapping names
-  geom_label_repel(data = alignments_human2mouse_genes_filtered,
+  geom_label_repel(data = alignments_human2mouse_genes_filtered %>% 
+               group_by(status, filter) %>% 
+               slice_head(n = 5),
                    aes(label = gene, color = filter), 
                    max.overlaps = 10000, size = 2, direction = "y", nudge_x = -0.4,
                    hjust = 0, fill = "white", box.padding = unit(0, "cm"), label.padding = unit(0.1, "cm")) +
@@ -7461,6 +7465,8 @@ gene_attribute_tf_count %>%
   filter(gene %in% c("XPO1", "CD2", "CDK14", "NDUFB10")) %>% 
   # Join with your filtered gene quadrants (e.g., High Corr/Low Identity)
   inner_join(alignments_human2mouse_genes_filtered %>% 
+               group_by(status, filter) %>% 
+               slice_head(n = 5) %>% 
                filter(status == "Shared"),
              by = "gene") %>%
   # Create a descriptive label for the final table
@@ -7473,23 +7479,44 @@ gene_attribute_tf_count %>%
   adorn_pct_formatting(digits = 1) %>%
   adorn_ns() %>% 
   as.data.frame()
+```
 
 
-
-gene_attribute_tf_count %>% 
-  # Join with your filtered gene quadrants (e.g., High Corr/Low Identity)
+```{r fig.height=3, fig.width=6}
+gene_attribute_tf_count_filter_df = gene_attribute_tf_count %>% 
+  # Join with the filtered gene quadrants (e.g., High Corr/Low Identity)
   inner_join(alignments_human2mouse_genes_filtered %>% 
-               filter(status == "Shared"),
+               filter(status == "Shared") %>% 
+               group_by(filter) %>% 
+               slice_head(n = 50),
              by = "gene") %>%
   # Create a descriptive label for the final table
   arrange(desc(both)) %>% 
-  # Generate a contingency table: Gene/Category vs. Cross-species status
-  tabyl(filter, both) %>%
-  adorn_totals(where = "col") %>% 
-  adorn_percentages("row") %>%
-  adorn_pct_formatting(digits = 1) %>%
-  adorn_ns() %>% 
-  as.data.frame()
+  group_by(filter, gene, both) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  group_by(gene) %>% 
+  mutate(total = sum(n),
+         percentage = (n/total*100) %>% round(1))  %>% 
+  filter(both == "T") 
+
+gene_attribute_tf_count_filter_df %>% 
+  ggplot() +
+  aes(y = filter,
+      x = percentage,
+      fill = filter) +
+  geom_boxplot() +
+  geom_point(alpha = 0.2) +
+    stat_summary(geom = "pointrange",
+               fun.data = "mean_cl_boot",
+               position = "dodge",
+               color = "red") +
+  theme_vaxgo() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = colors_all)
+
+
+
 
 
 ```
