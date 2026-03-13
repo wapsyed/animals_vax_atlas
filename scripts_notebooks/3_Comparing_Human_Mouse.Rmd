@@ -6202,7 +6202,7 @@ alignments_human2mouse_all_global_df_nshared = alignments_human2mouse_all_global
     ratio_shared_notshared_pct = round(n_shared / n_notshared, 2),
     ratio_shared_notshared_pct = if_else(is.infinite(ratio_shared_notshared_pct), NA_real_, ratio_shared_notshared_pct),
     #Classify
-    class = if_else(ratio_shared_notshared_pct >= 1, "Shared >", "Not shared >")
+    class = if_else(ratio_shared_notshared_pct >= 1, "Shared", "Not-shared")
   ) %>%
   ungroup() %>% 
   inner_join(alignments_human2mouse_all_global_df %>% 
@@ -6213,13 +6213,84 @@ alignments_human2mouse_all_global_df_nshared = alignments_human2mouse_all_global
               filter(status %in% c("All", "Immune BTMs", "Non-Immune BTMs")) %>% 
                select(status,gene, identity_human2mouse, cor_value:cor_label) %>% 
                distinct() %>% 
-              mutate(is_shared = status))
+              mutate(is_shared = status,
+                     class = status))
 
 # 5. Final cleaned reference for identity distribution
 alignments_human2mouse_all_global_df_filtered = alignments_human2mouse_all_global_df %>% 
   select(gene, status, identity_human2mouse) %>% 
   distinct()
+
+
+
+#Create a filtered dataset of exemplar genes based on identity and correlation
+top_shared_notshared_genes = bind_rows(
+    #Get mostly shared-genes
+    alignments_human2mouse_all_global_df_nshared %>%
+    select(gene, 
+           # is_shared, 
+           class, n_conditions_status, n_shared, ntotal, cor_value, p_value, r_squared, cor_label, identity_human2mouse,  ratio_shared_notshared_pct) %>%
+    arrange(-ratio_shared_notshared_pct, -n_shared) %>% 
+    filter(class == "Shared",
+           n_shared > 3) %>%
+      arrange(-ratio_shared_notshared_pct) %>% 
+    slice_head(n = 50) %>% 
+      select(-n_conditions_status) %>% 
+    distinct() %>% 
+      arrange(-identity_human2mouse, -cor_value),
+    
+    
+    #Get mostly not-shared genes
+    alignments_human2mouse_all_global_df_nshared %>%
+    drop_na(cor_value) %>% 
+    select(gene, 
+           # is_shared, 
+           n_shared, class,  n_notshared, identity_human2mouse, cor_value, p_value, r_squared, cor_label, ntotal,ratio_shared_notshared_pct) %>%
+    arrange(ratio_shared_notshared_pct, -n_notshared) %>% 
+    filter(class == "Not-shared",
+           n_notshared > 3) %>%
+    arrange(ratio_shared_notshared_pct) %>% 
+      slice_head(n = 50)
+    distinct(),
+    
+    
+     #Get All and BTMs genes
+    alignments_human2mouse_all_global_df_nshared %>%
+      filter(status %in% c("Immune BTMs", "Non-Immune BTMs", "All")) %>% 
+    drop_na(cor_value) %>% 
+    select(gene, ntotal, 
+           # is_shared, 
+           n_shared, class, n_notshared, identity_human2mouse, cor_value, p_value, r_squared, cor_label, ntotal,ratio_shared_notshared_pct) %>%
+    distinct()
+    ) %>% 
+  mutate(n_conditions_is_shared = ntotal)
 ```
+
+
+```{r fig.height=3, fig.width=16}
+top_shared_notshared_genes %>%
+                 ungroup() %>%
+                 filter(class == "Shared") %>% 
+  inner_join(dge_btm_process_genes_wide %>% 
+               select(gene = symbol, pathogen, timepoint, Mouse:adj_p_val_Human) %>% 
+               distinct(),
+             by = "gene") %>%
+  filter(r_squared > 0.2) %>% 
+  ggplot() +
+  aes(x = rank(Mouse),
+      y = rank(Human)) +
+  facet_wrap(~gene+cor_label, scales = "free",
+             nrow = 1) +
+  geom_point(aes(fill = pathogen),
+             size = 3,
+             pch = 21,
+             color = "black") +
+  stat_smooth(method = "lm") +
+  scale_fill_manual(values = colors$pathogen) +
+  theme_vaxgo()
+
+```
+
 
 
 ```{r fig.height=4, fig.width=12}
@@ -6240,13 +6311,13 @@ library(viridis)
   geom_text_repel(data = alignments_human2mouse_all_global_df_nshared %>%
                  ungroup() %>%
                  filter(status == "Shared",
-                        class == "Shared >"),
+                        class == "Shared"),
              color = "black",
              size = 3) +
-  scale_color_manual(values = colors_all) +
+    scale_color_manual(values = c("Not-shared" = "gray90",
+                                "Shared" = "#4DBBD5FF")) +
   theme_vaxgo() +
   theme(legend.position = "top") +
-  scale_color_manual(values = colors_all) +
   labs(title = "Ratio of Shared to Not-shared")) |
 
 #Plot the ratio x identity
@@ -6265,10 +6336,11 @@ library(viridis)
   geom_text_repel(data = alignments_human2mouse_all_global_df_nshared %>%
                  ungroup() %>%
                  filter(status == "Shared",
-                        class == "Shared >"),
+                        class == "Shared"),
              color = "black",
              size = 3)  +
-  scale_color_manual(values = colors_all) +
+  scale_color_manual(values = c("Not-shared" = "gray90",
+                                "Shared" = "#4DBBD5FF")) +
   theme_vaxgo() +
     theme(legend.position = "top") +
   labs(title = "Ratio of Shared to Not-shared vs Identity")) |
@@ -6289,14 +6361,14 @@ library(viridis)
   geom_text_repel(data = alignments_human2mouse_all_global_df_nshared %>%
                  ungroup() %>%
                  filter(status == "Shared",
-                        class == "Shared >"),
+                        class == "Shared"),
              color = "black",
              size = 3)  +
   scale_color_binned(
     name = "p-value",
     breaks = c(1, 1.3, 2), 
-    type = "viridis",   
-    direction = -1,
+    type = "viridis", option = "mako",   
+    direction = 1,
     labels = c("0.1", "0.05", "0.01"),
     guide = guide_coloursteps(
       show.limits = TRUE,
@@ -6307,83 +6379,182 @@ library(viridis)
   theme_vaxgo() +
    theme(legend.position = "top") +
   labs(title = "Ratio of Shared to Not-shared vs Correlation"))
+
 ```
 
+
+
+```{r fig.height=5, fig.width=6}
+# --- Create a filtered dataset of exemplar genes based on identity and correlation ---
+alignments_human2mouse_genes_filtered = bind_rows(
+
+  #SHARED vs NOT SHARED ============
+  # POSITIVE CORRELATION, HIGH IDENTITY (>90%)
+  top_shared_notshared_genes %>%
+    filter(p_value <= 0.10,
+           cor_value >= 0, 
+            r_squared > 0.2,
+           ntotal > 3,
+           identity_human2mouse > 90) %>% 
+    group_by(class) %>%
+    arrange(-cor_value, 
+            -ntotal) %>%
+    slice_head(n = 5) %>% 
+    mutate(filter = "Positive correlation,\nHigh %Identity"),
+  
+  # POSITIVE CORRELATION, LOW IDENTITY
+  top_shared_notshared_genes %>%
+    filter(ntotal > 3, 
+           cor_value > 0,
+           p_value <= 0.10,
+            r_squared > 0.2,
+           identity_human2mouse < 90) %>% 
+    arrange(-cor_value, identity_human2mouse) %>% 
+    group_by(class) %>% 
+    slice_head(n = 5)  %>% 
+    mutate(filter = "Positive correlation,\nLow %Identity"),
+
+  # NEGATIVE CORRELATION, HIGH IDENTITY (>90%)
+  top_shared_notshared_genes %>%
+    filter(ntotal > 3,
+           p_value <= 0.10, 
+            r_squared > 0.2,
+           cor_value < 0, 
+           identity_human2mouse > 90) %>% 
+    group_by(class) %>%
+    arrange(cor_value, -ntotal) %>%
+    slice_head(n = 5) %>% 
+    ungroup() %>% 
+    mutate(filter = "Negative correlation,\nHigh %Identity"),
+
+  # NEGATIVE CORRELATION, LOW IDENTITY (<90%)
+  top_shared_notshared_genes %>%
+    filter(p_value <= 0.10, 
+           cor_value < 0, 
+           r_squared > 0.2,
+           ntotal > 3,
+           identity_human2mouse < 90) %>% 
+    group_by(class) %>%
+    arrange(cor_value, -ntotal) %>%
+    slice_head(n = 5) %>% 
+    ungroup() %>% 
+    mutate(filter = "Negative correlation,\nLow %Identity"),
+  
+  # OTHER ==================
+  # POSITIVE CORRELATION, HIGH IDENTITY (Immune, Non-Immune, All)
+  top_shared_notshared_genes %>%
+    filter(class %in% c("Immune BTMs", "Non-Immune BTMs", "All"),
+           p_value < 0.10,
+            r_squared > 0.2,
+           identity_human2mouse > 90,
+           cor_value > 0,
+           ) %>%
+    group_by(class) %>%
+    arrange(-cor_value, -ntotal) %>% 
+    slice_head(n = 5) %>% 
+    mutate(filter = "Positive correlation,\nHigh %Identity"),
+  
+  # NEGATIVE CORRELATION, LOW IDENTITY (Immune, Non-Immune, All)
+  top_shared_notshared_genes %>%
+    filter(class %in% c("Immune BTMs", "Non-Immune BTMs", "All"),
+           p_value < 0.10,
+           cor_value < 0,
+            r_squared > 0.2,
+           identity_human2mouse <90,
+           ) %>%
+    group_by(class) %>%
+    arrange(-cor_value, -ntotal) %>% 
+    slice_head(n = 5) %>% 
+    mutate(filter = "Negative correlation,\nLow %Identity"),
+
+) %>% 
+  # Final label cleaning and factor releveling
+  mutate(
+    class = str_replace(class, " ", "\n"),
+    class = fct_relevel(class, "Not-shared", "Shared", 
+                         "All", "Non-Immune\nBTMs", "Immune\nBTMs"),
+    filter = fct_relevel(filter, 
+                         "Positive correlation,\nHigh %Identity",
+                         "Negative correlation,\nHigh %Identity", 
+                         "Positive correlation,\nLow %Identity",
+                         "Negative correlation,\nLow %Identity")
+    )
+
+
+
+```
+
+
+
+
 Correlation and identity, shared vs not-shared, filtered by importance (n and ratio)
-```{r fig.height=4, fig.width=8}
+```{r fig.height=4, fig.width=16}
 #Correlation by shared vs not-shared, filtered by importance
 correlation_shared_notshared_plot = alignments_human2mouse_all_global_df_nshared %>% 
   ungroup() %>% 
   select(gene, ntotal, ratio_shared_notshared_pct, is_shared, n_shared, n_notshared, class, identity_human2mouse:cor_label) %>% 
   distinct() %>% 
   arrange(-ratio_shared_notshared_pct) %>% 
+  mutate(class = str_replace(class, " ", "\n"),
+         class = fct_relevel(class, "Not-shared", "Shared", 
+                         "All", "Non-Immune\nBTMs", "Immune\nBTMs")) %>% 
   ggplot() +
-  aes(x = is_shared,
+  aes(x = class,
       y = cor_value,
-      label = gene,
-      fill = is_shared) +
-  geom_violin(alpha = 0.3) +
-  geom_boxplot(width = 0.3) +
+      label = gene) +
+  # geom_violin(aes(fill = is_shared),
+  #             alpha = 0.3) +
+  see::geom_violinhalf(flip = TRUE,
+                  alpha = T,
+                  mapping = aes(fill = class))+
+  # geom_boxplot(width = 0.3) +
   geom_point(color = "black",
               alpha = 0.2) +
-  geom_point(color = "red",
-              fill = "red",
-              alpha = 1,
-              data = bind_rows(
-    #Get mostly shared-genes
-    alignments_human2mouse_all_global_df_nshared %>%
-    select(gene, is_shared, n_shared, ntotal, cor_value, ratio_shared_notshared_pct) %>%
-    arrange(-ratio_shared_notshared_pct, -n_shared) %>% 
-    filter(is_shared == "Shared",
-           n_shared > 3) %>%
-    slice_max(ratio_shared_notshared_pct, n = 10) %>% 
-    distinct(),
-    #Get mostly not-shared genes
-    alignments_human2mouse_all_global_df_nshared %>%
-    drop_na(cor_value) %>% 
-    select(gene, is_shared, n_shared, n_notshared, identity_human2mouse, cor_value, ntotal,ratio_shared_notshared_pct) %>%
-    arrange(ratio_shared_notshared_pct, -n_notshared) %>% 
-    filter(is_shared == "Not-shared",
-           n_notshared > 3) %>%
-    slice_min(ratio_shared_notshared_pct, n = 10, with_ties = F) %>% 
-    distinct()
-    )) +
+   # 3. First Color Scale: Category status
+  scale_fill_manual(name = "Status", values = c(colors$comparison, "All" = "white")) +
+  new_scale_color() + 
+  new_scale_fill() + 
+  scale_color_manual(
+     name = "Filter",
+     values = c(
+                # "High %Identity" = "#4361ee", 
+                "Positive correlation,\nHigh %Identity" = "#4DBBD5FF",
+                "Negative correlation,\nHigh %Identity" = "#4361ee", 
+                # "Low %Identity" = "red",
+                "Positive correlation,\nLow %Identity" = "#CA6702",
+                "Negative correlation,\nLow %Identity" = "#AE2012")
+     ) +
+  scale_fill_manual(
+     name = "Filter",
+     values = c(
+                # "High %Identity" = "#4361ee", 
+                "Positive correlation,\nHigh %Identity" = "#4DBBD5FF",
+                "Negative correlation,\nHigh %Identity" = "#4361ee", 
+                # "Low %Identity" = "red",
+                "Positive correlation,\nLow %Identity" = "#CA6702",
+                "Negative correlation,\nLow %Identity" = "#AE2012")) +
+  geom_point(aes(color = filter,
+                 fill = filter),
+             alpha = 1,
+              data = alignments_human2mouse_genes_filtered) +
   
   geom_hline(yintercept = 0) +
   
   #Label
-  geom_label_repel(data = bind_rows(
-    #Get mostly shared-genes
-    alignments_human2mouse_all_global_df_nshared %>%
-    select(gene, is_shared, n_shared, ntotal, cor_value, ratio_shared_notshared_pct) %>%
-    arrange(-ratio_shared_notshared_pct, -n_shared) %>% 
-    filter(is_shared == "Shared",
-           n_shared > 3) %>%
-    slice_max(ratio_shared_notshared_pct, n = 10) %>% 
-    distinct(),
-    #Get mostly not-shared genes
-    alignments_human2mouse_all_global_df_nshared %>%
-    drop_na(cor_value) %>% 
-    select(gene, is_shared, n_shared, n_notshared, identity_human2mouse, cor_value, ntotal,ratio_shared_notshared_pct) %>%
-    arrange(ratio_shared_notshared_pct, -n_notshared) %>% 
-    filter(is_shared == "Not-shared",
-           n_notshared > 3) %>%
-    slice_min(ratio_shared_notshared_pct, n = 10, with_ties = F) %>% 
-    distinct()
-    ), 
+  geom_label_repel(aes(color = filter),
+                   data = alignments_human2mouse_genes_filtered, 
     nudge_x = 0.3,
-    hjust = 0, direction = "y",
     fill = "white",
-    color = "black",
-    size = 3)  +
+    hjust = 0, 
+    direction = "y",
+    size = 2.5)  +
   theme_vaxgo() +
-  scale_fill_manual(values = colors_all) +
-   theme(legend.position = "top") +
+   theme(legend.position = "right") +
   labs(title = "Ratio of Shared to Not-shared vs Correlation",
        x = "Group",
        y = "Correlation")
 
-
+correlation_shared_notshared_plot
 
 #Identity by shared vs not-shared, filtered by importance
 identity_shared_not_shared_plot = alignments_human2mouse_all_global_df_nshared %>% 
@@ -6391,78 +6562,77 @@ identity_shared_not_shared_plot = alignments_human2mouse_all_global_df_nshared %
   select(gene, ntotal, ratio_shared_notshared_pct, is_shared, n_shared, n_notshared, class, identity_human2mouse:cor_label) %>% 
   distinct() %>% 
   arrange(-ratio_shared_notshared_pct) %>% 
+    mutate(class = str_replace(class, " ", "\n"),
+         class = fct_relevel(class, "Not-shared", "Shared", 
+                         "All", "Non-Immune\nBTMs", "Immune\nBTMs")) %>% 
   ggplot() +
-  aes(x = is_shared,
+  aes(x = class,
       y = identity_human2mouse,
-      label = gene,
-      fill = is_shared) +
-  geom_violin(alpha = 0.3) +
-  geom_boxplot(width = 0.3) +
+      label = gene) +
+  see::geom_violinhalf(flip = TRUE,
+                  alpha = T,
+                  mapping = aes(fill = class))+
+  # geom_boxplot(width = 0.3) +
   geom_point(color = "black",
               alpha = 0.2) +
-  geom_point(color = "red",
-              fill = "red",
-              alpha = 1,
-              data = bind_rows(
-    #Get mostly shared-genes
-    alignments_human2mouse_all_global_df_nshared %>%
-    select(gene, is_shared, n_shared, ntotal, cor_value, identity_human2mouse, ratio_shared_notshared_pct) %>%
-    arrange(-ratio_shared_notshared_pct, -n_shared) %>% 
-    filter(is_shared == "Shared",
-           n_shared > 3) %>%
-    slice_max(ratio_shared_notshared_pct, n = 10) %>% 
-    distinct(),
-    #Get mostly not-shared genes
-    alignments_human2mouse_all_global_df_nshared %>%
-    drop_na(cor_value) %>% 
-    select(gene, is_shared, n_shared, n_notshared, identity_human2mouse, cor_value, ntotal,ratio_shared_notshared_pct) %>%
-    arrange(ratio_shared_notshared_pct, -n_notshared) %>% 
-    filter(is_shared == "Not-shared",
-           n_notshared > 3) %>%
-    slice_min(ratio_shared_notshared_pct, n = 10, with_ties = F) %>% 
-    distinct()
-    )) +
+   # 3. First Color Scale: Category status
+  scale_fill_manual(name = "Status", values = c(colors$comparison, "All" = "white")) +
+  new_scale_color() + 
+  new_scale_fill() + 
+   scale_color_manual(
+     name = "Filter",
+     values = c(
+                # "High %Identity" = "#4361ee", 
+                "Positive correlation,\nHigh %Identity" = "#4DBBD5FF",
+                "Negative correlation,\nHigh %Identity" = "#4361ee", 
+                # "Low %Identity" = "red",
+                "Positive correlation,\nLow %Identity" = "#CA6702",
+                "Negative correlation,\nLow %Identity" = "#AE2012")
+     ) +
+  scale_fill_manual(
+     name = "Filter",
+     values = c(
+                # "High %Identity" = "#4361ee", 
+                "Positive correlation,\nHigh %Identity" = "#4DBBD5FF",
+                "Negative correlation,\nHigh %Identity" = "#4361ee", 
+                # "Low %Identity" = "red",
+                "Positive correlation,\nLow %Identity" = "#CA6702",
+                "Negative correlation,\nLow %Identity" = "#AE2012")) +
+  geom_point(aes(color = filter,
+                 fill = filter),
+             alpha = 1,
+              data = alignments_human2mouse_genes_filtered) +
   
   #Label
-  geom_label_repel(data = bind_rows(
-    #Get mostly shared-genes
-    alignments_human2mouse_all_global_df_nshared %>%
-    select(gene, is_shared, n_shared, ntotal, cor_value, identity_human2mouse, ratio_shared_notshared_pct) %>%
-    arrange(-ratio_shared_notshared_pct, -n_shared) %>% 
-    filter(is_shared == "Shared",
-           n_shared > 3) %>%
-    slice_max(ratio_shared_notshared_pct, n = 10) %>% 
-    distinct() %>% 
-      arrange(-identity_human2mouse, -cor_value),
-    #Get mostly not-shared genes
-    alignments_human2mouse_all_global_df_nshared %>%
-    drop_na(cor_value) %>% 
-    select(gene, is_shared, n_shared, n_notshared, identity_human2mouse, cor_value, ntotal,ratio_shared_notshared_pct) %>%
-    arrange(ratio_shared_notshared_pct, -n_notshared) %>% 
-    filter(is_shared == "Not-shared",
-           n_notshared > 3) %>%
-    slice_min(ratio_shared_notshared_pct, n = 10, with_ties = F) %>% 
-    distinct()
-    ), 
+  geom_label_repel(aes(color = filter),
+                   data = alignments_human2mouse_genes_filtered, 
     nudge_x = 0.3,
-    hjust = 0, direction = "y",
     fill = "white",
-    color = "black",
-    size = 3)  +
+    hjust = 0, 
+    direction = "y",
+    size = 2.5)  +
   theme_vaxgo() +
-  scale_fill_manual(values = colors_all) +
-   theme(legend.position = "top") +
+   theme(legend.position = "right") +
   labs(title = "Ratio of Shared to Not-shared vs Identity",
        y = "%Identity",
        x = "Group")
 
-
+identity_shared_not_shared_plot
 
 correlation_shared_notshared_plot + identity_shared_not_shared_plot +
   plot_layout(guides = "collect") +
-  plot_annotation(theme = theme(legend.position = "top"))
+  plot_annotation(theme = theme(legend.position = "right"))
 
 ```
+
+
+
+
+
+
+
+
+
 
 
 
@@ -6497,8 +6667,8 @@ alignments_human2mouse_all_global_df %>%
   aes(x = n_pathogens_f,
       y = cor_value
       ) +
-  geom_boxplot(aes(fill = status)) +
-  geom_point(aes(color = status))
+  geom_boxplot(aes(fill = class)) +
+  geom_point(aes(color = class))
 
 alignments_human2mouse_all_global_df %>%
   select(-pathogen, -timepoint) %>% 
@@ -6741,105 +6911,7 @@ alignments_human2mouse_pointrange_all_global
 ```
 
 
-Create a filtered dataset of exemplar genes based on identity and correlation
-```{r fig.height=8, fig.width=12}
 
-
-
-
-
-
-top_shared_notshared_genes = bind_rows(
-    #Get mostly shared-genes
-    alignments_human2mouse_all_global_df_nshared %>%
-    select(gene, is_shared,n_conditions_status, n_shared, ntotal, cor_value, p_value, r_squared, identity_human2mouse, ratio_shared_notshared_pct) %>%
-    arrange(-ratio_shared_notshared_pct, -n_shared) %>% 
-    filter(is_shared == "Shared",
-           n_shared > 3) %>%
-    slice_max(ratio_shared_notshared_pct, n = 50) %>% 
-    distinct() %>% 
-      arrange(-identity_human2mouse, -cor_value),
-    #Get mostly not-shared genes
-    alignments_human2mouse_all_global_df_nshared %>%
-    drop_na(cor_value) %>% 
-    select(gene, is_shared, n_conditions_status, n_shared, n_notshared, identity_human2mouse, cor_value, p_value, r_squared,  ntotal,ratio_shared_notshared_pct) %>%
-    arrange(ratio_shared_notshared_pct, -n_notshared) %>% 
-    filter(is_shared == "Not-shared",
-           n_notshared > 3) %>%
-    slice_min(ratio_shared_notshared_pct, n = 50, with_ties = F) %>% 
-    distinct(),
-     #Get All and BTMs genes
-    alignments_human2mouse_all_global_df_nshared %>%
-      filter(status %in% c("Immune BTMs", "Non-Immune BTMs", "All")) %>% 
-    drop_na(cor_value) %>% 
-    select(gene, is_shared, n_conditions_status, n_shared, n_notshared, identity_human2mouse, cor_value, p_value, r_squared,  ntotal,ratio_shared_notshared_pct) %>%
-    distinct()
-    )
-
-
-
-
-
-
-
-# --- Create a filtered dataset of exemplar genes based on identity and correlation ---
-alignments_human2mouse_genes_filtered = bind_rows(
-  
-  # 1. TOP TIER: High positive correlation, high frequency (n > 3), high identity (>90%)
-  top_shared_notshared_genes %>%
-    filter(p_value <= 0.05, n_conditions_status > 3, cor_value >= 0, identity_human2mouse > 90) %>% 
-    group_by(is_shared) %>%
-    arrange(-cor_value, -n_conditions_status) %>%
-    slice_head(n = 100) %>% 
-    mutate(filter = "Positive correlation,\nHigh %Identity"),
-  
-  # 2. SEQUENCE EXTREMES: Max identity per specific group (Immune, Non-Immune, All)
-  alignments_human2mouse_all_global_df_nshared %>%
-    filter(status %in% c("Immune BTMs", "Non-Immune BTMs", "All")) %>%
-    group_by(status) %>% 
-    slice_max(identity_human2mouse, n = 100, with_ties = F) %>% 
-    mutate(filter = "High %Identity"),
-  
-  # 3. TRANSCRIPTIONAL RESILIENCE: High correlation but Low identity
-  alignments_human2mouse_all_global_df_nshared %>%
-    filter(n > 3, p_value <= 0.05) %>% 
-    arrange(-cor_value, identity_human2mouse) %>% 
-    group_by(status) %>% 
-    slice_min(identity_human2mouse, n = 100)  %>% 
-    mutate(filter = "Positive correlation,\nLow %Identity"),
-  
-  # 4. SEQUENCE DIVERGENCE: Min identity per specific group
-  alignments_human2mouse_all_global_df_nshared %>%
-    filter(status %in% c("Immune BTMs", "Non-Immune BTMs", "All")) %>%
-    group_by(status) %>% 
-    slice_min(identity_human2mouse, n = 100, with_ties = F) %>% 
-    mutate(filter = "Low %Identity"),
-
-  # 5. QUADRANT CHECK: Low correlation but High identity (>90%)
-  alignments_human2mouse_all_global_df_nshared %>%
-    filter(p_value <= 0.05, cor_value < 0, identity_human2mouse > 90) %>% 
-    group_by(status) %>%
-    arrange(cor_value, -n) %>%
-    slice_head(n = 100) %>% 
-    ungroup() %>% 
-    mutate(filter = "Negative correlation,\nHigh %Identity"),
-
-  # 6. QUADRANT CHECK: Low correlation and Low identity (<90%)
-  alignments_human2mouse_all_global_df_nshared %>%
-    filter(p_value <= 0.05, cor_value < 0, identity_human2mouse < 90) %>% 
-    group_by(status) %>%
-    arrange(cor_value, -n) %>%
-    slice_head(n = 100) %>% 
-    ungroup() %>% 
-    mutate(filter = "Negative correlation,\nLow %Identity")
-) %>% 
-  # Final label cleaning and factor releveling
-  mutate(
-    status = str_replace(status, " ", "\n"),
-    status = fct_relevel(status, "Human\nonly", "Mouse\nonly", "Shared", 
-                         "All", "Non-Immune\nBTMs", "Immune\nBTMs")
-  )
-```
 
 Plot boxplot with violin plot and unite with point-range plot
 ```{r fig.height=8, fig.width=12}
@@ -7868,12 +7940,16 @@ gene_attribute_tf_count = gene_attribute_chea_clean %>%
 
 gene_attribute_tf_count %>% 
   saveRDS(file = here("tables", "regulation_gene_tf_count.rds"))
+```
 
+
+```{r}
 # --- 3. Summarize Conservation ---
-
+gene_attribute_tf_count =
+  readRDS(file = here("tables", "regulation_gene_tf_count.rds"))
 #Select genes
 gene_attribute_tf_count %>% 
-  filter(gene %in% c("XPO1", "CD2", "CDK14", "NDUFB10")) %>% 
+  filter(gene %in% c("XPO1", "CD2", "CDK14", "NDUFB10")) %>%
   # Join with your filtered gene quadrants (e.g., High Corr/Low Identity)
   inner_join(alignments_human2mouse_genes_filtered %>% 
                group_by(status, filter) %>% 
@@ -7893,38 +7969,251 @@ gene_attribute_tf_count %>%
 ```
 
 
-```{r fig.height=3, fig.width=6}
+```{r}
+gene_attribute_tf_count
+```
+```{r}
+
+```
+
+
+
+
+
+Shared TFs
+```{r fig.height=5, fig.width=5}
 gene_attribute_tf_count_filter_df = gene_attribute_tf_count %>% 
   # Join with the filtered gene quadrants (e.g., High Corr/Low Identity)
-  inner_join(alignments_human2mouse_genes_filtered %>% 
-               filter(status == "Shared") %>% 
-               group_by(filter) %>% 
-               slice_head(n = 50),
-             by = "gene") %>%
+  inner_join(alignments_human2mouse_all_global_df_nshared
+               # filter(class == "Shared") %>% 
+               # group_by(filter) %>% 
+               # slice_head(n = 50)
+             ,
+             by = "gene")
+
+gene_attribute_tf_count_filter_df_summary = gene_attribute_tf_count_filter_df %>% 
   # Create a descriptive label for the final table
   arrange(desc(both)) %>% 
-  group_by(filter, gene, both) %>% 
+  group_by(
+          # filter, 
+           gene, both) %>% 
   summarise(n = n()) %>% 
   ungroup() %>% 
   group_by(gene) %>% 
   mutate(total = sum(n),
-         percentage = (n/total*100) %>% round(1))  %>% 
-  filter(both == "T") 
+         percentage = (n/total*100) %>% round(1))  
 
-gene_attribute_tf_count_filter_df %>% 
+# gene_attribute_tf_count_filter_df_summary %>% 
+#   filter(both == "T") %>% 
+#   ggplot() +
+#   aes(y = filter,
+#       x = percentage,
+#       fill = filter) +
+#   geom_boxplot() +
+#   geom_point(alpha = 0.2) +
+#     stat_summary(geom = "pointrange",
+#                fun.data = "mean_cl_boot",
+#                position = "dodge",
+#                color = "red") +
+#   theme_vaxgo() +
+#   theme(legend.position = "none") +
+#   scale_fill_manual(values = colors_all)
+
+
+
+gene_attribute_tf_count_filter_df_summary_annotated = gene_attribute_tf_count_filter_df_summary %>%
+  arrange(gene) %>% 
+  distinct() %>%
+    select(-percentage) %>% 
+  pivot_wider(values_from = "n",
+              names_from = "both") %>% 
+  distinct() %>%
+  rename(not_shared_tf = "F",
+         shared_tf = "T") %>% 
+  mutate(shared_tf = if_else(is.na(shared_tf), 0, shared_tf)) %>% 
+  inner_join(gene_attribute_tf_count_filter_df %>% 
+               ungroup() %>% 
+               filter(class %in% c("Shared", "Not-shared")) %>% 
+               select(gene, class:cor_label) %>% 
+               distinct(),
+             by = join_by(gene)) %>% 
+  ungroup() %>% 
+  mutate(shared_tf_pct = (shared_tf/total) %>% round(2))
+
+
+gene_attribute_tf_count_filter_df_summary_annotated %>% 
   ggplot() +
-  aes(y = filter,
-      x = percentage,
-      fill = filter) +
-  geom_boxplot() +
-  geom_point(alpha = 0.2) +
-    stat_summary(geom = "pointrange",
-               fun.data = "mean_cl_boot",
-               position = "dodge",
-               color = "red") +
-  theme_vaxgo() +
-  theme(legend.position = "none") +
-  scale_fill_manual(values = colors_all)
+  aes(x = shared_tf,
+      y = not_shared_tf) +
+  geom_point(aes(color = class))
+
+
+gene_attribute_tf_count_filter_df_summary_annotated %>% 
+  arrange(-shared_tf) %>% 
+  mutate(quadrant = if_else(cor_value>0, "Positive correlation", "Negative correlation")) %>% 
+  drop_na(quadrant) %>% 
+  ggplot() +
+  aes(x = total,
+      y = cor_value,
+      label = gene) +
+  # facet_wrap(~quadrant,
+  #            scales = "free") +
+  geom_point(alpha = 0.1) +
+  geom_point(data = . %>% 
+                filter(p_value < 0.10,
+                       r_squared > 0.2),
+             color = "black",
+             alpha = 0.8) +
+  geom_point(color = "black",
+             size = 3,
+             pch = 21,
+             fill = "#4cc9f0",
+             data =  gene_attribute_tf_count_filter_df_summary_annotated %>% 
+                    inner_join(top_shared_notshared_genes %>% 
+                                 filter(class == "Shared") %>% 
+                                 filter(p_value < 0.10,
+                                 r_squared > 0.2) %>% 
+                                 select(gene) %>% 
+                                 distinct(),
+                               by = "gene")) +
+  geom_label_repel(color = "black",
+                   data =  gene_attribute_tf_count_filter_df_summary_annotated %>% 
+                    inner_join(top_shared_notshared_genes %>% 
+                                 filter(class == "Shared") %>% 
+                                 filter(p_value < 0.10,
+                                 r_squared > 0.2) %>% 
+                                 select(gene) %>% 
+                                 distinct(),
+                               by = "gene"),
+                  size = 2.5,
+                  fill = "white") +
+  # geom_smooth(method = "lm") +
+  # geom_smooth(method = "lm",
+  #             data = . %>% 
+  #               filter(p_value < 0.10,
+  #                      r_squared > 0.2),
+  #            color = "blue") +
+  theme_vaxgo()
+
+
+#Identity
+gene_attribute_tf_count_filter_df_summary_annotated %>% 
+  arrange(-shared_tf) %>% 
+  ggplot() +
+  aes(x = total,
+      y = identity_human2mouse,
+      label = gene) +
+  geom_point(alpha = 0.1) +
+  geom_point(data = . %>% 
+                filter(p_value < 0.10,
+                       r_squared > 0.2),
+             color = "black",
+             alpha = 0.8) +
+  geom_point(color = "black",
+             size = 3,
+             pch = 21,
+             fill = "#4cc9f0",
+             data =  gene_attribute_tf_count_filter_df_summary_annotated %>% 
+                    inner_join(top_shared_notshared_genes %>% 
+                                 filter(class == "Shared") %>% 
+                                 filter(p_value < 0.10,
+                                 r_squared > 0.2) %>% 
+                                 select(gene) %>% 
+                                 distinct(),
+                               by = "gene")) +
+  geom_label_repel(color = "black",
+                   data =  gene_attribute_tf_count_filter_df_summary_annotated %>% 
+                    inner_join(top_shared_notshared_genes %>% 
+                                 filter(class == "Shared") %>% 
+                                 filter(p_value < 0.10,
+                                 r_squared > 0.2) %>% 
+                                 select(gene) %>% 
+                                 distinct(),
+                               by = "gene"),
+                  size = 2.5,
+                  fill = "white") +
+  geom_smooth(method = "lm") +
+  theme_vaxgo()
+
+gene_attribute_tf_count_filter_df_summary_annotated %>% 
+  arrange(-shared_tf) %>% 
+  ggplot() +
+  aes(x = shared_tf,
+      y = identity_human2mouse,
+      label = gene) +
+  geom_point(alpha = 0.1) +
+  geom_point(data = . %>% 
+                filter(p_value < 0.10,
+                       r_squared > 0.2),
+             color = "black",
+             alpha = 0.8) +
+  geom_point(color = "black",
+             size = 3,
+             pch = 21,
+             fill = "#4cc9f0",
+             data =  gene_attribute_tf_count_filter_df_summary_annotated %>% 
+                    inner_join(top_shared_notshared_genes %>% 
+                                 filter(class == "Shared") %>% 
+                                 filter(p_value < 0.10,
+                                 r_squared > 0.2) %>% 
+                                 select(gene) %>% 
+                                 distinct(),
+                               by = "gene")) +
+  geom_label_repel(color = "black",
+                   data =  gene_attribute_tf_count_filter_df_summary_annotated %>% 
+                    inner_join(top_shared_notshared_genes %>% 
+                                 filter(class == "Shared") %>% 
+                                 filter(p_value < 0.10,
+                                 r_squared > 0.2) %>% 
+                                 select(gene) %>% 
+                                 distinct(),
+                               by = "gene"),
+                  size = 2.5,
+                  fill = "white") +
+  geom_smooth(method = "lm") +
+  theme_vaxgo()
+
+
+gene_attribute_tf_count_filter_df_summary_annotated %>% 
+  arrange(-shared_tf_pct) %>% 
+  ggplot() +
+  aes(x = shared_tf_pct,
+      y = identity_human2mouse,
+      label = gene) +
+  geom_point(alpha = 0.1) +
+  geom_point(data = . %>% 
+                filter(p_value < 0.10,
+                       r_squared > 0.2),
+             color = "black",
+             alpha = 0.8) +
+  geom_point(color = "black",
+             size = 3,
+             pch = 21,
+             fill = "#4cc9f0",
+             data =  gene_attribute_tf_count_filter_df_summary_annotated %>% 
+                    inner_join(top_shared_notshared_genes %>% 
+                                 filter(class == "Shared") %>% 
+                                 filter(p_value < 0.10,
+                                 r_squared > 0.2) %>% 
+                                 select(gene) %>% 
+                                 distinct(),
+                               by = "gene")) +
+  geom_label_repel(color = "black",
+                   data =  gene_attribute_tf_count_filter_df_summary_annotated %>% 
+                    inner_join(top_shared_notshared_genes %>% 
+                                 filter(class == "Shared") %>% 
+                                 filter(p_value < 0.10,
+                                 r_squared > 0.2) %>% 
+                                 select(gene) %>% 
+                                 distinct(),
+                               by = "gene"),
+                  size = 2.5,
+                  fill = "white") +
+  geom_smooth(method = "lm") +
+  theme_vaxgo()
+
+
+
 ```
 
 
