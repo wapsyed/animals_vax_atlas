@@ -5894,13 +5894,16 @@ correlation_processes_bypathogen_time %>%
 Plot heatmap
 ```{r fig.height=20, fig.width=10}
 #Heatmap
-btm_correlation_process_heatmap =
+btm_correlation_process_heatmap_df =
   correlation_processes_bypathogen_time_df %>% 
   filter(p_value <= 0.05) %>% 
   mutate(
     process = fct_reorder(process, cor_value, .fun = mean),
-    timepoint = as.factor(timepoint)
-  ) %>% 
+    timepoint = as.factor(timepoint),
+    group = fct_relevel(group, immune_order)
+  ) 
+
+btm_correlation_process_heatmap = btm_correlation_process_heatmap_df %>% 
   ggplot(
     aes(
       x = timepoint,
@@ -5938,6 +5941,8 @@ btm_correlation_process_heatmap =
            ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
           ) 
 
+
+
 btm_correlation_process_heatmap
 # btm_correlation_process_heatmap %>%
 # ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_intramodule_correlation_processes_heatmap.png"),
@@ -5957,6 +5962,7 @@ gsea_btm_results_core = gsea_btm_results_all_matched %>%
   separate_rows(core_enrichment, sep = "/")
 
 gsea_btm_results_core_joined =
+  # 1. Isolate and format Human core enrichment genes
   gsea_btm_results_core %>% 
   filter(organism == "Human") %>% 
   select(pathogen, process, timepoint,
@@ -5964,6 +5970,8 @@ gsea_btm_results_core_joined =
          set_size_human = set_size, 
          p_adjust_human_gsea = p_adjust) %>% 
   mutate(human_core = TRUE) %>% 
+  
+  # 2. Join with Mouse core enrichment genes using a full join
   full_join(
     gsea_btm_results_core %>% 
       filter(organism == "Mouse") %>% 
@@ -5974,6 +5982,8 @@ gsea_btm_results_core_joined =
       mutate(mouse_core = TRUE),
     by = c("pathogen", "process", "timepoint", "gene")
   ) %>% 
+  
+  # 3. Classify the conservation status of each gene in the process
   mutate(
     status = case_when(
       human_core == TRUE & mouse_core == TRUE ~ "Shared",
@@ -5982,10 +5992,14 @@ gsea_btm_results_core_joined =
       TRUE ~ "Other"
     )
   ) %>% 
+  
+  # 4. Final organization and mapping to BTM functional groups
   arrange(pathogen, timepoint, process, status) %>% 
   inner_join(btm_annotation_genes %>% select(process, group),
-             by = "process")
+             by = "process") %>% 
+  distinct()
 
+#Check
 gsea_btm_results_core_joined %>% 
   dplyr::count(pathogen, timepoint)
 
@@ -5997,7 +6011,11 @@ gsea_btm_results_core_joined %>%
 Get shared percentage
 ```{r fig.height = 12, fig.width=4}
 #Get percent LEGs, by status, process, pathogen and timepoint
-legs_perc = gsea_btm_results_core_joined %>% 
+legs_perc
+
+gsea_btm_results_core_joined %>% 
+  filter(process == "T cell activation (I)")
+  filter(status != "Not core") %>% 
   distinct() %>% 
   group_by(pathogen, timepoint, process, status) %>% 
   summarise(n = n(), .groups = "drop_last") %>% 
@@ -6006,17 +6024,26 @@ legs_perc = gsea_btm_results_core_joined %>%
          percent = percent %>% round(0)) %>% 
   ungroup() 
 
+#Save
+legs_perc %>% 
+  saveRDS(file = here("tables", "all_human_mouse_gsea_btm_results_core_summary.rds"))
+
 #What is the mean percentage?
-mean_percentage_legs = legs_perc %>% 
-  group_by(pathogen, timepoint, status) %>% 
+legs_perc %>% 
+  filter(status == "Shared") %>% 
+  group_by(pathogen, status) %>% 
   summarise(mean_perc = mean(percent),
             median_perc = median(percent)) 
+
+```
+
+
+```{r fig.height = 10, fig.width=5}
 
 #Prepare the plot df
 shared_perc_plot_df = legs_perc %>% 
   filter(status == "Shared") %>% 
-  mutate(process = fct_reorder(process, percent),
-         treatment = case_when(pathogen %in% c("Hepatitis B", "Influenza") ~ "Vaccination",
+  mutate(treatment = case_when(pathogen %in% c("Hepatitis B", "Influenza") ~ "Vaccination",
                       pathogen %in% c( "Saureus", "Ecoli") ~ "Infection",
                       pathogen %in% c( "Burn", "Trauma") ~ "Injury",
                       T ~ pathogen),
@@ -6025,10 +6052,7 @@ shared_perc_plot_df = legs_perc %>%
          timepoint = fct_relevel(timepoint, c("Early hours", 
                                                     "2h", "4h", "6h", "12h", "24h", 
                                                     "Day 1", "Day 3", "Day 7")))
-```
 
-
-```{r fig.height = 10, fig.width=5}
 #Histogram and violin
 shared_processes_bypathogen_time = shared_perc_plot_df %>%
   ggplot() +
@@ -6138,19 +6162,45 @@ shared_processes_bypathogen_time %>%
 ```
 
 
-
+Is there an association between sharedness of LEGs and correlation of genes in modules?
+```{r fig.height=5, fig.width=20}
+# #Is there an association between sharedness of LEGs and correlation of genes in modules?
+# 
+# correlation_processes_bypathogen_time_df %>% 
+#   inner_join(shared_perc_plot_df,
+#              by = join_by(pathogen, timepoint, process)) %>%
+#   filter(!pathogen %in% c("Influenza", "Hepatitis B")) %>% 
+#   ggpubr::ggscatter(x = "cor_value",
+#                     y = "percent",
+#                     add = "reg.line",  # Add regressin line
+#                     add.params = list(color = "blue", fill = "lightgray"), # Customize reg. line
+#                     conf.int = TRUE) +
+#   facet_nested_wrap(~pathogen + timepoint,
+#                     scales = "free",
+#                     nrow = 2) +
+#     geom_vline(xintercept = 0,
+#              linetype = 2) +
+#   stat_cor(method = "pearson", ) 
+  
+```
 
 
 
 Bubbleplot
 ```{r fig.height=20, fig.width=10}
 #Percentage shared - Bubbleplot
+
 shared_perc_plot =  shared_perc_plot_df %>% 
   inner_join(btm_annotation_genes %>% 
                select(process, group) %>% 
                distinct(),
              by = "process") %>% 
-  mutate(process = fct_reorder(process, n),
+    #Force to show the same levels as the previous plot, even without values
+  mutate(process = fct_relevel(process, btm_correlation_process_heatmap$data %>%
+                                 arrange(process) %>%
+                                 mutate(process = as.character(process)) %>%
+                                 pull(process) %>%
+                                 unique()),
          group = fct_relevel(group, immune_order)) %>% 
   ggplot() +
   aes(x = timepoint, 
@@ -6161,7 +6211,7 @@ shared_perc_plot =  shared_perc_plot_df %>%
   rows = vars(group),
   cols = vars(pathogen),
   scales = "free",
-  space  = "free"
+  space  = "free_y"
 ) +
   geom_point(pch = 21)+
   scale_fill_stepsn(
@@ -6184,7 +6234,9 @@ shared_perc_plot =  shared_perc_plot_df %>%
           legend.direction = "horizontal",
           legend.text = element_text(size = 8, hjust = 0),
            ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-          ) 
+          ) +
+  labs(y = "",
+       x = "Timepoint")
 
 
 shared_perc_plot
@@ -6193,7 +6245,24 @@ shared_perc_plot
 #   ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_leadingedge_core_shared_perc_heatmap.png"),
 #          width = 10,
 #          height = 20)
+
+
+
 ```
+
+
+
+```{r fig.height=20, fig.width=20}
+btm_correlation_shared_perc_plots = ((btm_correlation_process_heatmap + theme(plot.title = element_blank())) | (shared_perc_plot) ) +
+  plot_layout(axes = "collect")
+
+btm_correlation_shared_perc_plots %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_correlation_and_leadingedge_shared_perc_heatmap.png"),
+         width = 20,
+         height = 20)
+btm_correlation_shared_perc_plots
+```
+
 
 
 Do these leading edges have the same log2fc?
@@ -6205,22 +6274,34 @@ Do these leading edges have the same log2fc?
 ###########################################################
 # 1. Define target process
 process_selected <- "immune activation - generic cluster"
+#Calculate shared LEGs, but with genes that were present in both arrays
+df_legs_perc_legs_only = df_legs %>% 
+  arrange(process) %>% 
+  filter(status != "Not core") %>% 
+  select(symbol, pathogen, process, timepoint, status) %>% 
+  group_by(pathogen, timepoint, process, status) %>% 
+  summarise(n_status = n()) %>% 
+  ungroup() %>% 
+  group_by(pathogen, timepoint, process) %>% 
+  mutate(n_total = sum(n_status),
+         n_status_perc = round((n_status/n_total), 2)*100)
 
-df_test <- dge_btm_process_genes_wide %>%
-  filter(process == process_selected) %>%
+#Unite results
+df_legs <- dge_btm_process_genes_wide %>%
+  # filter(process == process_selected) %>%
   
   # 2. Join with GSEA core enrichment (Leading Edge) genes
   full_join(
-    gsea_btm_results_core_joined %>% 
-      filter(process == process_selected),
+    gsea_btm_results_core_joined,
+      # filter(process == process_selected),
     by = join_by(pathogen, process, timepoint, symbol == gene)
   ) %>% 
   
   # 3. Integrate shared percentage metrics
   inner_join(
-    legs_perc %>% 
-      filter(process == process_selected, status == "Shared") %>%
-      rename(status_percent = status), # 'percent' is already clear
+    df_legs_perc_legs_only %>% 
+      filter(status == "Shared") %>%
+      rename(status_percent = status),
     by = join_by(pathogen, process, timepoint)
   ) %>%
   
@@ -6228,7 +6309,7 @@ df_test <- dge_btm_process_genes_wide %>%
   inner_join(
     dge_btm_gsea_mean_wide %>% 
       ungroup() %>% 
-      filter(process == process_selected) %>% 
+      # filter(process == process_selected) %>% 
       select(process, pathogen, timepoint, starts_with("nes_")),
     by = join_by(pathogen, process, timepoint)
   ) %>% 
@@ -6246,14 +6327,21 @@ df_test <- dge_btm_process_genes_wide %>%
     status = if_else(is.na(status), "Not core", status),
     facet_label = sprintf(
       "%s\nShared = %s%%\nNES Mouse = %.2f\nNES Human = %.2f",
-      timepoint, percent, nes_Mouse, nes_Human
+      timepoint, n_status_perc, nes_Mouse, nes_Human
     )
   ) %>% 
   arrange(timepoint) %>% 
   mutate(facet_label = fct_inorder(facet_label)) %>% 
-  distinct()
-
-df_test
+  distinct() %>% 
+  #Rank by log2FC
+  group_by(pathogen, process, timepoint) %>% 
+  drop_na(Mouse, Human) %>%  #Drop genes not measured in both organisms
+  mutate(Mouse_rank = rank(Mouse),
+         Mouse_rank_p = rank(Mouse*-log(p_adjust_mouse_gsea)),
+         Human_rank_p = rank(Human*-log(p_adjust_human_gsea)),
+         Human_rank = rank(Human)
+         ) %>% 
+  ungroup()
 
 #Check
 dge_btm_gsea_mean_wide %>% 
@@ -6261,34 +6349,29 @@ dge_btm_gsea_mean_wide %>%
   select(pathogen, timepoint) %>% 
   distinct()
 
-```
 
-
-Positions using ranks
-```{r fig.height=5, fig.width=12}
-#########################################################################
-# Plot gene positions across species using ranks to evaluate conservation
-#########################################################################
-
-# 1. Prepare data for ranking and categorical grouping
-df_test_ranked <- df_test %>%
+# Prepare data for ranking and categorical grouping
+#Pivot longer
+df_legs_ranked = df_legs %>%
+  filter(process == process_selected) %>% 
+  select(symbol:timepoint, group.x, 
+         status, status_percent:facet_label,
+         Mouse_rank:Human_rank) %>% 
   pivot_longer(
-    names_to = "organism",
-    values_to = "log2fc",
-    cols = c("Mouse", "Human")
-  ) %>%
-  group_by(pathogen, organism) %>%
-  mutate(rank = rank(-log2fc, ties.method = "first")) %>%   
-  ungroup() %>% 
-  drop_na(log2fc) %>% 
-
-  # 2. Refine labels and categorical grouping (Vaccination, Infection, Injury)
+    names_to = "variable",
+    values_to = "value",
+    cols = c("Mouse_rank", "Human_rank",
+             "Mouse_rank_p", "Human_rank_p"
+             )
+  ) %>% 
+  mutate(organism = if_else(str_detect(variable, "Mouse"), "M", "H")) %>% 
+  
+  # Refine labels and categorical grouping (Vaccination, Infection, Injury)
   mutate(
     facet_label = sprintf(
       "%s\n%s\nShared = %s%%\nNES M=%.2f, H=%.2f",
-      timepoint, cor_label, percent, nes_Mouse, nes_Human
+      timepoint, cor_label, n_status_perc, nes_Mouse, nes_Human
     ),
-    organism = if_else(organism == "Human", "H", "M"),
     treatment = case_when(
       pathogen %in% c("Hepatitis B", "Influenza") ~ "Vaccination",
       pathogen %in% c("Saureus", "Ecoli")         ~ "Infection",
@@ -6299,10 +6382,151 @@ df_test_ranked <- df_test %>%
   ) %>% 
   arrange(timepoint) %>% 
   mutate(facet_label = fct_inorder(facet_label))
+```
 
-# 3. Generate slope plot with nested faceting
-df_test_ranked_plot <- ggplot(df_test_ranked) +
-  aes(x = organism, y = rank, group = symbol, color = status) +
+Barplots
+```{r fig.height=3, fig.width=12}
+#########################################################################
+# Plot percent of shared genes
+#########################################################################
+
+# 1. Prepare data for ranking and categorical grouping
+legs_perc_barplot = df_legs_perc_legs_only %>% 
+  # 2. Refine labels and categorical grouping (Vaccination, Infection, Injury)
+  mutate(
+    treatment = case_when(
+      pathogen %in% c("Hepatitis B", "Influenza") ~ "Vaccination",
+      pathogen %in% c("Saureus", "Ecoli")         ~ "Infection",
+      pathogen %in% c("Burn", "Trauma")           ~ "Injury",
+      TRUE                                        ~ pathogen
+    ),
+    treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
+  ) %>% 
+  arrange(timepoint) %>% 
+  filter(process %in% c(process_selected),
+         !treatment == "Vaccination",
+         !pathogen == "Trauma"
+         ) %>% 
+  ggplot() +
+  aes(x = n_status_perc,
+      y = fct_rev(timepoint),
+      fill = status) +
+  facet_nested_wrap(~treatment+pathogen,
+             scales = "free", 
+             nrow = 1,
+             strip = strip_nested(size = "variable")) +
+  geom_col(position = "fill") +
+  # Scales and Labels
+  scale_fill_manual(values = colors$comparison) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  labs(fill = "Core Status", 
+       y = "Timepoint", 
+       x = "Percent") +
+  
+  # Theme and Legend styling
+  theme_vaxgo() +
+  theme(
+    axis.text = element_text(size = 10),
+    strip.text = element_text(size = 10, hjust = 0),
+    panel.spacing = unit(0.2, "lines"),
+    legend.position = "top",
+    legend.margin = margin(0, 0, -10, 0),
+    ggh4x.facet.nestline = element_line(colour = "black")
+  ) +
+    geom_text(aes(label = paste0(n_status_perc, "%\n(", n_status, ")")),
+              lineheight = 0.8,
+            position = "fill",
+            color = "white", 
+            fontface = "bold", 
+            hjust = 1,
+            size = 3) 
+  
+#Save
+legs_perc_barplot %>%
+ggsave(filename = here("Figures", paste0("all_human_mouse_gsea_btm_results_leadingedge_core_barplot_selected_processes.png")),
+         width = 8,
+         height = 3)
+
+legs_perc_barplot
+
+```
+
+
+
+Plot scatterplots
+```{r fig.height=6, fig.width=10}
+
+#Only magnitude
+legs_scatterplot_rank = df_legs %>% 
+    filter(process == process_selected,
+         pathogen == "Ecoli") %>%
+  ggplot() +
+  aes(x = Mouse_rank,
+      y = Human_rank) +
+  facet_wrap(~facet_label, 
+             nrow = 1) +
+  geom_point(aes(color = status)) +
+  scale_color_manual(values = colors$comparison) +
+  # Theme and Legend styling
+  theme_vaxgo() +
+  guides(color = guide_legend(override.aes = list(linewidth = 3))) +
+  theme(
+    axis.text = element_text(size = 8),
+    strip.text = element_text(size = 10, hjust = 0),
+    panel.spacing = unit(0.2, "lines"),
+    legend.position = "top",
+    legend.margin = margin(0, 0, -10, 0),
+    ggh4x.facet.nestline = element_line(colour = "black")
+  )
+
+
+#With significance
+legs_scatterplot_rank_significance = df_legs %>% 
+    filter(process == process_selected,
+         pathogen == "Ecoli") %>%
+  ggplot() +
+  aes(x = Mouse_rank_p,
+      y = Human_rank_p) +
+  facet_wrap(~facet_label, 
+             nrow = 1) +
+  geom_point(aes(color = status)) +
+    scale_x_continuous(transform =  "reverse") +
+  scale_y_continuous(transform = "reverse") +
+  scale_color_manual(values = colors$comparison) +
+  # Theme and Legend styling
+  theme_vaxgo() +
+  guides(color = guide_legend(override.aes = list(linewidth = 3))) +
+  theme(
+    axis.text = element_text(size = 8),
+    strip.text = element_text(size = 10, hjust = 0),
+    panel.spacing = unit(0.2, "lines"),
+    legend.position = "top",
+    legend.margin = margin(0, 0, -10, 0),
+    ggh4x.facet.nestline = element_line(colour = "black")
+  )
+
+legs_scatterplot_rank
+
+legs_scatterplot_rank_significance
+
+```
+
+
+Positions using ranks
+```{r fig.height=5, fig.width=12}
+#########################################################################
+# Plot gene positions across species using ranks to evaluate conservation
+#########################################################################
+
+# Generate slope plot with nested faceting
+df_legs_ranked_significance_plot = df_legs_ranked %>% 
+  filter(variable %in% c("Mouse_rank_p", "Human_rank_p")) %>% 
+  ggplot() +
+  aes(x = organism,
+      y = value, 
+      group = symbol, 
+      color = status) +
   
   # Nested faceting by Process, Treatment, Pathogen, and stats
   facet_nested_wrap(
@@ -6321,7 +6545,7 @@ df_test_ranked_plot <- ggplot(df_test_ranked) +
   scale_color_manual(values = colors$comparison) +
   scale_x_discrete(expand = c(0.01, 0.01)) +
   scale_y_continuous(
-    labels = label_number(suffix = "k", scale = 1e-3), 
+    # labels = label_number(suffix = "k", scale = 1e-3), 
     transform = "reverse" ,
     expand = c(0.01, 0.01)
   ) +
@@ -6342,9 +6566,58 @@ df_test_ranked_plot <- ggplot(df_test_ranked) +
     ggh4x.facet.nestline = element_line(colour = "black")
   )
 
-# df_test_ranked_plot +
+
+
+# Generate slope plot with nested faceting
+df_legs_ranked_plot = df_legs_ranked %>% 
+  filter(variable %in% c("Mouse_rank", "Human_rank")) %>% 
+  ggplot() +
+  aes(x = organism,
+      y = value, 
+      group = symbol, 
+      color = status) +
+  
+  # Nested faceting by Process, Treatment, Pathogen, and stats
+  facet_nested_wrap(
+    ~treatment + pathogen + facet_label,
+    scales = "free",
+    nrow = 2,
+    strip = strip_nested(size = "variable")
+  ) +
+  
+  # Layered lines: Shared genes are drawn last (on top) with full opacity
+  geom_line(size = 0.5, alpha = 0.3, data = . %>% filter(status == "Not core")) +
+  geom_line(size = 0.5, alpha = 0.5, data = . %>% filter(!status %in% c("Not core", "Shared"))) +
+  geom_line(size = 0.7, alpha = 1.0, data = . %>% filter(status == "Shared")) +
+  
+  # Scales and Labels
+  scale_color_manual(values = colors$comparison) +
+  scale_x_discrete(expand = c(0.01, 0.01)) +
+  scale_y_continuous(
+    # labels = label_number(suffix = "k", scale = 1e-3), 
+    transform = "reverse" ,
+    expand = c(0.01, 0.01)
+  ) +
+  labs(color = "Core Status", 
+       y = "Rank (Descending log2FC)", 
+       x = NULL,
+       title = process_selected) +
+  
+  # Theme and Legend styling
+  theme_vaxgo() +
+  guides(color = guide_legend(override.aes = list(linewidth = 3))) +
+  theme(
+    axis.text = element_text(size = 8),
+    strip.text = element_text(size = 8, hjust = 0),
+    panel.spacing = unit(0.2, "lines"),
+    legend.position = "top",
+    legend.margin = margin(0, 0, -10, 0),
+    ggh4x.facet.nestline = element_line(colour = "black")
+  )
+
+# df_legs_ranked_plot +
 #   geom_text_repel(
-#     data = df_test_ranked %>%
+#     data = df_legs_ranked %>%
 #       # filter(pathogen == "Saureus") %>%
 #       filter(status == "Shared") %>%
 #       group_by(pathogen, process, timepoint) %>%
@@ -6377,82 +6650,18 @@ df_test_ranked_plot <- ggplot(df_test_ranked) +
 #   coord_cartesian(clip = "off")
 
 
-df_test_ranked_plot %>%
+df_legs_ranked_significance_plot %>%
 ggsave(filename = here("Figures", paste0("all_human_mouse_gsea_btm_results_leadingedge_core_ranks_lineplot_", process_selected, "2.png")),
          width = 12,
          height = 5)
 
-df_test_ranked_plot
+
+df_legs_ranked_significance_plot
+df_legs_ranked_plot
 ```
 
 
-Barplots
-```{r fig.height=3, fig.width=12}
-#########################################################################
-# Plot percent of shared genes
-#########################################################################
 
-# 1. Prepare data for ranking and categorical grouping
-legs_perc_barplot = legs_perc %>% 
-  # 2. Refine labels and categorical grouping (Vaccination, Infection, Injury)
-  mutate(
-    treatment = case_when(
-      pathogen %in% c("Hepatitis B", "Influenza") ~ "Vaccination",
-      pathogen %in% c("Saureus", "Ecoli")         ~ "Infection",
-      pathogen %in% c("Burn", "Trauma")           ~ "Injury",
-      TRUE                                        ~ pathogen
-    ),
-    treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
-  ) %>% 
-  arrange(timepoint) %>% 
-  filter(process %in% c(process_selected),
-         !treatment == "Vaccination",
-         !pathogen == "Trauma"
-         ) %>% 
-  ggplot() +
-  aes(x = percent,
-      y = fct_rev(timepoint),
-      fill = status) +
-  facet_nested_wrap(~treatment+pathogen,
-             scales = "free", 
-             nrow = 1,
-             strip = strip_nested(size = "variable")) +
-  geom_col(position = "fill") +
-  # Scales and Labels
-  scale_fill_manual(values = colors$comparison) +
-  scale_x_continuous(expand = c(0, 0)) +
-  scale_y_discrete(expand = c(0, 0)) +
-  labs(fill = "Core Status", 
-       y = "Timepoint", 
-       x = "Percent") +
-  
-  # Theme and Legend styling
-  theme_vaxgo() +
-  theme(
-    axis.text = element_text(size = 10),
-    strip.text = element_text(size = 10, hjust = 0),
-    panel.spacing = unit(0.2, "lines"),
-    legend.position = "top",
-    legend.margin = margin(0, 0, -10, 0),
-    ggh4x.facet.nestline = element_line(colour = "black")
-  ) +
-    geom_text(aes(label = paste0(percent, "%\n(", n, ")")),
-              lineheight = 0.8,
-            position = "fill",
-            color = "white", 
-            fontface = "bold", 
-            hjust = 1,
-            size = 3) 
-  
-#Save
-legs_perc_barplot %>%
-ggsave(filename = here("Figures", paste0("all_human_mouse_gsea_btm_results_leadingedge_core_barplot_selected_processes.png")),
-         width = 8,
-         height = 3)
-
-legs_perc_barplot
-
-```
 
 
 Unite
@@ -6465,7 +6674,7 @@ leading_edges_plots = (
   plot_spacer() / 
   (df_test_log2fc + theme(legend.position = "none")) / 
   plot_spacer() / 
-  (df_test_ranked_plot + theme(legend.position = "none"))
+  (df_legs_ranked_plot + theme(legend.position = "none"))
 ) +
 plot_layout(
   guides = "collect",
@@ -6492,7 +6701,7 @@ leading_edges_plots %>%
 leading_edges_plots_short = (
   (df_test_scatter + theme(legend.position = "top")) / 
   plot_spacer() / 
-  (df_test_ranked_plot + theme(legend.position = "none"))
+  (df_legs_ranked_plot + theme(legend.position = "none"))
 ) +
 plot_layout(
   guides = "collect",
@@ -10330,7 +10539,7 @@ Do these leading edges have the same log2fc?
 
 process_selected = "HEME_METABOLISM"
 
-df_test =
+df_legs =
   dge_hallmarks_process_genes_wide %>% 
   filter(str_detect(process, process_selected)) %>% 
   
@@ -10375,7 +10584,7 @@ df_test =
   mutate(facet_label = fct_inorder(facet_label),
          pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Saureus", "Ecoli", "Burn", "Trauma"),)
 
-df_test
+df_legs
 
 
 
@@ -10384,7 +10593,7 @@ df_test
 
 ```{r fig.height=16, fig.width=20}
 #Scatterplot
-df_test_scatter = df_test %>% 
+df_test_scatter = df_legs %>% 
   ggplot() +
   aes(x = Mouse,
       y = Human,
@@ -10426,7 +10635,7 @@ df_test_scatter = df_test %>%
 #          height = 4)
 
 #Positions using log2fc
-df_test_log2fc = df_test %>% 
+df_test_log2fc = df_legs %>% 
   pivot_longer(names_to = "organism",
                values_to = "log2fc",
                cols = c("Mouse", "Human")) %>% 
@@ -10482,7 +10691,7 @@ df_test_log2fc = df_test %>%
 #          height = 4)
 
 #Positions using ranks
-df_test_ranked <- df_test %>%
+df_legs_ranked <- df_legs %>%
   pivot_longer(
     names_to = "organism",
     values_to = "log2fc",
@@ -10502,7 +10711,7 @@ df_test_ranked <- df_test %>%
     organism = if_else(organism == "Human", "H", "M")
     )
 
-df_test_ranked_plot = df_test_ranked %>% 
+df_legs_ranked_plot = df_legs_ranked %>% 
   ggplot() +
   aes(x = organism,
       y = rank,
@@ -10540,9 +10749,9 @@ df_test_ranked_plot = df_test_ranked %>%
            ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
           ) 
 
-# df_test_ranked_plot
+# df_legs_ranked_plot
 
-# df_test_ranked_plot %>% 
+# df_legs_ranked_plot %>% 
 # ggsave(filename = here("Figures", paste0("all_human_mouse_gsea_hallmarks_results_leadingedge_core_ranks_lineplot.png", process_selected)),
 #          width = 20,
 #          height = 4)
@@ -10553,7 +10762,7 @@ leading_edges_plots = (
   plot_spacer() / 
   (df_test_log2fc + theme(legend.position = "none")) / 
   plot_spacer() / 
-  (df_test_ranked_plot + theme(legend.position = "none"))
+  (df_legs_ranked_plot + theme(legend.position = "none"))
 ) +
 plot_layout(
   guides = "collect",
@@ -10583,7 +10792,7 @@ leading_edges_plots %>%
 leading_edges_plots_short = (
   (df_test_scatter + theme(legend.position = "top")) / 
   plot_spacer() / 
-  (df_test_ranked_plot + theme(legend.position = "none"))
+  (df_legs_ranked_plot + theme(legend.position = "none"))
 ) +
 plot_layout(
   guides = "collect",
