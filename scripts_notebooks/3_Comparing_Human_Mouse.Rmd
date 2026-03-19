@@ -2159,6 +2159,16 @@ degs_immune_nonimmune_summary = human_mouse_log2fc_avg_wide_degs_immune_nonimmun
 
 degs_immune_nonimmune_summary
 ```
+
+
+
+
+
+
+
+
+
+
 #### Matrix plot
 
 Compute correlation for intra-species and inter-species comparisons
@@ -2173,7 +2183,11 @@ genes_shared <- all_degs_human_mouse %>%
 
 genes_log2fc_input = all_degs_human_mouse_unmatched %>% 
   rename(log2fc = mean_l2fc) %>% 
-  inner_join(genes_shared, by = join_by(organism, pathogen, human_symbol))
+  inner_join(genes_shared, by = join_by(organism, pathogen, human_symbol)) %>% 
+  #Rank
+  group_by(pathogen, organism, timepoint) %>% 
+  mutate(rank = rank(log2fc * -log(adj_p_val))) %>% 
+  ungroup()
 
 # 1. Define Inputs and Gene Subsets -----------------------------------------
 # We create a list to automate the loop over both sets
@@ -2274,8 +2288,8 @@ all_human_mouse_dge_correlation <- map_dfr(names(gene_sets_list), function(set_n
 all_human_mouse_dge_correlation
 
 #Save
-all_human_mouse_dge_correlation %>% 
-  saveRDS(file = here("tables", "all_human_mouse_dge_correlation.rds"))
+# all_human_mouse_dge_correlation %>% 
+#   saveRDS(file = here("tables", "all_human_mouse_dge_correlation.rds"))
 
 #Get Inter-species correlations
 correlation_filtered_inter <- all_human_mouse_dge_correlation %>% 
@@ -2790,6 +2804,7 @@ correlation_heatmap_intra_human_mouse %>%
 
 
 #### Scatter plots
+
 ```{r}
 #Correlation ------
 
@@ -5503,6 +5518,21 @@ dge_btm_nes_group_correlation_df = dge_btm_gsea_mean_wide %>%
   inner_join(cor_labels_nes_filter_Mouse, by = join_by(pathogen, timepoint)) %>% 
   inner_join(cor_labels_nes_filter_Mouse_Human, by = join_by(pathogen, timepoint)) %>% 
   mutate(cor_labels_all_filtered = paste0("All: ", cor_label, ",\nM: ", cor_label_mouse, ",\nM&H: ", cor_label_mouse_human)) %>% 
+  
+  #Rank modules by NES and significance
+  group_by(pathogen, timepoint) %>%
+  mutate(
+    # 1. Calculate Combined Scores (Significance-Weighted NES)
+    # Using a small offset (1e-10) to avoid Inf if padj is 0
+    score_Mouse = nes_Mouse * -log10(p_adjust_Mouse + 1e-10),
+    score_Human = nes_Human * -log10(p_adjust_Human + 1e-10),
+    
+    # 2. Rank within each pathogen/timepoint context
+    # Higher score = Rank 1 (Top)
+    rank_Mouse = rank(-score_Mouse, ties.method = "first"),
+    rank_Human = rank(-score_Human, ties.method = "first")
+  ) %>%
+  ungroup() %>% 
   #Annotate timepoints
   mutate(timepoint = case_when(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "2", "Early hours")~"Early hours", 
                                T ~timepoint),
@@ -5525,7 +5555,7 @@ dge_btm_nes_group_correlation_df = dge_btm_gsea_mean_wide %>%
 
 
 Plot correlation plot (NES)
-```{r fig.height=10, fig.width=11}
+```{r fig.height=10, fig.width=14}
 
 #Plot correlation plot (NES)
 dge_btm_nes_group_correlation_plot =  
@@ -5547,7 +5577,7 @@ dge_btm_nes_group_correlation_plot =
       labels = process) +
   facet_nested_wrap(vars(pathogen, facet_name),
                     scales = "free",
-                    nrow = 4,
+                    nrow = 3,
                     strip = strip_nested(size = "variable")) +
     #Guide lines
   geom_abline(alpha = 0.2, linetype = 2) +
@@ -5605,16 +5635,16 @@ dge_btm_nes_group_correlation_plot =
        x = "Model (NES)") +
   #Theme
     theme_vaxgo() +
-    theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 8),
-          axis.title.x = element_text(size = 8),
-          axis.text.y = element_text(size = 8),
-          axis.title.y = element_text(size = 8),
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 10),
+          axis.title.x = element_text(size = 10),
+          axis.text.y = element_text(size = 10),
+          axis.title.y = element_text(size = 10),
           strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
-          strip.text.x = element_text(angle = 0, hjust = 0., vjust = 0.5, size = 8),
+          strip.text.x = element_text(angle = 0, hjust = 0., vjust = 0.5, size = 10),
           legend.position = "top",
           legend.direction = "horizontal", 
-          legend.text = element_text(size = 8, hjust = 0),
-          legend.title = element_text(size = 8),
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.title = element_text(size = 10),
           legend.spacing.x = unit(0, 'cm'),
           legend.spacing.y = unit(0, 'cm'),
           ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
@@ -5629,7 +5659,230 @@ dge_btm_nes_group_correlation_plot
 #Save results
 dge_btm_nes_group_correlation_plot %>%
   ggsave(filename = here("Figures", paste0(filename, "_dge_btm_nes_group_correlation_plot.png")),
-         width = 11,
+         width = 14,
+         height = 10)
+```
+
+
+
+Scores
+```{r fig.height=10, fig.width=14}
+
+#Plot correlation plot scores
+dge_btm_nes_group_correlation_plot_score =  
+  bind_rows(
+    dge_btm_nes_group_correlation_df %>% 
+      mutate(filter = "All"),
+    
+    dge_btm_nes_group_correlation_df %>% 
+      filter(p_adjust_Mouse <= 0.25, p_adjust_Human >0.25) %>% 
+      mutate(filter = "Mouse"),
+    
+    dge_btm_nes_group_correlation_df %>% 
+      filter(p_adjust_Mouse <= 0.25 & p_adjust_Human <= 0.25) %>% 
+      mutate(filter = "Mouse and Human"),
+  ) %>% 
+  ggplot() +
+  aes(x = score_Mouse,
+      y = score_Human,
+      labels = process) +
+  facet_nested_wrap(vars(pathogen, facet_name),
+                    scales = "free",
+                    nrow = 3,
+                    strip = strip_nested(size = "variable")) +
+    #Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+  
+#Plot all points
+  with_blur(
+    geom_point(aes(fill = group,
+                 color = group,
+                 shape = filter),
+                 data = . %>% filter(filter == c("All")),
+             size = 1.5,
+             alpha = 0.2,
+    sigma = 2)
+    ) +
+   #Filtered
+  geom_point(aes(fill = group,
+                 shape = filter,
+                 color = group),
+             data = . %>% filter(filter == c("Mouse")),
+             size = 2,
+             stroke = 0.1,
+             alpha = 1
+             ) +
+  geom_point(aes(fill = group,
+                 shape = filter,
+                 # color = group
+                 ),
+             color = "black",
+             data = . %>% filter(filter == c("Mouse and Human")),
+             size = 2,
+             stroke = 0.1,
+             alpha = 1,
+             ) +
+  scale_shape_manual(values = c(21, 22, 24)) +
+  scale_fill_manual(values = immune_colors) +
+  scale_color_manual(values = immune_colors) +
+  guides(color = F,
+         fill = guide_legend(byrow = TRUE,  nrow = 3,
+                           keywidth = unit(0.3, "cm"),
+                           keyheight = unit(0.3, "cm"),
+                           override.aes = list(size = 3, shape = 21, color = "black"),
+                           default.unit="cm"),
+         shape = guide_legend(byrow = TRUE,  
+                              nrow = 3,
+                             keywidth = unit(0.3, "cm"),
+                           keyheight = unit(0.3, "cm"),
+                          override.aes = list(size = 3),
+                           default.unit="cm")) +
+  labs(fill = "Group",
+       shape = "Significance",
+       y = "Human (NES*-log(p_adj))",
+       x = "Model (NES*-log(p_adj))") +
+  #Theme
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 10),
+          axis.title.x = element_text(size = 10),
+          axis.text.y = element_text(size = 10),
+          axis.title.y = element_text(size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          strip.text.x = element_text(angle = 0, hjust = 0., vjust = 0.5, size = 10),
+          legend.position = "top",
+          legend.direction = "horizontal", 
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.title = element_text(size = 10),
+          legend.spacing.x = unit(0, 'cm'),
+          legend.spacing.y = unit(0, 'cm'),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
+          legend.box.spacing = unit(0, "cm"),
+          panel.spacing = unit(0, "lines"), 
+          plot.margin = margin(0, 0, 0, 0, unit = "cm"),
+          
+          )
+
+
+
+# dge_btm_nes_group_correlation_plot
+dge_btm_nes_group_correlation_plot_score
+# dge_btm_nes_group_correlation_plot_ranks
+#Save results
+dge_btm_nes_group_correlation_plot_score %>%
+  ggsave(filename = here("Figures", paste0(filename, "_dge_btm_nes_group_correlation_plot_scores.png")),
+         width = 14,
+         height = 10)
+```
+
+```{r fig.height=10, fig.width=14}
+
+#Plot correlation plot scores
+dge_btm_nes_group_correlation_plot_score_rank =  
+  bind_rows(
+    dge_btm_nes_group_correlation_df %>% 
+      mutate(filter = "All"),
+    
+    dge_btm_nes_group_correlation_df %>% 
+      filter(p_adjust_Mouse <= 0.25, p_adjust_Human >0.25) %>% 
+      mutate(filter = "Mouse"),
+    
+    dge_btm_nes_group_correlation_df %>% 
+      filter(p_adjust_Mouse <= 0.25 & p_adjust_Human <= 0.25) %>% 
+      mutate(filter = "Mouse and Human"),
+  ) %>% 
+  ggplot() +
+  aes(x = rank_Mouse,
+      y = rank_Human,
+      labels = process) +
+  facet_nested_wrap(vars(pathogen, facet_name),
+                    scales = "free",
+                    nrow = 3,
+                    strip = strip_nested(size = "variable")) +
+    #Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+  
+#Plot all points
+  with_blur(
+    geom_point(aes(fill = group,
+                 color = group,
+                 shape = filter),
+                 data = . %>% filter(filter == c("All")),
+             size = 1.5,
+             alpha = 0.2,
+    sigma = 2)
+    ) +
+   #Filtered
+  geom_point(aes(fill = group,
+                 shape = filter,
+                 color = group),
+             data = . %>% filter(filter == c("Mouse")),
+             size = 2,
+             stroke = 0.1,
+             alpha = 1
+             ) +
+  geom_point(aes(fill = group,
+                 shape = filter,
+                 # color = group
+                 ),
+             color = "black",
+             data = . %>% filter(filter == c("Mouse and Human")),
+             size = 2,
+             stroke = 0.1,
+             alpha = 1,
+             ) +
+  scale_shape_manual(values = c(21, 22, 24)) +
+  scale_fill_manual(values = immune_colors) +
+  scale_color_manual(values = immune_colors) +
+  guides(color = F,
+         fill = guide_legend(byrow = TRUE,  nrow = 3,
+                           keywidth = unit(0.3, "cm"),
+                           keyheight = unit(0.3, "cm"),
+                           override.aes = list(size = 3, shape = 21, color = "black"),
+                           default.unit="cm"),
+         shape = guide_legend(byrow = TRUE,  
+                              nrow = 3,
+                             keywidth = unit(0.3, "cm"),
+                           keyheight = unit(0.3, "cm"),
+                          override.aes = list(size = 3),
+                           default.unit="cm")) +
+  labs(fill = "Group",
+       shape = "Significance",
+       y = "Human (Ranked score)",
+       x = "Model (Ranked score)") +
+  #Theme
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 10),
+          axis.title.x = element_text(size = 10),
+          axis.text.y = element_text(size = 10),
+          axis.title.y = element_text(size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+          strip.text.x = element_text(angle = 0, hjust = 0., vjust = 0.5, size = 10),
+          legend.position = "top",
+          legend.direction = "horizontal", 
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.title = element_text(size = 10),
+          legend.spacing.x = unit(0, 'cm'),
+          legend.spacing.y = unit(0, 'cm'),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
+          legend.box.spacing = unit(0, "cm"),
+          panel.spacing = unit(0, "lines"), 
+          plot.margin = margin(0, 0, 0, 0, unit = "cm"),
+          
+          )
+
+
+
+dge_btm_nes_group_correlation_plot_score_rank
+#Save results
+dge_btm_nes_group_correlation_plot_score_rank %>%
+  ggsave(filename = here("Figures", paste0(filename, "_dge_btm_nes_group_correlation_plot_scores_rank.png")),
+         width = 14,
          height = 10)
 ```
 
