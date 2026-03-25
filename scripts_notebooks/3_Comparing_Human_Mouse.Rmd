@@ -9126,6 +9126,27 @@ identity_human <- getBM(
   rename(hgnc_symbol = external_gene_name,
          identity = mmusculus_homolog_perc_id_r1)
 
+#REGULATION
+regulation_enhancer_human = getBM(
+  attributes = c(
+    "external_gene_name",
+    "transcription_start_site"
+  ),
+  filters = "external_gene_name",
+  values = "MARCKS",
+  mart = human_mart
+)
+```
+
+
+```{r}
+
+
+listAttributes(human_mart, ) %>% View()
+```
+
+
+```{r}
 # Join the tables
 domains_identity_sequence_human = 
   sequences_human %>% 
@@ -9184,19 +9205,19 @@ sequences_mouse = getBM(
   #Filter out non-canonical/annotated sequences
   filter(uniprotswissprot != "")
 
-enhancer_mouse = getBM(
-  attributes = c(
-    "external_gene_name",
-    "peptide",
-    "uniprotswissprot"
-  ),
-  filters = "external_gene_name",
-  values = genes_mouse$mgi_symbol,
-  # values = "Abce1",
-  mart = mouse_mart
-) %>% 
-  #Filter out non-canonical/annotated sequences
-  filter(uniprotswissprot != "")
+# enhancer_mouse = getBM(
+#   attributes = c(
+#     "external_gene_name",
+#     "peptide",
+#     "uniprotswissprot"
+#   ),
+#   filters = "external_gene_name",
+#   values = genes_mouse$mgi_symbol,
+#   # values = "Abce1",
+#   mart = mouse_mart
+# ) %>% 
+#   #Filter out non-canonical/annotated sequences
+#   filter(uniprotswissprot != "")
 
 
 #Merge
@@ -10661,6 +10682,119 @@ gene_attribute_tf_count_filter_df_summary_annotated %>%
 
 
 
+####### Align Cis-regulatory elements
+
+```{r}
+# ==============================================================================
+# SCRIPT: Caracterização Regulatória de Promotores (hg38)
+# Projeto: Mice to Human Functional Modules
+# ==============================================================================
+
+# 1. CARREGAMENTO DE BIBLIOTECAS -----------------------------------------------
+library(biomaRt)
+library(GenomicRanges)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(Biostrings)
+library(AnnotationHub)
+library(magrittr)
+library(here)
+
+# 2. OBTENÇÃO DE COORDENADAS (BioMart) -----------------------------------------
+# Conectar ao Ensembl (Certifique-se que 'human_mart' está definido)
+human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+genes_data <- getBM(
+  attributes = c('ensembl_gene_id', 'external_gene_name', 
+                 'chromosome_name', 'transcript_start', 
+                 'transcript_end', 'strand'), 
+  mart = human_mart,
+  filters = "external_gene_name",
+  values = "IL7R" # Exemplo: pode ser um vetor de genes
+)
+
+# Criar objeto GRanges
+gr <- GRanges(
+  seqnames = paste0("chr", genes_data$chromosome_name), # Força padrão UCSC
+  ranges = IRanges(start = genes_data$transcript_start, 
+                   end = genes_data$transcript_end),
+  strand = ifelse(genes_data$strand == 1, "+", "-"),
+  gene_id = genes_data$ensembl_gene_id,
+  symbol = genes_data$external_gene_name
+)
+
+# Definir TSS e Regiões Flanking (Promotores/Enhancers)
+tss_gr <- resize(gr, width = 1, fix = "start")
+promoters_gr <- promoters(tss_gr, upstream = 2000, downstream = 200)
+
+# 3. EXTRAÇÃO DE SEQUÊNCIA (FASTA) ---------------------------------------------
+seqlevelsStyle(promoters_gr) <- "UCSC"
+
+promoter_seqs <- getSeq(BSgenome.Hsapiens.UCSC.hg38, promoters_gr)
+names(promoter_seqs) <- promoters_gr$symbol
+
+# Salvar arquivo
+# writeXStringSet(promoter_seqs, filepath = here("Genomic", "promoters_sequences.fasta"))
+
+# 4. DOWNLOAD DE DADOS EPIGENÉTICOS (AnnotationHub) ----------------------------
+ah <- AnnotationHub()
+
+# Função auxiliar para carregar IDs com segurança
+get_ah_obj <- function(ah, id) {
+  message("Carregando: ", id)
+  obj <- ah[[id]]
+  seqlevelsStyle(obj) <- "UCSC"
+  return(obj)
+}
+
+# IDs selecionados (Substitua pelos IDs reais validados no seu console)
+atac_peaks    <- get_ah_obj(ah, "AH43444")  # ATAC-seq
+dnase_peaks   <- get_ah_obj(ah, "AH30743")  # DNase-seq
+h3k4me3_peaks <- get_ah_obj(ah, "AH29884")  # Histona Promotor
+h3k27ac_peaks <- get_ah_obj(ah, "AH29753")  # Histona Enhancer
+repeats_gr    <- get_ah_obj(ah, "AH111333") # RepeatMasker
+
+# 5. CRUZAMENTO E INTEGRAÇÃO FINAL ---------------------------------------------
+
+# Função para checar presença (Overlap binário)
+check_overlap <- function(target, feature) {
+  as.integer(countOverlaps(target, feature) > 0)
+}
+
+# Criando o DataFrame consolidado
+# Usamos promoters_gr como base para o cruzamento
+results_df <- data.frame(
+  gene_id      = promoters_gr$gene_id,
+  symbol       = promoters_gr$symbol,
+  has_atac     = check_overlap(promoters_gr, atac_peaks),
+  has_dnase    = check_overlap(promoters_gr, dnase_peaks),
+  has_h3k4me3  = check_overlap(promoters_gr, h3k4me3_peaks),
+  has_h3k27ac  = check_overlap(promoters_gr, h3k27ac_peaks),
+  has_repeats  = check_overlap(promoters_gr, repeats_gr)
+)
+
+# 6. EXPORTAÇÃO ----------------------------------------------------------------
+write.csv(results_df, file = here("Genomic", "promoter_characterization.csv"), row.names = FALSE)
+
+
+
+# 1. Encontrar as coordenadas exatas dos picos que estão nos promotores
+# (Isso garante que você alinhe a região funcional, não o promotor inteiro)
+picos_nos_promotores <- subsetByOverlaps(atac_peaks, promoters_gr)
+
+# 2. Extrair a sequência de DNA desses picos (Humanos hg38)
+peaks_seqs <- getSeq(BSgenome.Hsapiens.UCSC.hg38, picos_nos_promotores)
+
+# 3. Nomear as sequências com o ID do Gene + Coordenada
+names(peaks_seqs) <- paste0(picos_nos_promotores$gene_id, "_", 
+                            seqnames(picos_nos_promotores), ":", 
+                            start(picos_nos_promotores), "-", 
+                            end(picos_nos_promotores))
+
+# 4. Salvar para o alinhamento
+writeXStringSet(peaks_seqs, filepath = here("Genomic", "human_functional_peaks.fasta"))
+
+
+```
 
 
 
