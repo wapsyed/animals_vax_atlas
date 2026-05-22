@@ -10690,78 +10690,75 @@ gene_attribute_tf_count_filter_df_summary_annotated %>%
 # Projeto: Mice to Human Functional Modules
 # ==============================================================================
 
+# ==============================================================================
+# SCRIPT: Caracterização Regulatória e Extração de Sequências (PADRÃO hg19)
+# Projeto: Mice to Human Functional Modules (Febre Amarela)
+# ==============================================================================
+
 # 1. CARREGAMENTO DE BIBLIOTECAS -----------------------------------------------
 library(biomaRt)
 library(GenomicRanges)
-library(BSgenome.Hsapiens.UCSC.hg38)
+# BiocManager::install("BSgenome.Hsapiens.UCSC.hg19") # Certifique-se de ter a hg19
+library(BSgenome.Hsapiens.UCSC.hg19) 
 library(Biostrings)
 library(AnnotationHub)
 library(magrittr)
 library(here)
 
-# 2. OBTENÇÃO DE COORDENADAS (BioMart) -----------------------------------------
-# Conectar ao Ensembl (Certifique-se que 'human_mart' está definido)
-human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+# 2. OBTENÇÃO DE COORDENADAS (BioMart hg19/GRCh37) -----------------------------
+# Conectar ao arquivo histórico do Ensembl para hg19
+human_mart_hg19 <- useMart(biomart = "ENSEMBL_MART_ENSEMBL", 
+                           host = "https://grch37.ensembl.org", 
+                           dataset = "hsapiens_gene_ensembl")
 
-genes_data <- getBM(
+# Buscar coordenadas nativas hg19
+# Substitua "MARCKS" pelo seu vetor de genes se necessário
+genes_hg19 <- getBM(
   attributes = c('ensembl_gene_id', 'external_gene_name', 
-                 'chromosome_name', 'transcript_start', 
-                 'transcript_end', 'strand'), 
-  mart = human_mart,
+                 'chromosome_name', 'transcript_start', 'strand'), 
+  mart = human_mart_hg19,
   filters = "external_gene_name",
-  values = "IL7R" # Exemplo: pode ser um vetor de genes
+  values = "MARCKS"
 )
 
-# Criar objeto GRanges
-gr <- GRanges(
-  seqnames = paste0("chr", genes_data$chromosome_name), # Força padrão UCSC
-  ranges = IRanges(start = genes_data$transcript_start, 
-                   end = genes_data$transcript_end),
-  strand = ifelse(genes_data$strand == 1, "+", "-"),
-  gene_id = genes_data$ensembl_gene_id,
-  symbol = genes_data$external_gene_name
-)
+# Criar objeto GRanges padronizado para hg19
+promoters_gr <- GRanges(
+  seqnames = paste0("chr", genes_hg19$chromosome_name),
+  ranges = IRanges(start = genes_hg19$transcript_start, width = 1),
+  strand = ifelse(genes_hg19$strand == 1, "+", "-"),
+  gene_id = genes_hg19$ensembl_gene_id,
+  symbol = genes_hg19$external_gene_name
+) %>% promoters(upstream = 2000, downstream = 200)
 
-# Definir TSS e Regiões Flanking (Promotores/Enhancers)
-tss_gr <- resize(gr, width = 1, fix = "start")
-promoters_gr <- promoters(tss_gr, upstream = 2000, downstream = 200)
-
-# 3. EXTRAÇÃO DE SEQUÊNCIA (FASTA) ---------------------------------------------
+# Forçar metadados de genoma
 seqlevelsStyle(promoters_gr) <- "UCSC"
+genome(promoters_gr) <- "hg19"
 
-promoter_seqs <- getSeq(BSgenome.Hsapiens.UCSC.hg38, promoters_gr)
-names(promoter_seqs) <- promoters_gr$symbol
-
-# Salvar arquivo
-# writeXStringSet(promoter_seqs, filepath = here("Genomic", "promoters_sequences.fasta"))
-
-# 4. DOWNLOAD DE DADOS EPIGENÉTICOS (AnnotationHub) ----------------------------
+# 3. DOWNLOAD DE DADOS EPIGENÉTICOS (AnnotationHub) ----------------------------
 ah <- AnnotationHub()
 
-# Função auxiliar para carregar IDs com segurança
-get_ah_obj <- function(ah, id) {
+# Função auxiliar para carregar e padronizar para hg19
+get_ah_hg19 <- function(ah, id) {
   message("Carregando: ", id)
   obj <- ah[[id]]
   seqlevelsStyle(obj) <- "UCSC"
+  genome(obj) <- "hg19" # Crucial para evitar o erro de merge
   return(obj)
 }
 
-# IDs selecionados (Substitua pelos IDs reais validados no seu console)
-atac_peaks    <- get_ah_obj(ah, "AH43444")  # ATAC-seq
-dnase_peaks   <- get_ah_obj(ah, "AH30743")  # DNase-seq
-h3k4me3_peaks <- get_ah_obj(ah, "AH29884")  # Histona Promotor
-h3k27ac_peaks <- get_ah_obj(ah, "AH29753")  # Histona Enhancer
-repeats_gr    <- get_ah_obj(ah, "AH111333") # RepeatMasker
+# IDs selecionados (Geralmente nativos hg19 no Roadmap/ENCODE antigo)
+atac_peaks    <- get_ah_hg19(ah, "AH43444")  # Ex: Liver DNase/ATAC
+dnase_peaks   <- get_ah_hg19(ah, "AH30743")  
+h3k4me3_peaks <- get_ah_hg19(ah, "AH29884")  
+h3k27ac_peaks <- get_ah_hg19(ah, "AH29753")  
+repeats_gr    <- get_ah_hg19(ah, "AH111333") # Se houver erro aqui, use uma track hg19
 
-# 5. CRUZAMENTO E INTEGRAÇÃO FINAL ---------------------------------------------
+# 4. CRUZAMENTO E INTEGRAÇÃO FINAL ---------------------------------------------
 
-# Função para checar presença (Overlap binário)
 check_overlap <- function(target, feature) {
   as.integer(countOverlaps(target, feature) > 0)
 }
 
-# Criando o DataFrame consolidado
-# Usamos promoters_gr como base para o cruzamento
 results_df <- data.frame(
   gene_id      = promoters_gr$gene_id,
   symbol       = promoters_gr$symbol,
@@ -10772,26 +10769,33 @@ results_df <- data.frame(
   has_repeats  = check_overlap(promoters_gr, repeats_gr)
 )
 
-# 6. EXPORTAÇÃO ----------------------------------------------------------------
-write.csv(results_df, file = here("Genomic", "promoter_characterization.csv"), row.names = FALSE)
+# Exportar tabela
+write.csv(results_df, file = here("Genomic", "promoter_characterization_hg19.csv"), row.names = FALSE)
 
+# 5. EXTRAÇÃO DE SEQUÊNCIAS (FASTA) --------------------------------------------
 
+# A. Sequência do Promotor Inteiro
+promoter_seqs <- getSeq(BSgenome.Hsapiens.UCSC.hg19, promoters_gr)
+names(promoter_seqs) <- promoters_gr$symbol
+writeXStringSet(promoter_seqs, filepath = here("Genomic", "promoters_full_hg19.fasta"))
 
-# 1. Encontrar as coordenadas exatas dos picos que estão nos promotores
-# (Isso garante que você alinhe a região funcional, não o promotor inteiro)
+# B. Sequência dos Picos Funcionais (para alinhar com Camundongo)
 picos_nos_promotores <- subsetByOverlaps(atac_peaks, promoters_gr)
 
-# 2. Extrair a sequência de DNA desses picos (Humanos hg38)
-peaks_seqs <- getSeq(BSgenome.Hsapiens.UCSC.hg38, picos_nos_promotores)
+if(length(picos_nos_promotores) > 0) {
+  peaks_seqs <- getSeq(BSgenome.Hsapiens.UCSC.hg19, picos_nos_promotores)
+  
+  # Nomear sequências com metadados
+  names(peaks_seqs) <- paste0("Peak_", seqnames(picos_nos_promotores), ":", 
+                              start(picos_nos_promotores), "-", 
+                              end(picos_nos_promotores))
+  
+  writeXStringSet(peaks_seqs, filepath = here("Genomic", "human_functional_peaks_hg19.fasta"))
+} else {
+  message("Atenção: Nenhum pico de ATAC encontrado nos promotores selecionados.")
+}
 
-# 3. Nomear as sequências com o ID do Gene + Coordenada
-names(peaks_seqs) <- paste0(picos_nos_promotores$gene_id, "_", 
-                            seqnames(picos_nos_promotores), ":", 
-                            start(picos_nos_promotores), "-", 
-                            end(picos_nos_promotores))
-
-# 4. Salvar para o alinhamento
-writeXStringSet(peaks_seqs, filepath = here("Genomic", "human_functional_peaks.fasta"))
+message("Processamento hg19 concluído!")
 
 
 ```
