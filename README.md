@@ -25,7 +25,8 @@ A key finding is that while individual orthologous gene correlations are often l
 | Hepatitis B                       | Engerix B          | Human, Mouse |
 | *Staphylococcus aureus* infection | —                  | Human, Mouse |
 | *Escherichia coli* infection      | —                  | Human, Mouse |
-| Burn / Trauma                     | —                  | Human, Mouse |
+| Burn                              | —                  | Human, Mouse |
+| Trauma                            | —                  | Human, Mouse |
 
 ------------------------------------------------------------------------
 
@@ -75,7 +76,6 @@ animals_vax_atlas/
 ├── Figures/                         # Generated plots
 ├── Figures_Article/                 # Publication-ready figures
 ├── ArrayQM/                         # AQM HTML reports
-├── Codebook_MouseToHuman.xlsx       # Cross-species gene mapping codebook
 └── renv.lock                        # Package snapshot
 ```
 
@@ -84,7 +84,7 @@ animals_vax_atlas/
 ## Gene Sets Used
 
 | Gene Set | Description |
-|-------------------------------|----------------------------------------|
+|----|----|
 | **BTMs** | Blood Transcription Modules (Li et al.) — immune cell-type and process modules |
 | **MSigDB Hallmarks** | Broad hallmark gene sets from MSigDB |
 | **ImmuneGO** | Custom mouse-adapted immune Gene Ontology annotations |
@@ -112,10 +112,12 @@ Each notebook sources `scripts_notebooks/required.R`, which loads all packages a
 
 ## Key Data Files
 
+For full variable definitions, table schemas, file naming conventions, and color palettes, see the [CODEBOOK.md](CODEBOOK.md).
+
 Raw and intermediate data live in `tables/`. Key files:
 
 | File | Description |
-|-----------------------|-------------------------------------------------|
+|----|----|
 | `all_human_mouse_metadata.rds` | Combined sample metadata across all conditions |
 | `all_degs_human_mouse.rds` | Pooled differential expression results |
 | `btm_annotation_genes.csv` | BTM gene set annotations |
