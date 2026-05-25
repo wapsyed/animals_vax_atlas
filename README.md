@@ -42,17 +42,22 @@ The notebooks are designed to be run in order:
 
 3.  **`2_Preprocessing.Rmd`** — Downloads ExpressionSets from GEO via `GEOquery`, applies quantile normalization, maps probes to gene symbols via `biomaRt`, and computes sample-level log2 fold-changes vs. Day 0 baseline.
 
-4.  **`3_Comparing_Human_Mouse.Rmd`** — Core analysis:
+4.  **`3.1_Comparing_Human_Mouse_ByCondition.Rmd`** — Per-condition analysis (run once per dataset):
 
     - Differential expression with `limma`
     - GSEA and ssGSEA using BTMs and MSigDB Hallmarks
-    - Cross-species correlation of module NES scores and mean log2FCs
-    - RRHO2 rank-rank hypergeometric overlap
+    - Cross-species correlation of module NES scores and mean log2FCs per condition
     - Shared/unique DEG analysis (Fisher/Jaccard statistics)
 
-5.  **`4_Performance.Rmd`** — Evaluates mouse-to-human predictive performance via ROC curves across all conditions, stratified by all genes vs. immune gene subsets.
+5.  **`3.2_Comparing_Human_Mouse_UnifiedAnalyses.Rmd`** — Unified cross-condition analysis:
 
-6.  **`5_MachineLearning.Rmd`** — Builds machine learning classifiers for cross-species response prediction.
+    - Aggregates per-condition results across all pathogens
+    - Volcano plots, RRHO2 rank-rank hypergeometric overlap
+    - Summary correlation plots comparing human vs. mouse across all conditions and timepoints
+
+6.  **`4_Performance.Rmd`** — Evaluates mouse-to-human predictive performance via ROC curves across all conditions, stratified by all genes vs. immune gene subsets.
+
+7.  **`5_MachineLearning.Rmd`** — Builds machine learning classifiers for cross-species response prediction.
 
 ------------------------------------------------------------------------
 
@@ -65,7 +70,8 @@ animals_vax_atlas/
 │   ├── 0_Data_Curation.Rmd
 │   ├── 1_QualityControl.Rmd
 │   ├── 2_Preprocessing.Rmd
-│   ├── 3_Comparing_Human_Mouse.Rmd
+│   ├── 3.1_Comparing_Human_Mouse_ByCondition.Rmd
+│   ├── 3.2_Comparing_Human_Mouse_UnifiedAnalyses.Rmd
 │   ├── 4_Performance.Rmd
 │   ├── 5_MachineLearning.Rmd
 │   └── FIT_training_datasets.Rmd
@@ -95,7 +101,7 @@ animals_vax_atlas/
 ## Software Requirements
 
 | Component | Version |
-|-----------|---------|
+|----|----|
 | R | 4.5.2 |
 | Bioconductor | 3.22 |
 | OS | Linux (tested on Ubuntu/Zorin); macOS and Windows (WSL2) expected to work |
@@ -104,17 +110,17 @@ animals_vax_atlas/
 
 All R package versions are pinned via `renv.lock`. Key packages:
 
-| Package | Version | Source |
-|---------|---------|--------|
-| tidyverse | 2.0.0 | CRAN |
-| limma | 3.66.0 | Bioconductor 3.22 |
-| GEOquery | 2.78.0 | Bioconductor 3.22 |
-| clusterProfiler | 4.18.4 | Bioconductor 3.22 |
-| fgsea | 1.36.2 | Bioconductor 3.22 |
-| GSVA | 2.4.4 | Bioconductor 3.22 |
-| biomaRt | 2.66.1 | Bioconductor 3.22 |
-| ComplexHeatmap | 2.26.1 | Bioconductor 3.22 |
-| RRHO2 | — | GitHub (RRHO2/RRHO2) |
+| Package         | Version | Source               |
+|-----------------|---------|----------------------|
+| tidyverse       | 2.0.0   | CRAN                 |
+| limma           | 3.66.0  | Bioconductor 3.22    |
+| GEOquery        | 2.78.0  | Bioconductor 3.22    |
+| clusterProfiler | 4.18.4  | Bioconductor 3.22    |
+| fgsea           | 1.36.2  | Bioconductor 3.22    |
+| GSVA            | 2.4.4   | Bioconductor 3.22    |
+| biomaRt         | 2.66.1  | Bioconductor 3.22    |
+| ComplexHeatmap  | 2.26.1  | Bioconductor 3.22    |
+| RRHO2           | —       | GitHub (RRHO2/RRHO2) |
 
 > **Note:** A Docker image is planned for a future release. For now, `renv` provides full package-level reproducibility.
 
@@ -125,7 +131,7 @@ All R package versions are pinned via `renv.lock`. Key packages:
 All **pre-processed intermediate files** are already provided in `tables/`, so for most analyses no raw data download is needed. Users who wish to re-run preprocessing from scratch can download the original datasets from GEO using the accessions below.
 
 | Condition | Organism | GEO Accession | Platform |
-|-----------|----------|--------------|----------|
+|----|----|----|----|
 | Influenza (Fluad) + Hepatitis B (Engerix B) | Mouse | [GSE120661](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE120661) | Agilent 8×60K |
 | Influenza (Fluad) | Human | [GSE124689](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE124689) | Illumina HumanHT-12 |
 | Hepatitis B (Engerix B) | Human | [GSE124533](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE124533) | Illumina HumanHT-12 |
@@ -136,7 +142,7 @@ All **pre-processed intermediate files** are already provided in `tables/`, so f
 
 Download example (run once; outputs saved to `tables/`):
 
-```r
+``` r
 library(GEOquery)
 library(here)
 
@@ -160,12 +166,12 @@ Biobase::pData(eset) |> write.csv(here("tables", "GSE120661_metadata.csv"))
 
 ### Step 0 — Clone and restore the environment
 
-```bash
+``` bash
 git clone https://github.com/wapsyed/animals_vax_atlas.git
 cd animals_vax_atlas
 ```
 
-```r
+``` r
 # In R, from the project root:
 renv::restore()   # installs all packages at exact recorded versions
 ```
@@ -177,30 +183,31 @@ Each notebook sources `scripts_notebooks/required.R`, which loads all packages a
 > Chunks marked `eval=FALSE` in the notebooks correspond to one-time download or heavy computation steps. Pre-computed outputs are already in `tables/` and can be loaded directly.
 
 | Step | Notebook | Key Inputs | Key Outputs | Est. time |
-|------|----------|------------|-------------|-----------|
-| 0 | `0_Data_Curation.Rmd` | `tables/animals_vaccines_bioproject_result.txt` | `tables/datacuration_step2.csv`, `DataCuration/AnimalVax_DataCuration_Annotated.csv` | ~10 min |
-| 1 | `1_QualityControl.Rmd` | `tables/*_eset.rds`, `tables/*_metadata.rds` | `ArrayQM/` reports, QC plots in `Figures/` | ~20 min |
-| 2 | `2_Preprocessing.Rmd` | GEO downloads or pre-saved `tables/*_exprs.rds` | `tables/*_eset.rds`, `tables/*_log2fc_sample_clean_long.rds` | ~60 min |
-| 3 | `3_Comparing_Human_Mouse.Rmd` | `tables/*_dge_limma_degs.rds`, `tables/btm_annotation_genes.csv`, `tables/msigdb_hallmarks_grouped_genes.csv` | `tables/*_gsea_btm_results.rds`, `tables/*_samples_btm_correlation_all_timepoints_summary.rds`, figures | ~90 min |
-| 4 | `4_Performance.Rmd` | `tables/all_human_mouse_metadata.rds`, `tables/all_fit_prediction_results.rds` | `tables/roc_curve_data_*.rds`, ROC figures | ~30 min |
-| 5 | `5_MachineLearning.Rmd` | `tables/AllData_FIT_training_blood.rds` | Model objects, prediction outputs | ~20 min |
+|----|----|----|----|----|
+| 0 | `0_Data_Curation.Rmd` | `tables/animals_vaccines_bioproject_result.txt` | `tables/datacuration_step2.csv`, `DataCuration/AnimalVax_DataCuration_Annotated.csv` | \~10 min |
+| 1 | `1_QualityControl.Rmd` | `tables/*_eset.rds`, `tables/*_metadata.rds` | `ArrayQM/` reports, QC plots in `Figures/` | \~20 min |
+| 2 | `2_Preprocessing.Rmd` | GEO downloads or pre-saved `tables/*_exprs.rds` | `tables/*_eset.rds`, `tables/*_log2fc_sample_clean_long.rds` | \~60 min |
+| 3.1 | `3.1_Comparing_Human_Mouse_ByCondition.Rmd` | `tables/*_dge_limma_degs.rds`, `tables/btm_annotation_genes.csv`, `tables/msigdb_hallmarks_grouped_genes.csv` | `tables/*_gsea_btm_results.rds`, `tables/*_samples_btm_correlation_all_timepoints_summary.rds` | \~60 min |
+| 3.2 | `3.2_Comparing_Human_Mouse_UnifiedAnalyses.Rmd` | All `tables/*_gsea_*_results.rds` and `tables/*_correlation_*_summary.rds` from step 3.1 | `tables/all_human_mouse_*.rds`, unified figures | \~30 min |
+| 4 | `4_Performance.Rmd` | `tables/all_human_mouse_metadata.rds`, `tables/all_fit_prediction_results.rds` | `tables/roc_curve_data_*.rds`, ROC figures | \~30 min |
+| 5 | `5_MachineLearning.Rmd` | `tables/AllData_FIT_training_blood.rds` | Model objects, prediction outputs | \~20 min |
 
 ------------------------------------------------------------------------
 
 ## Worked Example
 
-The script [`example/example_btm_correlation.R`](example/example_btm_correlation.R) reproduces the cross-species BTM correlation scatter plot (manuscript Figure 3) using only pre-computed files already present in `tables/`. No GEO download required. Runtime < 2 minutes.
+The script [`example/example_btm_correlation.R`](example/example_btm_correlation.R) reproduces the cross-species BTM correlation scatter plot (manuscript Figure 3) using only pre-computed files already present in `tables/`. No GEO download required. Runtime \< 2 minutes.
 
-```r
+``` r
 source(here::here("example", "example_btm_correlation.R"))
 ```
 
 What it does:
 
-1. Loads limma DEG results (`influenza_fluad_human_mouse_dge_limma_degs.rds`) and BTM annotations
-2. Computes mean log₂FC per BTM module for human and mouse separately
-3. Plots human vs. mouse module responses at Day 7 with Spearman *r* annotation
-4. Saves the figure to `Figures/example_btm_correlation_day7.png`
+1.  Loads limma DEG results (`influenza_fluad_human_mouse_dge_limma_degs.rds`) and BTM annotations
+2.  Computes mean log₂FC per BTM module for human and mouse separately
+3.  Plots human vs. mouse module responses at Day 7 with Spearman *r* annotation
+4.  Saves the figure to `Figures/example_btm_correlation_day7.png`
 
 ------------------------------------------------------------------------
 

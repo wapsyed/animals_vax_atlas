@@ -143,32 +143,11 @@ scatter_plot
 # 8. Save figure --------------------------------------------------------------
 
 ggsave(
-  filename = here("example", "example_btm_correlation_day7.png"),
+  filename = here("Figures", "example_btm_correlation_day7.png"),
   plot     = scatter_plot,
   width    = 9,
   height   = 6,
   dpi      = 300
 )
 
-message("Figure saved to: example/example_btm_correlation_day7.png")
-
-
-## Worked Example
-
-#The script [`example/example_btm_correlation.R`](example/example_btm_correlation.R) reproduces the cross-species BTM correlation scatter plot (manuscript Figure 3) using only pre-computed files already present in `tables/`. No GEO download required. Runtime < 2 minutes.
-
-source(here::here("example", "example_btm_correlation.R"))
-
-
-# What it does:
-# 
-# 1. Loads limma DEG results (`influenza_fluad_human_mouse_dge_limma_degs.rds`) and BTM annotations
-# 2. Computes mean log₂FC per BTM module for human and mouse separately
-# 3. Plots human vs. mouse module responses at Day 7 with Spearman *r* annotation
-# 4. Saves the figure to `Figures/example_btm_correlation_day7.png`
-
-------------------------------------------------------------------------
-
-## Key Data Files
-
-# For full variable definitions, table schemas, file naming conventions, and color palettes, see the [CODEBOOK.md](CODEBOOK.md).
+message("Figure saved to: Figures/example_btm_correlation_day7.png")
