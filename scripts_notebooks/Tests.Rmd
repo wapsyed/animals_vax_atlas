@@ -2032,6 +2032,96 @@ df_ora_mouse_fit_best_worst_perc_hallmark_heatmap %>%
 
 
 
+#====================
+# Align sequences
+
+```{r}
+
+
+#Import homologous CREs from ENCODE 
+homologous_cres = read_tsv(here("Genomic", "hg38-mm10-Homologous.tsv"),
+  col_names = c("human_enhancer", "mouse_enhancer")
+) 
+
+#Import human CREs
+cres_human <- read_tsv(
+  here("Genomic", "GRCh38-cCREs.bed"),
+  col_names = c("chrom", "start", "end", "id_dhs", "id_ccre", "type"),
+  show_col_types = FALSE
+) %>% 
+   rename_with(~paste0(., "_human"))
+              
+              
+#Import mouse CREs
+cres_mouse <- read_tsv(
+  here("Genomic", "mm10-cCREs.bed"),
+  col_names = c("chrom", "start", "end", "id_dhs", "id_ccre", "type"),
+  show_col_types = FALSE
+) %>% rename_with(~paste0(., "_mouse"))
+
+
+#Unite info
+cres_annotated = homologous_cres %>% 
+  full_join(cres_human, by = join_by(human_enhancer == id_ccre_human)) %>% 
+  full_join(cres_mouse, by = join_by(mouse_enhancer == id_ccre_mouse)) 
+  
+```
+
+```{r}
+
+# Instalar ChIPseeker e TxDb se necessário
+if (!require("ChIPseeker", quietly = TRUE)) {
+  BiocManager::install("ChIPseeker")
+}
+
+library(ChIPseeker)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(org.Hs.eg.db)
+
+# 1. Converter para GRanges
+cres_human_gr <- GRanges(
+  seqnames = cres_human$chrom_human,
+  ranges = IRanges(start = cres_human$start_human, end = cres_human$end_human)
+)
+
+# 2. Propagar seqlevels e seqinfo
+seqlevels(cres_human_gr) <- seqlevels(BSgenome.Hsapiens.UCSC.hg38)
+seqinfo(cres_human_gr) <- seqinfo(BSgenome.Hsapiens.UCSC.hg38)
+
+# 3. Anotar com genes mais próximos
+cres_anno <- annotatePeak(
+  cres_human_gr,
+  tssRegion = c(-3000, 3000),
+  TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene,
+  annoDb = "org.Hs.eg.db"
+)
+
+# 4. Extrair sequências
+sequences_human <- getSeq(BSgenome.Hsapiens.UCSC.hg38, cres_human_gr)
+
+# 5. Converter anotações para dataframe e adicionar ao dados originais
+cres_anno_df <- as.data.frame(cres_anno)
+
+cres_human_seq <- cres_human %>%
+  mutate(
+    sequence_human = as.character(sequences_human),
+    gene_name = cres_anno_df$SYMBOL,
+    gene_id = cres_anno_df$GENEID,
+    annotation = cres_anno_df$annotation,
+    distance_to_tss = cres_anno_df$distanceToTSS
+  )
+
+# Ver resultado
+cres_human_seq |> 
+  select(id_ccre_human, chrom_human, start_human, end_human, 
+         gene_name, gene_id, distance_to_tss, annotation) |>
+  head(10)
+
+
+
+
+
+```
 
 
 
