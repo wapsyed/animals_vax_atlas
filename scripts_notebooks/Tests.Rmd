@@ -2068,27 +2068,31 @@ cres_annotated = homologous_cres %>%
 ```
 
 ```{r}
-
 # Instalar ChIPseeker e TxDb se necessário
 if (!require("ChIPseeker", quietly = TRUE)) {
   BiocManager::install("ChIPseeker")
 }
 
 library(ChIPseeker)
+library(rtracklayer)
 library(TxDb.Hsapiens.UCSC.hg38.knownGene)
 library(org.Hs.eg.db)
 
-# 1. Converter para GRanges
+# Look up data types and keytypes
+columns(org.Hs.eg.db)
+keytypes(org.Hs.eg.db)
+
+# Convert to a GRanges object
 cres_human_gr <- GRanges(
   seqnames = cres_human$chrom_human,
   ranges = IRanges(start = cres_human$start_human, end = cres_human$end_human)
 )
 
-# 2. Propagar seqlevels e seqinfo
+# Get levels and seqinfo
 seqlevels(cres_human_gr) <- seqlevels(BSgenome.Hsapiens.UCSC.hg38)
 seqinfo(cres_human_gr) <- seqinfo(BSgenome.Hsapiens.UCSC.hg38)
 
-# 3. Anotar com genes mais próximos
+# Annotate peak
 cres_anno <- annotatePeak(
   cres_human_gr,
   tssRegion = c(-3000, 3000),
@@ -2096,10 +2100,10 @@ cres_anno <- annotatePeak(
   annoDb = "org.Hs.eg.db"
 )
 
-# 4. Extrair sequências
+# Get sequences
 sequences_human <- getSeq(BSgenome.Hsapiens.UCSC.hg38, cres_human_gr)
 
-# 5. Converter anotações para dataframe e adicionar ao dados originais
+# Convert to dataframe
 cres_anno_df <- as.data.frame(cres_anno)
 
 cres_human_seq <- cres_human %>%
@@ -2110,15 +2114,68 @@ cres_human_seq <- cres_human %>%
     annotation = cres_anno_df$annotation,
     distance_to_tss = cres_anno_df$distanceToTSS
   )
+```
 
-# Ver resultado
-cres_human_seq |> 
-  select(id_ccre_human, chrom_human, start_human, end_human, 
-         gene_name, gene_id, distance_to_tss, annotation) |>
-  head(10)
+Annotate genes
+```{r}
+library(AnnotationHub)
+
+# 1. Obter as coordenadas dos genes humanos (Ex: hg38)
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+genes_gr <- genes(txdb)
+
+#Get sequence in a range
+promoters_custom <- promoters(genes_gr, upstream = 2500, downstream = 300)
+
+# Inicializar o Hub
+ah <- AnnotationHub()
+
+# ---- A. ELEMENTOS TRANSPONÍVEIS (RepeatMasker) ----
+rmsk_query <- query(ah, c("RepeatMasker", "Homo sapiens", "hg38"))
+# Inspecione rmsk_query para escolher o ID correto (ex: AH61234 ou similar)
+# Supondo que o ID retornado seja AH99341:
+rmsk_gr <- ah[["AH99341"]] 
+
+# ---- B. CONSERVAÇÃO FILOGENÉTICA (PhastCons) ----
+# Buscar scores de PhastCons (ex: conservação entre 100 vertebrados)
+phast_query <- query(ah, c("phastCons", "Homo sapiens", "hg38", "BigWig"))
+# BigWigFiles retornam uma referência ao arquivo para consulta rápida por coordenada
+phast_bw <- ah[["AH75265"]] # Substitua pelo ID real da sua busca
 
 
+# Encontrar intersecções entre as janelas dos genes e os elementos repetitivos
+overlaps_rmsk <- findOverlaps(promoters_custom, rmsk_gr)
 
+# Criar um data.frame com o mapeamento
+gene_te_mapping <- data.frame(
+  gene_id = names(promoters_custom)[queryHits(overlaps_rmsk)],
+  te_name = rmsk_gr$repName[subjectHits(overlaps_rmsk)],
+  te_family = rmsk_gr$repClass[subjectHits(overlaps_rmsk)] # Ex: SINE/Alu
+)
+
+# Exemplo para calcular a densidade de elementos Alu por gene:
+library(dplyr)
+te_density_per_gene <- gene_te_mapping %>%
+  group_by(gene_id) %>%
+  summarise(
+    total_TEs = n(),
+    total_Alu = sum(te_family == "SINE/Alu")
+  )
+
+
+# Extrair os scores de conservação apenas para as regiões das nossas janelas promotoras
+phast_scores <- import.bw(phast_bw, selection = BigWigSelection(promoters_custom))
+
+# Calcular o score médio de conservação para a janela de cada gene
+# Usamos aggregate para calcular a média do score sobrepondo as janelas
+score_per_promoter <- aggregate(phast_scores, promoters_custom, score = mean)
+
+# Adicionar o score ao objeto original
+promoters_custom$mean_phastCons <- score_per_promoter$score
+
+
+# Intersecção espacial
+overlaps_cres <- findOverlaps(promoters_custom, cres_human_seq)
 
 
 ```
