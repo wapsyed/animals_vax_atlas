@@ -47,7 +47,14 @@ bioc_pkgs = c(
   "pvca", "msa", "Biostrings",
   "biomaRt", "GEOquery", "circlize", "celldex", 
   "org.Hs.eg.db", "DESeq2", "msigdbr", 
-  "ape", "variancePartition", 
+  "org.Mm.eg.db",
+  "ape", "variancePartition",  "ChIPseeker", "IRanges",
+  "AnnotationHub",
+  "GenomeInfoDb",
+  "GenomicRanges",
+  "IRanges",
+  "Biostrings",
+  "rtracklayer",
   "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
   "mogene10sttranscriptcluster.db", "fgsea"
   # "arrayQualityMetrics"
