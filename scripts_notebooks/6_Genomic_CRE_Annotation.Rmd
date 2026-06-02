@@ -29,6 +29,7 @@ source(here::here("scripts_notebooks", "required.R"))
 library(BSgenome.Hsapiens.UCSC.hg38)
 library(BSgenome.Mmusculus.UCSC.mm10)
 library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
 library(ChIPseeker)
 library(GenomeInfoDb)
 library(GenomicRanges)
@@ -41,7 +42,7 @@ library(biomaRt)
 
 ---
 
-# Fase 1 — Importação e Estruturação
+# Import
 
 ```{r import-data}
 # Homologous CRE pairs from ENCODE (hg38–mm10)
@@ -66,6 +67,16 @@ cres_mouse <- read_tsv(
   show_col_types = FALSE
 ) %>%
   rename_with(~paste0(., "_mouse"))
+
+
+# Load ENCODE comprehensive gene-CRE association table
+genes_cres_human <- read_tsv(
+  here("Genomic", "GRCh38-Closest-Genes-PC.tsv"),
+  col_names = c("chrom_cre", "start_cre", "end_cre", "id_dhs", "id_ccre", "type_cre",
+                "chrom_gene", "start_gene", "end_gene", "transcript_id", "score_gene", "strand_gene", "gene_id"),
+  show_col_types = FALSE
+) %>%
+  mutate(gene_id_clean = sub("\\..*", "", gene_id))
 ```
 
 ```{r classify-match-type}
@@ -94,13 +105,19 @@ cres_annotated <- homologous_cres %>%
     )
   )
 
+#Filter 1 to 1
+cres_homologous_1to1 <- cres_annotated %>% 
+  filter(match_type == "1:1") %>% 
+  #Filter enhancers with complete annotation in both species
+  filter(!is.na(chrom_human), !is.na(chrom_mouse))
+
 # Separate tables
 cres_homologous <- cres_annotated %>% filter(is_homologous)
 cres_human_only <- cres_annotated %>% filter(match_type == "human_only")
 cres_mouse_only <- cres_annotated %>% filter(match_type == "mouse_only")
-```
 
-```{r summary-phase1}
+
+#Summarize
 cres_annotated %>%
   count(match_type) %>%
   mutate(pct = round(100 * n / sum(n), 1)) %>%
@@ -109,45 +126,53 @@ cres_annotated %>%
 
 ---
 
-# Fase 2 — Anotação de Genes Associados (Humano)
+# Gene annotation
 
 ```{r import-gene-annotation}
-# Human CRE–gene associations (pre-computed by ENCODE, closest protein-coding gene)
-genes_cres_human <- read_tsv(
-  here("Genomic", "GRCh38-Closest-Genes-PC.tsv"),
-  col_names = c(
-    "chrom_cre", "start_cre", "end_cre", "id_dhs", "id_ccre", "type_cre",
-    "chrom_gene", "start_gene", "end_gene", "transcript_id",
-    "score_gene", "strand_gene", "gene_id"
-  ),
-  show_col_types = FALSE
+
+###############
+# ADAPT
+###############
+
+# Import gene expression correlation
+# Mock
+expression_correlation <- tibble(
+  hgnc_symbol = c("ENTPD1", "ASGR1", "MARCKS", "IL7R"),
+  mgi_symbol  = c("Entpd1", "Asgr1", "Marcks", "Il7r"),
+  rho         = c(0.85, 0.79, -0.42, -0.61)
 )
-```
 
-```{r biomart-hgnc}
-# Strip Ensembl version suffix (e.g. ENSG00000186092.7 → ENSG00000186092)
-ensembl_ids <- genes_cres_human$gene_id %>%
-  unique() %>%
-  sub("\\..*", "", .)
 
-# Download HGNC symbols from Ensembl
-mart <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+############## 
+# Query biomaRt to map human Ensembl IDs to HGNC and MGI symbols
+human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 
-gene_names <- getBM(
-  attributes = c("ensembl_gene_id", "hgnc_symbol", "gene_biotype"),
+hgnc_mgi_map <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "mmusculus_homolog_associated_gene_name"),
   filters    = "ensembl_gene_id",
-  values     = ensembl_ids,
-  mart       = mart
+  values     = unique(genes_cres_human$gene_id_clean),
+  mart       = mart_human
 )
 
 # Join HGNC symbols to gene table
 genes_cres_human <- genes_cres_human %>%
-  mutate(gene_id_clean = sub("\\..*", "", gene_id)) %>%
-  left_join(gene_names, by = c("gene_id_clean" = "ensembl_gene_id")) %>%
-  select(-gene_id_clean)
-```
+  left_join(hgnc_mgi_map, by = c("gene_id_clean" = "ensembl_gene_id")) %>%
+  # Restrict to classic, highly interpretable signatures
+  filter(type_cre %in% c("PLS", "pELS", "dELS")) 
 
-```{r join-genes-to-cres}
+
+# Compute multi-CRE metrics per homologous gene pair
+gene_level_cre_metrics <- genes_cres_human %>%
+  group_by(hgnc_symbol, mmusculus_homolog_associated_gene_name) %>%
+  summarise(
+    n_cres_human       = n(),
+    n_cres_orthologous = sum(id_ccre %in% cres_1to1$human_enhancer),
+    pct_cres_conserved = n_cres_orthologous / n_cres_human,
+    .groups = "drop"
+  ) %>%
+  inner_join(expression_correlation, by = c("hgnc_symbol" = "hgnc_symbol"))
+
+
 # Annotate cres_annotated with human gene info (one gene per CRE)
 cres_annotated <- cres_annotated %>%
   left_join(
@@ -157,77 +182,55 @@ cres_annotated <- cres_annotated %>%
       distinct(id_ccre, .keep_all = TRUE),
     by = c("human_enhancer" = "id_ccre")
   )
+
 ```
 
 ---
 
-# Fase 3 — Extração de Sequências
+# Sequence extraction
+The HOXD55 matrix (originally derived by Chiaromonte et al., 2002, and deeply analyzed in Blanchette et al., 2004) defines nucleotide matches and mismatches using large integers to maximize sensitivity when calculating neutral substitution rates in mammalian alignments:Match: $+91$Mismatch: $-114$Because a single mismatch penalizes the score by $-114$, the gap penalties must be scaled proportionally. If you used a standard gap opening penalty of $-10$, the alignment algorithm would erroneously introduce hundreds of micro-gaps instead of accepting a single nucleotide mismatch, completely ruining the biological alignment of your cis-regulatory elements (CREs).
+
+To maintain perfect parity with the alignments you see on the UCSC Genome Browser for human (hg38) and mouse (mm10), you use their default parameters:Gap Opening Penalty ($O$): $-400$Gap Extension Penalty ($E$): $-30$
+
+Chiaromonte, F., et al. (2002). Scoring pairwise genomic alignments. Pacific Symposium on Biocomputing. This paper established the ancestral mammalian repeat substitution matrices (including the HOXD matrices).
+Blanchette, M., et al. (2004). Blastz: A tool for aligning a large number of long genomic sequences. Genome Research. This paper formally documents the open-source BLASTZ/LASTZ defaults ($O = 400, E = 30$, match $= 91$, mismatch $= 114$) used by UCSC.
+Kent, W. J., et al. (2003). Evolution's Cauldron: Duplication, Deletion, and Rearrangement in the Mouse and Human Genomes. PNAS. Documents how UCSC constructs the chain and net alignments utilizing these exact parameters.
 
 ```{r extract-sequences}
-# Filter homologous CREs with valid coordinates in both species
-cres_to_align <- cres_annotated %>%
-  dplyr::filter(
-    is_homologous,
-    !is.na(chrom_human), !is.na(start_human), !is.na(end_human),
-    !is.na(chrom_mouse), !is.na(start_mouse), !is.na(end_mouse)
-  )
+cres_to_align <- cres_1to1 %>%
+  filter(human_enhancer %in% genes_cres_human$id_ccre) %>%
+  filter(!is.na(chrom_human), !is.na(chrom_mouse))
 
-# --- Human GRanges ---
-gr_human <- GRanges(
-  seqnames = cres_to_align$chrom_human,
-  ranges   = IRanges(start = cres_to_align$start_human, end = cres_to_align$end_human)
-)
-seqlevels(gr_human) <- seqlevels(BSgenome.Hsapiens.UCSC.hg38)
-seqinfo(gr_human)   <- seqinfo(BSgenome.Hsapiens.UCSC.hg38)
+gr_human <- GRanges(seqnames = cres_to_align$chrom_human, ranges = IRanges(start = cres_to_align$start_human, end = cres_to_align$end_human))
+gr_mouse <- GRanges(seqnames = cres_to_align$chrom_mouse, ranges = IRanges(start = cres_to_align$start_mouse, end = cres_to_align$end_mouse))
 
-# --- Mouse GRanges ---
-gr_mouse <- GRanges(
-  seqnames = cres_to_align$chrom_mouse,
-  ranges   = IRanges(start = cres_to_align$start_mouse, end = cres_to_align$end_mouse)
-)
-seqlevels(gr_mouse) <- seqlevels(BSgenome.Mmusculus.UCSC.mm10)
-seqinfo(gr_mouse)   <- seqinfo(BSgenome.Mmusculus.UCSC.mm10)
+cres_to_align$sequence_human <- as.character(getSeq(BSgenome.Hsapiens.UCSC.hg38, gr_human))
+cres_to_align$sequence_mouse <- as.character(getSeq(BSgenome.Mmusculus.UCSC.mm10, gr_mouse))
 
-# --- Extract sequences ---
-seq_human <- getSeq(BSgenome.Hsapiens.UCSC.hg38, gr_human)
-seq_mouse <- getSeq(BSgenome.Mmusculus.UCSC.mm10, gr_mouse)
+# Parameterize a nucleotide substitution matrix mirroring the standard HOXD55 values
+matriz_hoxd55 <- nucleotideSubstitutionMatrix(match = 91, mismatch = -114, baseOnly = TRUE)
 
-# Add to dataframe
-cres_to_align <- cres_to_align %>%
-  dplyr::mutate(
-    sequence_human = as.character(seq_human),
-    sequence_mouse = as.character(seq_mouse)
-  )
-```
-
-```{r sequence-summary}
-cat("CRE pairs with sequences:", nrow(cres_to_align), "\n")
-cat("Mean human CRE length:", round(mean(nchar(cres_to_align$sequence_human))), "bp\n")
-cat("Mean mouse CRE length:", round(mean(nchar(cres_to_align$sequence_mouse))), "bp\n")
-```
-
----
-
-# Fase 4 — Alinhamento e Identidade de Sequência
-
-Local alignment (Smith-Waterman), gap opening = -2, gap extension = -1.
-
-```{r alignment}
-aln_full <- pairwiseAlignment(
+aln_cres <- pairwiseAlignment(
   DNAStringSet(cres_to_align$sequence_human),
   DNAStringSet(cres_to_align$sequence_mouse),
   type         = "local",
-  gapOpening   = -2,
-  gapExtension = -1
+  substitutionMatrix = matriz_hoxd55,
+  gapOpening   = -400, # Score scale adjusted for standard UCSC genomic alignment scoring
+  gapExtension = -30
 )
 
 cres_to_align <- cres_to_align %>%
-  dplyr::mutate(
-    cre_identity_pct = pid(aln_full, type = "PID1"),
-    cre_align_score  = score(aln_full),
-    cre_align_length = nchar(alignedPattern(aln_full))
+  mutate(
+    cre_identity_pct = pid(aln_cres, type = "PID1"),
+    cre_align_score  = score(aln_cres),
+    cre_align_length = nchar(alignedPattern(aln_cres)),
+    cre_coverage_human = cre_align_length / nchar(sequence_human)
   )
+
 ```
+
+
+
 
 ```{r alignment-summary}
 summary(cres_to_align$cre_identity_pct)
@@ -237,9 +240,82 @@ cat("% identity > 70%:", round(mean(cres_to_align$cre_identity_pct > 70) * 100, 
 cat("% identity > 60%:", round(mean(cres_to_align$cre_identity_pct > 60) * 100, 1), "%\n")
 ```
 
----
 
-# Fase 5 — Exportação
+# Multiscale alignment of proximal TSS windows
+```{r}
+tx_human <- transcripts(TxDb.Hsapiens.UCSC.hg38.knownGene)
+
+# Multi-scale biological window definitions centered on the TSS
+windows_definition <- list(
+  w3000 = list(up = 3000, down = 300),  # Full proximal regulatory landscape (pELS/dELS capture)
+  w1500 = list(up = 1500, down = 300),  # Core promoter + immediate proximal enhancers
+  w500  = list(up = 500,  down = 100),  # Core promoter locus only
+  w200  = list(up = 200,  down = 50)    # Minimal transcription initiation footprint
+)
+
+# Exemplary extraction and global alignment (Needleman-Wunsch) loop initialization for w3000
+tss_human_w3000 <- promoters(TxDb.Hsapiens.UCSC.hg38.knownGene, upstream = 3000, downstream = 300)
+tss_mouse_w3000 <- promoters(TxDb.Mmusculus.UCSC.mm10.knownGene, upstream = 3000, downstream = 300)
+
+# Implementation Note: Filter your GRanges objects by matched homologous pairs prior to running global alignment:
+# aln_global <- pairwiseAlignment(seq_human_gene, seq_mouse_gene, type = "global", substitutionMatrix = matriz_hoxd55)
+```
+
+
+
+# Annotate conservation and TEs
+
+```{r}
+ah <- AnnotationHub()
+
+# 1. Fetch the most recent RepeatMasker records for hg38
+rmsk_query <- query(ah, c("RepeatMasker", "Homo sapiens", "hg38"))
+rmsk_hg38  <- ah[[names(rmsk_query)[1]]]
+
+# 2. Compute the exact fraction of the CRE masked by repetitive components
+gr_cres_human_all <- GRanges(
+  seqnames = cres_to_align$chrom_human, 
+  ranges = IRanges(start = cres_to_align$start_human, end = cres_to_align$end_human)
+)
+
+hits_rmsk <- findOverlaps(gr_cres_human_all, rmsk_hg38)
+
+# Calculate coverage to map base-pair level masking within the ranges
+repeat_cov <- GenomicRanges::coverage(rmsk_hg38)
+seqlevels(gr_cres_human_all, pruning.mode = "coercion") <- names(repeat_cov)
+masked_views <- Views(repeat_cov, ranges(gr_cres_human_all))
+
+cres_to_align$repeat_masked_pct <- sapply(masked_views, function(x) sum(as.numeric(x) > 0)) / width(gr_cres_human_all) * 100
+```
+
+
+
+#Integrative Statistical Modeling (Linear Mixed-Effects Models)
+
+Because individual homologous genes map to multiple independent flanking CREs throughout the genome, we employ a Linear Mixed-Effects Model (LMM). Treating the gene pair as a random effect handles the nested data dependency and protects against degrees-of-freedom inflation.
+
+```{r}
+# Consolidate feature matrix across all annotation scales
+df_integrated <- cres_to_align %>%
+  select(human_enhancer, mouse_enhancer, cre_identity_pct, repeat_masked_pct) %>%
+  left_join(genes_cres_human, by = join_by(human_enhancer == id_ccre)) %>%
+  left_join(gene_level_cre_metrics, by = "hgnc_symbol") %>%
+  mutate(gene_pair_id = paste0(hgnc_symbol, "_", mmusculus_homolog_associated_gene_name)) %>%
+  filter(!is.na(rho))
+
+# Fit Linear Mixed-Effects Model
+lmm_fit <- lmer(
+  rho ~ cre_identity_pct + pct_cres_conserved + repeat_masked_pct + (1 | gene_pair_id),
+  data = df_integrated
+)
+
+# Extract clean model coefficients and variance components
+tidy(lmm_fit)
+```
+
+
+
+# Export
 
 ```{r export}
 # Merge alignment results back into cres_annotated
