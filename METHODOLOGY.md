@@ -1,9 +1,6 @@
----
+------------------------------------------------------------------------
 
-editor_options: 
-  markdown: 
-    wrap: 72
----
+editor_options: markdown: wrap: 72 ---
 
 # Complete Project Methodology
 
@@ -32,7 +29,7 @@ editor_options:
 ### I.C Conditions Analyzed
 
 | Stimulus Type | Condition | Vaccine/Agent | Organisms | GEO Accession | Platform |
-|------------|------------|------------|------------|------------|------------|
+|----|----|----|----|----|----|
 | Vaccination | Influenza | Fluad (TIV + MF59) | Human, Mouse | GSE124689 (H), GSE120661 (M) | Illumina HT-12, Agilent 8×60K |
 | Vaccination | Hepatitis B | Engerix-B | Human, Mouse | GSE124533 (H), GSE120661 (M) | Illumina HT-12, Agilent 8×60K |
 | Infection | *S. aureus* bacteremia | — | Human | GSE19668 | Affymetrix HuGene |
@@ -78,7 +75,7 @@ editor_options:
 **Quality metrics computed per sample:**
 
 | Metric | Description | Threshold | Tool |
-|-----------------------------|--------------|--------------|--------------|
+|----|----|----|----|
 | **RNA Degradation** | 5'/3' bias in probe intensities; indicates RNA degradation | RLE slope \< ±0.1 | arrayQualityMetrics |
 | **Background Intensity** | Median background vs. signal; indicates dye incorporation issues | Expected vs. observed ratio | arrayQualityMetrics |
 | **Positive/Negative Controls** | Spike-in controls validate technical steps | z-score \< ±3 | Platform-specific |
@@ -137,7 +134,7 @@ metadata <- pData(eset)
 **Microarray platforms in dataset:**
 
 | Platform | Organism | Technology | Normalization Method |
-|------------------|------------------|------------------|------------------|
+|----|----|----|----|
 | **Agilent 8×60K** | Mouse | Spotted microarray | Quantile normalization (limma::normalizeBetweenArrays) |
 | **Illumina HumanHT-12** | Human | Bead array | Quantile normalization (beadarray or limma) |
 | **Illumina MouseWG-6** | Mouse | Bead array | Quantile normalization |
@@ -438,7 +435,7 @@ IL4      12.1    13.5    12.0
 **Output table structure:**
 
 | Condition | Timepoint | Human_DEG_count | Mouse_DEG_count | Shared_count | Fisher_pval | Jaccard_index |
-|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
+|----|----|----|----|----|----|----|
 | influenza_fluad | D1 | 245 | 189 | 98 | 0.003 | 0.27 |
 | influenza_fluad | D3 | 523 | 456 | 312 | \<0.001 | 0.46 |
 | hepatitisb_engerixb | D1 | 134 | 167 | 64 | 0.12 | 0.22 |
@@ -575,7 +572,7 @@ Output: Coefficients β_i indicate whether each BTM is predictive of response
 **Evaluation metrics (for binary classification):**
 
 | Metric | Formula | Interpretation |
-|--------------------------|------------------------------|----------------|
+|----|----|----|
 | **Accuracy** | (TP + TN) / (TP + TN + FP + FN) | Proportion correct |
 | **Sensitivity (Recall)** | TP / (TP + FN) | Proportion true responders correctly identified |
 | **Specificity** | TN / (TN + FP) | Proportion true non-responders correctly identified |
@@ -611,7 +608,7 @@ Output: Coefficients β_i indicate whether each BTM is predictive of response
 **Figure categories:**
 
 | Figure Type | Count | Description | Location |
-|------------------|------------------|------------------|------------------|
+|----|----|----|----|
 | **Correlation scatter plots** | 50+ | Human vs. mouse BTM/Hallmark correlations per condition | `Figures/` |
 | **RRHO2 heatmaps** | 7 | Rank-rank hypergeometric overlap per condition | `Figures/Figures_Article/` |
 | **Volcano plots** | 35+ | DEG significance per condition × timepoint | `Figures/` |
@@ -692,7 +689,7 @@ Output: Coefficients β_i indicate whether each BTM is predictive of response
 ### IX.B Threshold Values
 
 | Analysis | Parameter | Value | Rationale |
-|------------------|------------------|------------------|------------------|
+|----|----|----|----|
 | **DEG significance** | adj.p-value (FDR) | \< 0.05 | Standard genomic threshold |
 | **DEG effect size** | \|logFC\| | \> 1 (optional) | Biologically meaningful \~2-fold change |
 | **GSEA significance** | padj | \< 0.05 | FDR-corrected enrichment |
@@ -752,7 +749,7 @@ Output: Coefficients β_i indicate whether each BTM is predictive of response
 ### XI.A Data Sources & GEO Accessions (Reference Table)
 
 | Condition | Organism | GEO Accession | Study Title (abbreviated) | N_samples | Platform | Publication DOI |
-|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
+|----|----|----|----|----|----|----|
 | Influenza (Fluad) | Human | GSE124689 | TIV+MF59 vaccine response in adults | \~50 | Illumina HT-12 | [10.1016/...] |
 | Influenza (Fluad) + Hepatitis B | Mouse | GSE120661 | Influenza and hepatitis B vaccination | \~100 | Agilent 8×60K | [10.1038/...] |
 | Hepatitis B (Engerix-B) | Human | GSE124533 | Hepatitis B vaccine response | \~50 | Illumina HT-12 | [10.1016/...] |

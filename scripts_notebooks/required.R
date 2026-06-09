@@ -52,8 +52,14 @@ bioc_pkgs = c(
   "AnnotationHub",
   "GenomeInfoDb",
   "GenomicRanges",
+  "pwalign",
   "IRanges",
   "Biostrings",
+  "BSgenome.Hsapiens.UCSC.hg38",
+  "BSgenome.Mmusculus.UCSC.mm10",
+  "TxDb.Hsapiens.UCSC.hg38.knownGene",
+  "TxDb.Mmusculus.UCSC.mm10.knownGene",
+  
   "rtracklayer",
   "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
   "mogene10sttranscriptcluster.db", "fgsea"
