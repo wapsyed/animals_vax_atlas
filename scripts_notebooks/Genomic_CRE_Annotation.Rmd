@@ -316,6 +316,8 @@ expression_correlation <- tibble(
   rho         = c(0.85, 0.79, -0.42, -0.61)
 )
 
+all_human_mouse_dge_btm_process_genes_correlation_bygene <- readRDS( here("tables", "all_human_mouse_dge_btm_process_genes_correlation_bygene.rds"))
+
 ############## 
 # Query biomaRt to map human Ensembl IDs to HGNC and MGI symbols
 human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
@@ -334,14 +336,14 @@ genes_cres_human <- genes_cres_human %>%
 
 # Compute multi-CRE metrics per homologous gene pair
 gene_level_cre_metrics <- genes_cres_human %>%
-  group_by(hgnc_symbol) %>%
+  group_by(hgnc_symbol, type_cre) %>%
   summarise(
     n_cres_human       = n(),
     n_cres_orthologous = sum(id_ccre %in% cres_homologous_1to1$human_enhancer),
     pct_cres_conserved = n_cres_orthologous / n_cres_human,
     .groups = "drop"
   ) 
-  # inner_join(expression_correlation, by = c("hgnc_symbol" = "hgnc_symbol"))
+  # inner_join(all_human_mouse_dge_btm_process_genes_correlation_bygene, by = c("hgnc_symbol" = "hgnc_symbol"))
 
 
 # Annotate cres_annotated with human gene info (one gene per CRE)
@@ -356,12 +358,69 @@ cres_annotated <- cres_annotated %>%
 ```
 
 How many CREs per gene? And how many genes per enhancer?
-```{r}
+```{r fig.height=5, fig.width=10}
+#Distribution
+gene_level_cre_metrics %>% 
+  filter(hgnc_symbol != "") %>% 
+  ggplot() +
+  aes(x = n_cres_human,
+      y = "Human",
+      label = hgnc_symbol) +
+  geom_violin(fill = "gray90",
+              color = NA) +
+  geom_boxplot(width = 0.2,
+               color = "#4DBBD5FF",
+               alpha = 0) +
+  scale_x_continuous(transform = "log10") +
+  geom_quasirandom(groupOnX = FALSE, # Permite a distribuição vertical em um X contínuo
+                 varwidth = TRUE,  # Ajusta a largura de acordo com a densidade
+                 pch = 21,
+                 mapping = aes(fill = pct_cres_conserved)) +
+  scale_color_continuous() +
+  geom_label_repel(size = 2.5,
+                  data = . %>% slice_max(n = 5, 
+                                         order_by = n_cres_human)) +
+  theme_vaxgo()
 
-cres_annotated %>% 
-  dplyr::group_by(hgnc_symbol) %>% 
+```
+
+
+```{r fig.height=4, fig.width=10}
+
+library(ggpubr)
+#Is there any correlation between CREs metrics and types of CREs?
+gene_level_cre_metrics %>% 
+  inner_join(all_human_mouse_dge_btm_process_genes_correlation_bygene %>% 
+               rename(hgnc_symbol = symbol), 
+             by = join_by(hgnc_symbol)) %>% 
+  filter(hgnc_symbol != "",
+         # p_value <= 0.10,
+         n_pathogens > 10,
+         type_cre %in% c("PLS", "pELS", "dELS", "TF")) %>% 
+  ggplot() +
+  aes(
+      x = n_cres_orthologous,
+      # x = n_cres_human,
+      # x = pct_cres_conserved,
+      y = cor_value, 
+      label = hgnc_symbol,
+      color = type_cre,
+      # size = n_pathogens
+      ) +
+  theme_vaxgo() +
+  facet_wrap(~type_cre, nrow = 1, 
+             scales = "free_x")+
+  geom_point(alpha = 0.2,
+             ) +
+  geom_smooth(method = "lm", color = "black", se = TRUE, size = 0.8) +
   
-
+  stat_cor(method = "spearman", label.x.npc = "left", label.y.npc = "top", color = "black") +
+  theme(legend.position = "top") 
+  
+  # geom_label_repel(color = "black",
+  #                 size = 2.5,
+  #                 data = . %>% 
+  #                   slice_max(pct_cres_conserved, n = 10))
 
 
 ```
