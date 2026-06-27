@@ -44,21 +44,6 @@ library(biomaRt)
 
 # Import
 
-Gene Hancer
-```{r}
-
-
-
-
-
-
-```
-
-
-
-
-
-
 ```{r import-data}
 #Import Human and Mouse CREs ===========
 #In contrast to the Human dataset, there are no CTCF-bound CREs in the main, full CRE mouse dataset. So, we imported CREs separately and merged them.
@@ -122,58 +107,7 @@ cres_human_pelsdels_clean = cres_human_pelsdels %>%
 #Merge
 cres_human = bind_rows(cres_human_pls_clean,
           cres_human_pelsdels_clean,
-          cres_human_ctcfbound) 
-
-
-
-########### GENEHANCER
-
-#Gene interactions with enhancers
-genehancer_interactions_doubleelite = read_tsv(here("Genomic", "GeneHancer_Chr1-22_ChrX_Interactions_DoubleElite_hgTables.txt")) %>% 
-  separate(name, into = c("hgnc_symbol", "genehancer_id")) %>%
-  filter(chromEnd >= chromStart)
-                                               
-#Enhancers                                              
-genehancer_enhancers_doubleelite = read_tsv(here("Genomic", "GeneHancer_Chr1-22_ChrX_Enhancers_DoubleElite_hgTables.txt")) %>%
-  filter(chromEnd >= chromStart)
-
-
-
-
-########## Get overlap between ENCODE4 and Genehancer
-library(GenomicRanges)
-#Convert to GRanges
-genehancer_enhancers_doubleelite_ranges = makeGRangesFromDataFrame(genehancer_enhancers_doubleelite, 
-                                  keep.extra.columns = TRUE,
-                                  seqnames.field = "chrom",
-                                  start.field = "chromStart",
-                                  end.field = "chromEnd", 
-                                  na.rm = T)
-
-#Convert to GRanges
-cres_human_ranges = makeGRangesFromDataFrame(cres_human, 
-                                  keep.extra.columns = TRUE,
-                                  seqnames.field = "chrom_human",
-                                  start.field = "start_human",
-                                  end.field = "end_human", 
-                                  na.rm = T)
-# Find overlaps
-distances_ranges <- distanceToNearest(genehancer_enhancers_doubleelite_ranges, 
-                     cres_human_ranges) %>% 
-  as.data.frame()
-
-cres_human_encode_genehancer <- data.frame(
-  genehancer_enhancers_doubleelite_ranges[distances_ranges$queryHits], 
-  cres_human_ranges[distances_ranges$subjectHits],
-  distance = distances_ranges$distance
-) %>% 
-  rename_with(
-    ~ str_replace(., "\\.1$", "_encode4"), # Procura pelo .1 no final do nome
-    ends_with(".1")                        # Aplica apenas para colunas que terminam com .1
-  )
-
-cres_human_encode_genehancer %>% 
-  glimpse()
+          cres_human_ctcfbound) S
 
 ```
 
@@ -259,6 +193,69 @@ genes_cres_human <- read_tsv(
 ) %>%
   mutate(gene_id_clean = sub("\\..*", "", gene_id)) #2,651,787
 ```
+Annotate with GeneHancer
+```{r}
+########### GENEHANCER
+
+#Gene interactions with enhancers
+genehancer_interactions_doubleelite = read_tsv(here("Genomic", "GeneHancer_Chr1-22_ChrX_Interactions_DoubleElite_hgTables.txt")) %>% 
+  separate(name, into = c("hgnc_symbol", "genehancer_id")) %>%
+  filter(chromEnd >= chromStart) %>% 
+  rename(geneScore = score,
+         geneValue = value,)
+                                               
+#Enhancers                                              
+genehancer_enhancers_doubleelite = read_tsv(here("Genomic", "GeneHancer_Chr1-22_ChrX_Enhancers_DoubleElite_hgTables.txt")) %>%
+  filter(chromEnd >= chromStart)
+
+
+########## Get overlap between ENCODE4 and Genehancer
+library(GenomicRanges)
+#Convert to GRanges
+genehancer_enhancers_doubleelite_ranges = makeGRangesFromDataFrame(genehancer_enhancers_doubleelite, 
+                                  keep.extra.columns = TRUE,
+                                  seqnames.field = "chrom",
+                                  start.field = "chromStart",
+                                  end.field = "chromEnd", 
+                                  na.rm = T)
+
+#Convert to GRanges
+cres_human_ranges = makeGRangesFromDataFrame(cres_human, 
+                                  keep.extra.columns = TRUE,
+                                  seqnames.field = "chrom_human",
+                                  start.field = "start_human",
+                                  end.field = "end_human", 
+                                  na.rm = T)
+# Find overlaps
+distances_ranges <- distanceToNearest(genehancer_enhancers_doubleelite_ranges, 
+                     cres_human_ranges) %>% 
+  as.data.frame()
+
+#Annotate Genehancer ids (ELITE) with ENCODE4 ids
+cres_human_encode_genehancer <- data.frame(
+  genehancer_enhancers_doubleelite_ranges[distances_ranges$queryHits], 
+  cres_human_ranges[distances_ranges$subjectHits],
+  distance = distances_ranges$distance
+) %>% 
+  rename_with(
+    ~ str_replace(., "\\.1$", "_encode4"), 
+    ends_with(".1")                        
+  ) %>% 
+  rename(chrom = seqnames,
+         chromStart = start,
+         chromEnd = end,
+         genehancer_id = name) %>%
+  
+  #Merge gene interaction scores
+  inner_join(genehancer_interactions_doubleelite,
+             by = join_by("genehancer_id", "chrom", "chromStart", "chromEnd")
+             )
+
+
+cres_human_encode_genehancer %>% 
+  glimpse()
+```
+
 
 
 
@@ -267,7 +264,7 @@ Summarize data Count how many mouse CREs each human CRE maps to (and vice versa)
 ```{r classify-match-type}
 
 #Summarize classes
-cres_human %>% 
+cres_human_encode_genehancer %>% 
   dplyr::count(type_human, subtype_human) %>%
   dplyr::mutate(pct = round(100 * n / sum(n), 1)) %>%
   dplyr::arrange(type_human, desc(n))
@@ -288,7 +285,7 @@ mouse_counts <- homologous_cres %>%
 cres_annotated <- homologous_cres %>%
   left_join(human_counts, by = "human_enhancer") %>%
   left_join(mouse_counts, by = "mouse_enhancer") %>%
-  full_join(cres_human, by = join_by(human_enhancer == id_ccre_human)) %>%
+  full_join(cres_human_encode_genehancer, by = join_by(human_enhancer == id_ccre_human)) %>%
   full_join(cres_mouse, by = join_by(mouse_enhancer == id_ccre_mouse)) %>%
   mutate(
     is_homologous = !is.na(human_enhancer) & !is.na(mouse_enhancer),
@@ -300,13 +297,17 @@ cres_annotated <- homologous_cres %>%
       n_mouse_per_human == 1 & n_human_per_mouse >  1  ~ "1:N",
       TRUE                                             ~ "N:M"
     )
-  ) 
+  ) %>% 
+  rename(chrom_human = chrom,
+         start_human = chromStart,
+         end_human = chromEnd,
+         )
 
 #Filter 1 to 1
-cres_homologous_1to1 <- cres_annotated %>% 
-  dplyr::filter(match_type == "1:1") %>% 
+cres_homologous_1to1 <- cres_annotated %>% #856,415
+  dplyr::filter(match_type == "1:1") %>% #277,898
   #Filter enhancers with complete annotation in both species
-  dplyr::filter(!is.na(chrom_human), !is.na(chrom_mouse))
+  dplyr::filter(!is.na(chrom_human), !is.na(chrom_mouse))#1,567
 
 # Separate tables
 cres_homologous <- cres_annotated %>% dplyr::filter(is_homologous)
@@ -326,6 +327,7 @@ cres_homologous_1to1_comparison = cres_homologous_1to1 %>%
     filter(type_human %in% c("pELS", "dELS", "PLS"),
          type_mouse %in% c("pELS", "dELS", "PLS")) %>% 
   
+  #Summarize
   group_by(type_human, subtype_human) %>% 
   dplyr::count(type_human, subtype_human, type_mouse, subtype_mouse) %>%
   dplyr::mutate(pct = round(100 * n / sum(n), 1)) %>%
@@ -337,8 +339,37 @@ cres_homologous_1to1_comparison = cres_homologous_1to1 %>%
 
 ```{r classify-match-type, fig.height=5, fig.width=5}
 #Heatmap
-#All CREs
-cres_homologous_1to1_comparison %>% 
+
+#Elite CREs
+cres_homologous %>% 
+    dplyr::filter(!is.na(hgnc_symbol)) %>% #1,706
+  #Filter ELITE enhancers
+  dplyr::filter(eliteness == "Elite") %>%  ##1,567
+  #Plot
+  ggplot() +
+    aes(x = subtype_mouse %>% str_replace(., "-", "\n"),
+         y = subtype_human %>% str_replace(., "-", "\n")) +
+  facet_grid(~type_human~type_mouse) +
+  geom_tile(aes(fill = pct), color = "black", linewidth = 0.4) +
+  geom_text(aes(label = paste0(pct, "%")),
+            size = 3) +
+  theme_vaxgo() +
+  scale_fill_gradient2(low = "white",
+                       high = "#4361ee",
+                       guide = guide_colorbar(barwidth = unit(2, "cm"))) +
+  scale_x_discrete(expand = c(0.05, 0.05)) +
+  scale_y_discrete(expand = c(0.05, 0.05)) +
+  theme(axis.text.x = element_text(angle = 0,
+                                   # vjust = 0,
+                                   hjust = 0.5),
+        legend.position = "top") +
+  labs(x = "Mouse",
+       y = "Human",
+       fill = "%Shared, from human")
+
+
+# All CREs
+cres_homologous %>% 
   #Plot
   ggplot() +
     aes(x = subtype_mouse %>% str_replace(., "-", "\n"),
@@ -391,7 +422,7 @@ human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 hgnc_mgi_map <- getBM(
   attributes = c("ensembl_gene_id", "hgnc_symbol"),
   filters    = "ensembl_gene_id",
-  values     = unique(genes_cres_human$gene_id_clean),
+  values     = unique(cres_human_encode_genehancer$gene_id_clean),
   mart       = human_mart
 )
 
