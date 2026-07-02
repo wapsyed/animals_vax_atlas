@@ -11,32 +11,29 @@ library(janitor)
 library(Biobase)
 library(patchwork)
 
-# Ensure required scripts are loaded
 source(here("scripts_notebooks", "required.R"))
 ```
 
 # Preprocessing - S.aureus Infection Subsampling
 
-## 1. Load and Pre-Filter ExpressionSet Data
 ```{r}
+## 1. Load and Pre-Filter ExpressionSet Data
 eset_human <- readRDS(file = here("tables", "saureus_infection_human_eset.rds"))
 
-# Baseline expression intensity filtering threshold
-genes_to_keep <- exprs(eset_human) %>% 
-  as.data.frame() %>% 
-  mutate(across(everything(), ~ . > 6)) %>% 
-  rowSums() %>% 
+# Filtering genes with intensity > 6 (log2) in at least 5 samples
+genes_to_keep <- exprs(eset_human) %>%
+  as.data.frame() %>%
+  mutate(across(everything(), ~ . > 6)) %>%
+  rowSums() %>%
   { . >= 5 }
 
 eset_filtered <- eset_human[genes_to_keep, ]
 meta_df <- as_tibble(pData(eset_filtered), rownames = "sample_id")
 expr_matrix <- exprs(eset_filtered)
-unique_participants <- meta_df %>% pull(participant_id) %>% unique()
-```
 
-## 2. Defensive Subsampling Function
-```{r}
-draw_flexible_subset <- function(participants_list, metadata, target_n = 5) {
+## 2. Defensive Subsampling Function (Independent Samples)
+# Samples independent individuals balanced by pathogen status
+draw_flexible_subset <- function(metadata, target_n = 10) {
   valid_draw <- FALSE
   attempts <- 0
   
@@ -44,25 +41,19 @@ draw_flexible_subset <- function(participants_list, metadata, target_n = 5) {
     attempts <- attempts + 1
     if(attempts > 500) stop("Could not find a balanced subset.")
     
-    # Randomly sample N individuals
-    selected_ids <- sample(participants_list, size = target_n, replace = FALSE)
+    # Sample target_n independent samples
+    sub_meta <- metadata %>% sample_n(target_n)
     
-    sub_meta <- metadata %>% 
-      filter(participant_id %in% selected_ids)
-    
-    # Ensure both pathogen classes are present if possible, or just proceed if only one
+    # Ensure both pathogen classes are present
     has_diversity <- (length(unique(sub_meta$pathogen)) > 1)
     
-    if(has_diversity) {
-      valid_draw <- TRUE
-    }
+    if(has_diversity) valid_draw <- TRUE
   }
   return(sub_meta)
 }
-```
 
-## 3. Run Multi-Iteration Simulation Loop
-```{r}
+## 3. Multi-Iteration Simulation Loop
+
 n_iterations <- 20 
 cohort_n <- 10      
 
@@ -70,28 +61,29 @@ set.seed(123)
 
 df_global_runs <- tibble(iteration = 1:n_iterations) %>%
   mutate(
-    sampled_metadata = map(iteration, ~ draw_flexible_subset(unique_participants, meta_df, target_n = cohort_n)),
+    sampled_metadata = map(iteration, ~ draw_flexible_subset(meta_df, target_n = cohort_n)),
     
     limma_results = map(sampled_metadata, ~ {
       sub_meta <- .x
       sub_expr <- expr_matrix[, sub_meta$sample_id]
       
-      # Design matrix WITHOUT sex, age, ethnicity. Including batch_experimental
-      design_sub <- model.matrix(~ pathogen + batch_experimental + 0, data = sub_meta)
+      # Design matrix: pathogen + batch_experimental (as requested)
+      design_sub <- model.matrix(~ pathogen + batch_experimental, data = sub_meta)
       colnames(design_sub) <- make.names(colnames(design_sub))
       
-      # Fit Limma model
-      fit_sub <- lmFit(sub_expr, design = design_sub) 
+      # Array weights (including batch_experimental)
+      aw_sub <- arrayWeights(sub_expr, design_sub, var.group = sub_meta$batch_experimental)
       
-      # Adjust contrasts for pathogen
-      # This needs to be checked based on actual pathogen levels
-      # Assuming condition levels based on meta_df structure
-      cont.matrix <- makeContrasts(pathogenStaphylococcus.aureus - pathogenControl, # Adjust as needed
-                                   levels = design_sub)
+      # Fit Limma model
+      fit_sub <- lmFit(sub_expr, design = design_sub, weights = aw_sub) 
+      
+      # Contrasts (pathogenStaphylococcus.aureus vs reference/control)
+      cont.matrix <- makeContrasts(pathogenStaphylococcus.aureus, levels = design_sub)
       
       fit2_sub <- contrasts.fit(fit_sub, cont.matrix)
       fit2_sub <- eBayes(fit2_sub, robust = TRUE, trend = TRUE)
       
+      # Extract results
       res_list <- lapply(1:ncol(fit2_sub), function(i) {
         df_res <- topTreat(fit2_sub, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE)
         df_res$symbol <- rownames(df_res)
@@ -103,10 +95,8 @@ df_global_runs <- tibble(iteration = 1:n_iterations) %>%
       do.call(rbind, res_list)
     })
   )
-```
 
 ## 4. Data Processing & Summary
-```{r}
 saureus_human_subsampled_degs <- df_global_runs %>%
   select(iteration, limma_results) %>%
   unnest(limma_results) %>%
@@ -115,14 +105,14 @@ saureus_human_subsampled_degs <- df_global_runs %>%
   summarise(
     p_value = median(p_value),
     adj_p_val = median(adj_p_val),
-    mean = median(log_fc),
-    lower = median(ci_l),
-    upper = median(ci_r),
+    mean_l2fc = median(log_fc),
+    ci_lower = median(ci_l),
+    ci_upper = median(ci_r),
     ave_expr = median(ave_expr),
     pct_iterations_significant = mean(adj_p_val <= 0.05) * 100,
     .groups = "drop"
   ) %>%
-  mutate(organism = "Human")
+  mutate(condition = "Saureus_Day1", organism = "Human")
 
 # Save
 saureus_human_subsampled_degs %>% saveRDS(file = here("tables", "saureus_infection_human_dge_subsampled_degs.rds"))
@@ -134,28 +124,8 @@ saureus_human_subsampled_degs %>%
   print()
 ```
 
-## 5. Demographics Analysis
+
 ```{r}
-demographics_summary <- df_global_runs %>%
-  select(iteration, sampled_metadata) %>%
-  unnest(sampled_metadata) %>%
-  select(iteration, participant_id, age, sex, race) %>%
-  distinct() %>%
-  group_by(iteration) %>%
-  summarise(
-    mean_age   = mean(as.numeric(age), na.rm = TRUE), 
-    prop_male  = mean(sex == "male", na.rm = TRUE),
-    prop_white = mean(race == "white", na.rm = TRUE),
-    .groups    = "drop"
-  ) %>%
-  mutate(iteration = factor(iteration, levels = 1:max(iteration)))
 
-# Plots
-plot_age <- ggplot(demographics_summary, aes(x = "Mean Age", y = iteration, fill = mean_age)) +
-  geom_tile(color = "white", linewidth = 0.6) +
-  scale_fill_viridis_c(option = "mako", name = "Mean Age\n(Years)") +
-  theme_minimal(base_size = 11) +
-  labs(y = "Subsampling Iterations (n=10)")
-
-print(plot_age)
 ```
+
