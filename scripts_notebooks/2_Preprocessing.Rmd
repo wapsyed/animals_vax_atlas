@@ -1023,7 +1023,7 @@ draw_flexible_subset <- function(participants_list, metadata, target_n = 5) {
 }
 
 # ---- 3. Run Multi-Iteration Simulation Loop ----
-n_iterations <- 100 
+n_iterations <- 20 
 mouse_n <- 5       
 
 set.seed(123) # Lock global seed for absolute drawing reproducibility
@@ -1041,7 +1041,11 @@ df_global_runs <- tibble(iteration = 1:n_iterations) %>%
       sub_expr <- expr_matrix[, sub_meta$sample_id]
       
       # Lean design matrix formula
-      design_sub <- model.matrix(~ condition + age + 0, data = sub_meta)
+      design_sub <- model.matrix(~ condition + 
+                                   # age +
+                                   # sex +
+                                   # race +
+                                   0, data = sub_meta)
       colnames(design_sub) <- make.names(colnames(design_sub))
       
       # Compute iteration-specific correlation structures and sample weights
@@ -1121,6 +1125,104 @@ fluad_human_subsampled_degs %>%
   print()
 
 ```
+
+Demographics
+```{r}
+
+library(tidyverse)
+library(ComplexHeatmap)
+library(circlize)
+
+# ---- 1. Extract and Aggregate Metadata from Your Iterations ----
+# We use the 'df_global_runs' dataframe generated from the previous 20-iteration loop
+demographics_summary <- df_global_runs %>%
+  select(iteration, sampled_metadata) %>%
+  unnest(sampled_metadata) %>%
+  # Ensure unique participant profiling per iteration slice
+  select(iteration, participant_id, age, sex, race) %>%
+  distinct() %>%
+  # Collapse observations per iteration to map cohort properties
+  group_by(iteration) %>%
+  summarise(
+    mean_age   = mean(age, na.rm = TRUE),
+    prop_male  = mean(sex == "Male", na.rm = TRUE),   # Proportions (0 to 1)
+    prop_white = mean(race == "White", na.rm = TRUE), # Proportions (0 to 1)
+    .groups    = "drop"
+  )
+
+# ---- 2. Format Data Matrices for ComplexHeatmap ----
+
+# Matrix 1: The Core Matrix (Continuous values - Mean Age)
+mat_age <- demographics_summary %>%
+  select(iteration, mean_age) %>%
+  column_to_rownames("iteration") %>%
+  as.matrix()
+
+colnames(mat_age) <- "Mean Age"
+
+# Matrix 2: The Sideways Grouping Fractions (Stacked Proportions)
+annotation_df <- demographics_summary %>%
+  select(prop_male, prop_white) %>%
+  mutate(
+    prop_female    = 1 - prop_male,
+    prop_non_white = 1 - prop_white
+  )
+
+# ---- 3. Custom Aesthetic Color Scales & Objects ----
+
+# Custom continuous gradient color mapping function for age
+age_color_fun <- colorRamp2(
+  c(min(demographics_summary$mean_age), 
+    median(demographics_summary$mean_age), 
+    max(demographics_summary$mean_age)), 
+  c("#f7fcf0", "#bae4bc", "#084081")
+)
+
+# Instantiate the barplot tracks on the right side of the heatmap matrix rows
+row_anno <- rowAnnotation(
+  `Sex Distribution` = anno_barplot(
+    annotation_df[, c("prop_male", "prop_female")],
+    gp = gpar(fill = c("#3182bd", "#fa9fb5"), col = NA),
+    bar_width = 0.8
+  ),
+  `Race Distribution` = anno_barplot(
+    annotation_df[, c("prop_white", "prop_non_white")],
+    gp = gpar(fill = c("#fec44f", "#969696"), col = NA),
+    bar_width = 0.8
+  ),
+  annotation_name_side = "top",
+  annotation_name_gp = gpar(fontsize = 10, fontface = "bold")
+)
+
+# ---- 4. Plot Heatmap with Merged Component Legends ----
+
+# Generate independent structured descriptive legend boxes for the proportions
+lgd_sex  <- Legend(labels = c("Male", "Female"), title = "Sex", legend_gp = gpar(fill = c("#3182bd", "#fa9fb5")))
+lgd_race <- Legend(labels = c("White", "Non-White"), title = "Race", legend_gp = gpar(fill = c("#fec44f", "#969696")))
+
+ht <- Heatmap(
+  mat_age,
+  name = "Mean Age",
+  col = age_color_fun,
+  cluster_rows = FALSE,      # Keep sequential iterations (1 to 20) chronological
+  cluster_columns = FALSE,   # Prevent axis sorting on single column matrix
+  show_row_names = TRUE,
+  row_names_side = "left",
+  row_title = "Subsampling Iterations (n=5)",
+  row_title_gp = gpar(fontsize = 12, fontface = "bold"),
+  right_annotation = row_anno, # Inject the clinical distributions side by side
+  rect_gp = gpar(col = "white", lwd = 1) # Professional crisp border separation
+)
+
+# Render and draw canvas
+draw(ht, annotation_legend_list = list(lgd_sex, lgd_race), merge_legend = TRUE)
+
+```
+
+
+
+
+
 
 
 
