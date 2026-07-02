@@ -1028,8 +1028,6 @@ mouse_n <- 5
 
 set.seed(123) # Lock global seed for absolute drawing reproducibility
 
-cat("Starting multi-iteration downsampling loop optimized for the 'age' covariate...\n")
-
 df_global_runs <- tibble(iteration = 1:n_iterations) %>%
   mutate(
     # Step A: Perform structural full-rank longitudinal sampling
@@ -1081,8 +1079,6 @@ df_global_runs <- tibble(iteration = 1:n_iterations) %>%
     })
   )
 
-cat("All processing rounds completed successfully. Commencing tensor synthesis...\n")
-
 # ---- 4. Data Processing & Summary via Protective Medians ----
 fluad_human_subsampled_degs <- df_global_runs %>%
   select(iteration, limma_results) %>%
@@ -1115,7 +1111,7 @@ fluad_human_subsampled_degs <- df_global_runs %>%
          pct_iterations_significant, timepoint, vaccine, sample_type, organism)
 
 # ---- 5. Save Aggregated Output Matrix File ----
-# fluad_human_subsampled_degs %>% saveRDS(file = here("tables", "influenza_fluad_human_dge_subsampled_degs.rds"))
+fluad_human_subsampled_degs %>% saveRDS(file = here("tables", "influenza_fluad_human_dge_subsampled_degs.rds"))
 
 # ---- 6. Print Summary Metric Reports ----
 fluad_human_subsampled_degs %>% 
@@ -1129,93 +1125,150 @@ fluad_human_subsampled_degs %>%
 Demographics
 ```{r}
 
+library(tibble)
 library(tidyverse)
-library(ComplexHeatmap)
-library(circlize)
+library(tidyverse)
+library(patchwork)
 
-# ---- 1. Extract and Aggregate Metadata from Your Iterations ----
-# We use the 'df_global_runs' dataframe generated from the previous 20-iteration loop
+# ==============================================================================
+# 1. PROCESS SIMULATION ITERATIONS DATA
+# ==============================================================================
 demographics_summary <- df_global_runs %>%
   select(iteration, sampled_metadata) %>%
   unnest(sampled_metadata) %>%
-  # Ensure unique participant profiling per iteration slice
   select(iteration, participant_id, age, sex, race) %>%
   distinct() %>%
-  # Collapse observations per iteration to map cohort properties
   group_by(iteration) %>%
   summarise(
     mean_age   = mean(age, na.rm = TRUE),
-    prop_male  = mean(sex == "Male", na.rm = TRUE),   # Proportions (0 to 1)
-    prop_white = mean(race == "White", na.rm = TRUE), # Proportions (0 to 1)
+    prop_male  = mean(sex == "Male", na.rm = TRUE),
+    prop_white = mean(race == "White", na.rm = TRUE),
     .groups    = "drop"
+  ) %>%
+  mutate(iteration = factor(iteration, levels = 1:max(iteration)))
+
+# ==============================================================================
+# 2. BUILD TOP PANEL: SUBSAMPLING RUNS (n=5 PER ITERATION)
+# ==============================================================================
+
+# Block A: Mean Age Matrix Tiles
+plot_age <- ggplot(demographics_summary, aes(x = "Mean Age", y = iteration, fill = mean_age)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  scale_fill_viridis_c(option = "mako", name = "Age (Years)") +
+  scale_x_discrete(position = "top") +
+  theme_minimal(base_size = 11) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold"),
+    axis.text.x  = element_text(face = "bold", size = 10),
+    panel.grid   = element_blank(),
+    legend.position = "left"
+  ) +
+  labs(y = "Subsampling Iterations (n=5)")
+
+# Block B: Subsample Sex Proportions Track
+plot_sex <- demographics_summary %>%
+  select(iteration, Male = prop_male) %>%
+  mutate(Female = 1 - Male) %>%
+  pivot_longer(cols = c(Male, Female), names_to = "Sex", values_to = "Proportion") %>%
+  ggplot(aes(x = Proportion, y = iteration, fill = Sex)) +
+  geom_col(width = 0.75, position = "stack") +
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+  scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  theme_minimal(base_size = 11) +
+  theme(
+    axis.title.x = element_text(face = "bold", size = 10),
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank()
+  ) +
+  labs(x = "Sex Distribution")
+
+# Block C: Subsample Race Proportions Track
+plot_race <- demographics_summary %>%
+  select(iteration, White = prop_white) %>%
+  mutate(`Non-White` = 1 - White) %>%
+  pivot_longer(cols = c(White, `Non-White`), names_to = "Race", values_to = "Proportion") %>%
+  ggplot(aes(x = Proportion, y = iteration, fill = Race)) +
+  geom_col(width = 0.75, position = "stack") +
+  scale_fill_manual(values = c("White" = "#fec44f", "Non-White" = "#969696")) +
+  scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  theme_minimal(base_size = 11) +
+  theme(
+    axis.title.x = element_text(face = "bold", size = 10),
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank()
+  ) +
+  labs(x = "Race Distribution")
+
+# Combine top sub-plots side-by-side using patchwork weights
+top_panel <- plot_age + plot_sex + plot_race + plot_layout(widths = c(1, 2.5, 2.5))
+
+# ==============================================================================
+# 3. BUILD BOTTOM PANEL: ORIGINAL TOTAL COHORT BASELINE (N=100)
+# ==============================================================================
+original_demographics <- meta_df %>%
+  select(participant_id, age, sex, race) %>%
+  distinct()
+
+# Baseline A: Continuous Age Density Curve
+base_age <- ggplot(original_demographics, aes(x = age)) +
+  geom_density(fill = "#238b45", alpha = 0.4, color = "#00441b", linewidth = 0.8) +
+  geom_vline(xintercept = mean(original_demographics$age, na.rm = TRUE), 
+             color = "#00441b", linetype = "dashed", linewidth = 0.8) +
+  theme_minimal(base_size = 10) +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 9),
+    axis.title.x = element_text(face = "bold", size = 9)
+  ) +
+  labs(x = "Original Cohort Age Profile", y = "Density")
+
+# Baseline B: Total Cohort Sex Proportions Anchor Bar
+base_sex <- original_demographics %>%
+  count(sex) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ggplot(aes(x = Proportion, y = "Original\nCohort (n=100)", fill = sex)) +
+  geom_col(width = 0.6, position = "stack", show.legend = FALSE) +
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.title = element_blank(),
+    axis.text.y = element_text(face = "bold", color = "black"),
+    panel.grid = element_blank()
   )
 
-# ---- 2. Format Data Matrices for ComplexHeatmap ----
-
-# Matrix 1: The Core Matrix (Continuous values - Mean Age)
-mat_age <- demographics_summary %>%
-  select(iteration, mean_age) %>%
-  column_to_rownames("iteration") %>%
-  as.matrix()
-
-colnames(mat_age) <- "Mean Age"
-
-# Matrix 2: The Sideways Grouping Fractions (Stacked Proportions)
-annotation_df <- demographics_summary %>%
-  select(prop_male, prop_white) %>%
-  mutate(
-    prop_female    = 1 - prop_male,
-    prop_non_white = 1 - prop_white
+# Baseline C: Total Cohort Race Proportions Anchor Bar
+base_race <- original_demographics %>%
+  count(race) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ggplot(aes(x = Proportion, y = "Original\nCohort (n=100)", fill = race)) +
+  geom_col(width = 0.6, position = "stack", show.legend = FALSE) +
+  scale_fill_manual(values = c("White" = "#fec44f", "Non-White" = "#969696")) +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.title = element_blank(),
+    axis.text.y = element_blank(), 
+    panel.grid = element_blank()
   )
 
-# ---- 3. Custom Aesthetic Color Scales & Objects ----
+# Combine baseline anchors horizontally using matching grid widths
+bottom_panel <- base_age + base_sex + base_race + plot_layout(widths = c(1, 2.5, 2.5))
 
-# Custom continuous gradient color mapping function for age
-age_color_fun <- colorRamp2(
-  c(min(demographics_summary$mean_age), 
-    median(demographics_summary$mean_age), 
-    max(demographics_summary$mean_age)), 
-  c("#f7fcf0", "#bae4bc", "#084081")
-)
+# ==============================================================================
+# 4. STITCH COMPLETE GRAPHICAL CANVAS
+# ==============================================================================
+# Using '/' to stack the iteration grid above the total baseline metrics.
+# heights = c(4, 1) allocates 80% space for iterations and 20% for the baseline.
+final_canvas <- top_panel / bottom_panel + 
+  plot_layout(heights = c(4, 1), guides = "collect")
 
-# Instantiate the barplot tracks on the right side of the heatmap matrix rows
-row_anno <- rowAnnotation(
-  `Sex Distribution` = anno_barplot(
-    annotation_df[, c("prop_male", "prop_female")],
-    gp = gpar(fill = c("#3182bd", "#fa9fb5"), col = NA),
-    bar_width = 0.8
-  ),
-  `Race Distribution` = anno_barplot(
-    annotation_df[, c("prop_white", "prop_non_white")],
-    gp = gpar(fill = c("#fec44f", "#969696"), col = NA),
-    bar_width = 0.8
-  ),
-  annotation_name_side = "top",
-  annotation_name_gp = gpar(fontsize = 10, fontface = "bold")
-)
-
-# ---- 4. Plot Heatmap with Merged Component Legends ----
-
-# Generate independent structured descriptive legend boxes for the proportions
-lgd_sex  <- Legend(labels = c("Male", "Female"), title = "Sex", legend_gp = gpar(fill = c("#3182bd", "#fa9fb5")))
-lgd_race <- Legend(labels = c("White", "Non-White"), title = "Race", legend_gp = gpar(fill = c("#fec44f", "#969696")))
-
-ht <- Heatmap(
-  mat_age,
-  name = "Mean Age",
-  col = age_color_fun,
-  cluster_rows = FALSE,      # Keep sequential iterations (1 to 20) chronological
-  cluster_columns = FALSE,   # Prevent axis sorting on single column matrix
-  show_row_names = TRUE,
-  row_names_side = "left",
-  row_title = "Subsampling Iterations (n=5)",
-  row_title_gp = gpar(fontsize = 12, fontface = "bold"),
-  right_annotation = row_anno, # Inject the clinical distributions side by side
-  rect_gp = gpar(col = "white", lwd = 1) # Professional crisp border separation
-)
-
-# Render and draw canvas
-draw(ht, annotation_legend_list = list(lgd_sex, lgd_race), merge_legend = TRUE)
+print(final_canvas)
 
 ```
 
@@ -1452,7 +1505,7 @@ fluad_human_mouse_metadata %>%
   saveRDS(here("tables", "fluad_human_mouse_metadata.rds"))
 
 #Unite DEGs
-all_degs_human = readRDS(file = here("tables", "influenza_fluad_human_dge_limma_degs.rds")) 
+all_degs_human = readRDS(file = here("tables", "influenza_fluad_human_dge_subsampled_degs.rds")) 
 all_degs_mouse = readRDS(file = here("tables", "influenza_fluad_mouse_dge_limma_degs.rds")) 
 
 all_degs_human_mouse = all_degs_mouse %>% 
