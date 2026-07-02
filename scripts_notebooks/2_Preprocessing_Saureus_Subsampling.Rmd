@@ -1,0 +1,161 @@
+---
+title: "Preprocessing - S.aureus Subsampling"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(limma)
+library(here)
+library(janitor)
+library(Biobase)
+library(patchwork)
+
+# Ensure required scripts are loaded
+source(here("scripts_notebooks", "required.R"))
+```
+
+# Preprocessing - S.aureus Infection Subsampling
+
+## 1. Load and Pre-Filter ExpressionSet Data
+```{r}
+eset_human <- readRDS(file = here("tables", "saureus_infection_human_eset.rds"))
+
+# Baseline expression intensity filtering threshold
+genes_to_keep <- exprs(eset_human) %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), ~ . > 6)) %>% 
+  rowSums() %>% 
+  { . >= 5 }
+
+eset_filtered <- eset_human[genes_to_keep, ]
+meta_df <- as_tibble(pData(eset_filtered), rownames = "sample_id")
+expr_matrix <- exprs(eset_filtered)
+unique_participants <- meta_df %>% pull(participant_id) %>% unique()
+```
+
+## 2. Defensive Subsampling Function
+```{r}
+draw_flexible_subset <- function(participants_list, metadata, target_n = 5) {
+  valid_draw <- FALSE
+  attempts <- 0
+  
+  while(!valid_draw) {
+    attempts <- attempts + 1
+    if(attempts > 500) stop("Could not find a balanced subset.")
+    
+    # Randomly sample N individuals
+    selected_ids <- sample(participants_list, size = target_n, replace = FALSE)
+    
+    sub_meta <- metadata %>% 
+      filter(participant_id %in% selected_ids)
+    
+    # Ensure both pathogen classes are present if possible, or just proceed if only one
+    has_diversity <- (length(unique(sub_meta$pathogen)) > 1)
+    
+    if(has_diversity) {
+      valid_draw <- TRUE
+    }
+  }
+  return(sub_meta)
+}
+```
+
+## 3. Run Multi-Iteration Simulation Loop
+```{r}
+n_iterations <- 20 
+cohort_n <- 10      
+
+set.seed(123) 
+
+df_global_runs <- tibble(iteration = 1:n_iterations) %>%
+  mutate(
+    sampled_metadata = map(iteration, ~ draw_flexible_subset(unique_participants, meta_df, target_n = cohort_n)),
+    
+    limma_results = map(sampled_metadata, ~ {
+      sub_meta <- .x
+      sub_expr <- expr_matrix[, sub_meta$sample_id]
+      
+      # Design matrix WITHOUT sex, age, ethnicity. Including batch_experimental
+      design_sub <- model.matrix(~ pathogen + batch_experimental + 0, data = sub_meta)
+      colnames(design_sub) <- make.names(colnames(design_sub))
+      
+      # Fit Limma model
+      fit_sub <- lmFit(sub_expr, design = design_sub) 
+      
+      # Adjust contrasts for pathogen
+      # This needs to be checked based on actual pathogen levels
+      # Assuming condition levels based on meta_df structure
+      cont.matrix <- makeContrasts(pathogenStaphylococcus.aureus - pathogenControl, # Adjust as needed
+                                   levels = design_sub)
+      
+      fit2_sub <- contrasts.fit(fit_sub, cont.matrix)
+      fit2_sub <- eBayes(fit2_sub, robust = TRUE, trend = TRUE)
+      
+      res_list <- lapply(1:ncol(fit2_sub), function(i) {
+        df_res <- topTreat(fit2_sub, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE)
+        df_res$symbol <- rownames(df_res)
+        df_res$comparison <- colnames(fit2_sub)[i]
+        rownames(df_res) <- NULL
+        return(df_res)
+      })
+      
+      do.call(rbind, res_list)
+    })
+  )
+```
+
+## 4. Data Processing & Summary
+```{r}
+saureus_human_subsampled_degs <- df_global_runs %>%
+  select(iteration, limma_results) %>%
+  unnest(limma_results) %>%
+  clean_names() %>%
+  group_by(comparison, symbol) %>%
+  summarise(
+    p_value = median(p_value),
+    adj_p_val = median(adj_p_val),
+    mean = median(log_fc),
+    lower = median(ci_l),
+    upper = median(ci_r),
+    ave_expr = median(ave_expr),
+    pct_iterations_significant = mean(adj_p_val <= 0.05) * 100,
+    .groups = "drop"
+  ) %>%
+  mutate(organism = "Human")
+
+# Save
+saureus_human_subsampled_degs %>% saveRDS(file = here("tables", "saureus_infection_human_dge_subsampled_degs.rds"))
+
+# Summary report
+saureus_human_subsampled_degs %>% 
+  filter(adj_p_val <= 0.05) %>% 
+  summarise(n_robust_degs = n()) %>% 
+  print()
+```
+
+## 5. Demographics Analysis
+```{r}
+demographics_summary <- df_global_runs %>%
+  select(iteration, sampled_metadata) %>%
+  unnest(sampled_metadata) %>%
+  select(iteration, participant_id, age, sex, race) %>%
+  distinct() %>%
+  group_by(iteration) %>%
+  summarise(
+    mean_age   = mean(as.numeric(age), na.rm = TRUE), 
+    prop_male  = mean(sex == "male", na.rm = TRUE),
+    prop_white = mean(race == "white", na.rm = TRUE),
+    .groups    = "drop"
+  ) %>%
+  mutate(iteration = factor(iteration, levels = 1:max(iteration)))
+
+# Plots
+plot_age <- ggplot(demographics_summary, aes(x = "Mean Age", y = iteration, fill = mean_age)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  scale_fill_viridis_c(option = "mako", name = "Mean Age\n(Years)") +
+  theme_minimal(base_size = 11) +
+  labs(y = "Subsampling Iterations (n=10)")
+
+print(plot_age)
+```
