@@ -18,23 +18,7 @@ cran_packages = c(
   "ggfx", "devtools", "readxl", "rstatix", "matrixTests"
 )
 
-
-
-# install.packages(c(
-#   "tidyverse", "rentrez", "yardstick", 
-#   # "ggridges", 
-#   "here", "glue", "ggsci", 
-#   "janitor", "readr", 
-#   # "paletteer", 
-#   # "beepr", 
-#   # "preprocessCore", 
-#   "maditr", 
-#   "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
-#   "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
-#   "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp", "corto", "Hmisc",
-#   "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath",
-#   "ggfx", "devtools", "readxl", "rstatix", "matrixTests"
-# ))
+install.packages(cran_packages)
 
 
 # renv::remove("ape")
@@ -67,19 +51,11 @@ bioc_pkgs = c(
 )
 
 # install.packages("BiocManager")
-# BiocManager::install(c(
-#   "pvca", "seqinr",
-#   "biomaRt", "GEOquery", "circlize", "celldex", 
-#   "org.Hs.eg.db", "DESeq2", "msigdbr", 
-#   "ape", "variancePartition", 
-#   "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
-#   "mogene10sttranscriptcluster.db", "fgsea"
-#   # "arrayQualityMetrics"
-# ))
+BiocManager::install(bioc_pkgs)
 
 # install_github("RRHO2/RRHO2", build_opts = c("--no-resave-data", "--no-manual"))
 # library(RRHO2)
-# devtools::install_github("YuLab-SMU/ggmsa")
+devtools::install_github("YuLab-SMU/ggmsa")
 library(ggmsa)
 
 # install_github()
