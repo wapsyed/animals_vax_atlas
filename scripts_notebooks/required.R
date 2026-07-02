@@ -1,71 +1,57 @@
 #Required
 ##Packages --------
-# CRAN
 
-cran_packages = c(
-  "tidyverse", "rentrez", "yardstick",  "shadowtext",
-  # "ggridges", 
-  "here", "glue", "ggsci", "NGLVieweR",
-  "janitor", "readr", 
-  # "paletteer", 
-  # "beepr", 
-  # "preprocessCore", 
-  "maditr", "ggmsa", "ggdist", "ggridges", "see",
-  "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", "beepr",
-  "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", "readxl", "gt", 
-  "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", "ggpp", "corto", "Hmisc",
-  "patchwork", "tidymodels", "TidyDensity", "forcats", "GGally","ggbeeswarm", "geomtextpath",
-  "ggfx", "devtools", "readxl", "rstatix", "matrixTests"
+# 1. Setup: Ensure pacman is available
+# if (!require("pacman")) install.packages("pacman")
+
+# 2. Define your package collections
+cran_pkgs <- c(
+  "tidyverse", "rentrez", "yardstick", "shadowtext", "here", "glue", "ggsci", 
+  "NGLVieweR", "janitor", "readr", "maditr", "ggmsa", "ggdist", "ggridges", 
+  "see", "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", 
+  "beepr", "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", 
+  "readxl", "gt", "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", 
+  "ggpp", "corto", "Hmisc", "patchwork", "tidymodels", "TidyDensity", "forcats", 
+  "GGally", "ggbeeswarm", "geomtextpath", "ggfx", "rstatix", "matrixTests",
+  "pkgconfig"
 )
 
-install.packages(cran_packages)
-
-
-# renv::remove("ape")
-# renv::install("ape")
-
-
-# Install packages from Bioconductor
-
-bioc_pkgs = c(
-  "pvca", "msa", "Biostrings",
-  "biomaRt", "GEOquery", "circlize", "celldex", 
-  "org.Hs.eg.db", "DESeq2", "msigdbr", 
-  "org.Mm.eg.db",
-  "ape", "variancePartition",  "ChIPseeker", "IRanges",
-  "AnnotationHub",
-  "GenomeInfoDb",
-  "GenomicRanges",
-  "pwalign",
-  "IRanges",
-  "Biostrings",
-  "BSgenome.Hsapiens.UCSC.hg38",
-  "BSgenome.Mmusculus.UCSC.mm10",
-  "TxDb.Hsapiens.UCSC.hg38.knownGene",
-  "TxDb.Mmusculus.UCSC.mm10.knownGene",
-  
-  "rtracklayer",
-  "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", "limma", 
-  "mogene10sttranscriptcluster.db", "fgsea"
-  # "arrayQualityMetrics"
+bioc_pkgs <- c(
+  "pvca", "msa", "Biostrings", "biomaRt", "GEOquery", "circlize", "celldex", 
+  "org.Hs.eg.db", "DESeq2", "msigdbr", "org.Mm.eg.db", "ape", "variancePartition", 
+  "IRanges", "AnnotationHub", "GenomeInfoDb", "GenomicRanges", "pwalign", 
+  "rtracklayer", "GSVA", "sva", "clusterProfiler", "ComplexHeatmap", "edgeR", 
+  "limma", "fgsea"
 )
 
-# install.packages("BiocManager")
-BiocManager::install(bioc_pkgs)
+github_pkgs <- c("RRHO2/RRHO2", "YuLab-SMU/ggmsa")
 
-# install_github("RRHO2/RRHO2", build_opts = c("--no-resave-data", "--no-manual"))
-# library(RRHO2)
-devtools::install_github("YuLab-SMU/ggmsa")
-library(ggmsa)
+# 3. Safe, Non-Destructive Loading Pipeline
+# Combining lists to load sequentially via base R
+all_packages <- c(cran_pkgs, bioc_pkgs)
 
-# install_github()
+for (pkg in all_packages) {
+  if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+    stop(paste0(
+      "\n[ERRO] O pacote '", pkg, "' nao esta instalado no ambiente renv.\n",
+      "Por favor, execute no console: renv::install('", pkg, "')\n",
+      "Depois disso, reinicie a sessao e rode o script novamente."
+    ))
+  }
+}
 
-#Load all faster
-lapply(c(cran_packages, bioc_pkgs, "RRHO2", "ggmsa"), library, character.only = TRUE)
 
+######### RENV
+# # Synchronize your physical project directories with your lockfile
+# renv::restore()
 
+# Validate that your sandbox library is fully healthy and synchronized
+# renv::status()
 
-##Aesthetics -----
+# Capture this clean, functional state to lock it down permanently
+# renv::snapshot()
+
+# Aesthetics -----
 #Custom theme
 theme_vaxgo = function(){
   theme_minimal() +

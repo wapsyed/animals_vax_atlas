@@ -865,7 +865,7 @@ genes_to_keep <- exprs(eset_human) %>%
 eset_filtered <- eset_human[genes_to_keep, ]
 meta_df <- as_tibble(pData(eset_filtered), rownames = "sample_id")
 expr_matrix <- exprs(eset_filtered)
-unique_participants <- meta_df %>% pull(participant_id) %>% unique()
+unique_participants <- meta_df %>% dplyr::pull(participant_id) %>% unique()
 
 # ---- 2. Defensive Subsampling Function Supporting Missing Data ----
 draw_flexible_subset <- function(participants_list, metadata, target_n = 5) {
@@ -926,54 +926,136 @@ corfit_sub <- duplicateCorrelation(sub_expr, design = design_sub, block = sub_me
 cat("Consensus intra-individual correlation for this specific round:", corfit_sub$consensus, "\n")
 
 # Compute empirical sample precision weights
-aw_sub <- arrayWeights(sub_expr, design
+aw_sub <- arrayWeights(sub_expr, design_sub)
+
+# Fit Linear Mixed Model applying sample weights and individual block structures
+fit_sub <- lmFit(sub_expr, 
+                 design = design_sub, 
+                 weights = aw_sub,
+                 block = sub_meta$participant_id, 
+                 correlation = corfit_sub$consensus)
+
+# Apply your standardized comparison contrast matrix
+cont.matrix <- makeContrasts(conditionFLUADD.Day.1 - conditionFLUADD.Day.0,
+                             conditionFLUADD.Day.3 - conditionFLUADD.Day.0,
+                             conditionFLUADD.Day.7 - conditionFLUADD.Day.0,
+                             levels = design_sub)
+
+fit2_sub <- contrasts.fit(fit_sub, cont.matrix)
+fit2_sub <- eBayes(fit2_sub, robust = TRUE, trend = TRUE)
+
+# ---- 6. Extract and Format Resulting Output ----
+results_list <- lapply(1:ncol(fit2_sub), function(i) {
+  # Extract raw data-frame directly without upfront tibble parsing
+  df_res <- topTreat(fit2_sub, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE)
+  
+  # Inject identification tracking attributes cleanly
+  df_res$symbol <- rownames(df_res)
+  df_res$comparison <- colnames(fit2_sub)[i]
+  
+  # Remove row names to keep structural compilation stable
+  rownames(df_res) <- NULL
+  return(df_res)
+})
+
+single_iteration_output <- do.call(rbind, results_list) %>% 
+  as_tibble() %>% 
+  clean_names()
+
+print(head(single_iteration_output))
 ```
 
 
 ```{r Subsampling loop}
-set.seed(123) # Lock seed for reproducible cross-species random draws
+library(tidyverse)
+library(limma)
+library(here)
+library(janitor)
 
-# Generate the Global Tidyverse Iterations DataFrame
-df_iterations <- tibble(iteration = 1:n_iterations) %>%
-  mutate(
-    # Step A: Draw N human individuals (keeping all their sequential timepoints grouped together)
-    sampled_metadata = map(iteration, ~ {
-      tibble(participant_id = unique_participants) %>%
-        slice_sample(n = mouse_n, replace = FALSE) %>% # Downsampling without replacement
-        inner_join(meta_df, by = "participant_id")     # Retrieve all sample timepoints for selected individuals
-    }),
+# ---- 1. Load and Pre-Filter ExpressionSet Data ----
+eset_human <- readRDS(file = here("tables", "fluad_eset_human.rds"))
+
+# Baseline expression intensity filtering threshold from your script
+genes_to_keep <- exprs(eset_human) %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), ~ . > 6)) %>% 
+  rowSums() %>% 
+  { . >= 5 }
+
+eset_filtered <- eset_human[genes_to_keep, ]
+meta_df <- as_tibble(pData(eset_filtered), rownames = "sample_id")
+expr_matrix <- exprs(eset_filtered)
+unique_participants <- meta_df %>% pull(participant_id) %>% unique()
+
+# ---- 2. Defensive Longitudinal Subsampling Function ----
+draw_flexible_subset <- function(participants_list, metadata, target_n = 5) {
+  valid_draw <- FALSE
+  attempts <- 0
+  
+  while(!valid_draw) {
+    attempts <- attempts + 1
+    if(attempts > 2000) stop("Could not find a mathematically stable sub-cohort. Check metadata variance.")
     
-    # Step B: Run your exact Limma pipeline encapsulated per iteration
+    # Randomly sample N individuals (keeping longitudinal profiles grouped)
+    selected_ids <- sample(participants_list, size = target_n, replace = FALSE)
+    
+    sub_meta <- metadata %>% 
+      filter(participant_id %in% selected_ids) %>%
+      mutate(condition = as.factor(condition))
+    
+    # Rule Check: Ensure ALL 4 sequential vaccine timepoints are present in the draw
+    has_all_timepoints <- (length(unique(sub_meta$condition)) == 4)
+    
+    if(has_all_timepoints) {
+      # Build lean design matrix using only condition and the age continuous vector
+      test_design <- model.matrix(~ condition + age + 0, data = sub_meta)
+      colnames(test_design) <- make.names(colnames(test_design))
+      
+      # Validate full-rank math via limma's official public function
+      bad_coefs <- limma::nonEstimable(test_design)
+      
+      if(is.null(bad_coefs)) {
+        valid_draw <- TRUE
+      }
+    }
+  }
+  return(sub_meta)
+}
+
+# ---- 3. Run Multi-Iteration Simulation Loop ----
+n_iterations <- 100 
+mouse_n <- 5       
+
+set.seed(123) # Lock global seed for absolute drawing reproducibility
+
+cat("Starting multi-iteration downsampling loop optimized for the 'age' covariate...\n")
+
+df_global_runs <- tibble(iteration = 1:n_iterations) %>%
+  mutate(
+    # Step A: Perform structural full-rank longitudinal sampling
+    sampled_metadata = map(iteration, ~ draw_flexible_subset(unique_participants, meta_df, target_n = mouse_n)),
+    
+    # Step B: Run optimized memory-safe Limma modeling matrix rows
     limma_results = map(sampled_metadata, ~ {
       sub_meta <- .x
       sub_expr <- expr_matrix[, sub_meta$sample_id]
       
-      # Enforce factor constraints and recreate your exact model design matrix
-      sub_meta <- sub_meta %>%
-        mutate(condition = as.factor(condition),
-               sex = as.factor(sex),
-               race = as.factor(race))
-      
-      # Recompute batch-restricted matrix design
-      design_sub <- model.matrix(~ condition + sex + age + race + 0, data = sub_meta)
+      # Lean design matrix formula
+      design_sub <- model.matrix(~ condition + age + 0, data = sub_meta)
       colnames(design_sub) <- make.names(colnames(design_sub))
       
-      # Recalculate intra-individual correlation for this unique individual block subset
-      corfit_sub <- duplicateCorrelation(sub_expr, 
-                                         design = design_sub, 
-                                         block = sub_meta$participant_id)
-      
-      # Recalculate precision sample weights dynamically
+      # Compute iteration-specific correlation structures and sample weights
+      corfit_sub <- duplicateCorrelation(sub_expr, design = design_sub, block = sub_meta$participant_id)
       aw_sub <- arrayWeights(sub_expr, design_sub)
       
-      # Fit Linear Model applying iteration-specific weights and blocking consensus
+      # Fit linear mixed model
       fit_sub <- lmFit(sub_expr, 
-                        design = design_sub, 
-                        weights = aw_sub,
-                        block = sub_meta$participant_id, 
-                        correlation = corfit_sub$consensus)
+                       design = design_sub, 
+                       weights = aw_sub,
+                       block = sub_meta$participant_id, 
+                       correlation = corfit_sub$consensus)
       
-      # Apply your baseline contrast matrix structure
+      # Reapply your original contrast comparisons vector
       cont.matrix <- makeContrasts(conditionFLUADD.Day.1 - conditionFLUADD.Day.0,
                                    conditionFLUADD.Day.3 - conditionFLUADD.Day.0,
                                    conditionFLUADD.Day.7 - conditionFLUADD.Day.0,
@@ -982,59 +1064,61 @@ df_iterations <- tibble(iteration = 1:n_iterations) %>%
       fit2_sub <- contrasts.fit(fit_sub, cont.matrix)
       fit2_sub <- eBayes(fit2_sub, robust = TRUE, trend = TRUE)
       
-      # Extract multi-contrast outputs and merge into a clean long tibble
+      # Streamlined raw matrix mapping without dynamic tibble overhead
       res_list <- lapply(1:ncol(fit2_sub), function(i) {
-        topTreat(fit2_sub, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
-          mutate(comparison = colnames(fit2_sub)[i]) %>% 
-          rownames_to_column("symbol")
+        df_res <- topTreat(fit2_sub, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE)
+        df_res$symbol <- rownames(df_res)
+        df_res$comparison <- colnames(fit2_sub)[i]
+        rownames(df_res) <- NULL
+        return(df_res)
       })
       
-      bind_rows(res_list)
+      do.call(rbind, res_list)
     })
   )
 
-# ---- 3. Meta-Consolidation & Summary via Protective Medians ----
-fluad_human_subsampled_degs <- df_iterations %>%
+cat("All processing rounds completed successfully. Commencing tensor synthesis...\n")
+
+# ---- 4. Data Processing & Summary via Protective Medians ----
+fluad_human_subsampled_degs <- df_global_runs %>%
   select(iteration, limma_results) %>%
   unnest(limma_results) %>%
+  clean_names() %>%
   group_by(comparison, symbol) %>%
   summarise(
-    # Extract median statistics to isolate sampling noise and random outliers
-    median_p_val = median(P.Value),
-    median_adj_p_val = median(adj.P.Val),
-    median_log_fc = median(logFC),
-    median_ci_l = median(CI.L),
-    median_ci_r = median(CI.R),
-    median_ave_expr = median(AveExpr),
-    # Critical robustness metric: tracking convergence rate across iterations
-    pct_iterations_significant = mean(adj.P.Val <= 0.05) * 100,
+    # Pull defensive median vectors to filter individual background variations
+    p_value = median(p_value),
+    adj_p_val = median(adj_p_val),
+    mean = median(log_fc),
+    lower = median(ci_l),
+    upper = median(ci_r),
+    ave_expr = median(ave_expr),
+    # Reviewer Defense Metric: Empirical probability of a gene converging as active
+    pct_iterations_significant = mean(adj_p_val <= 0.05) * 100,
     .groups = "drop"
   ) %>%
-  # Execute your string formatting routine to normalize experimental names
-  mutate(comparison = str_replace_all(comparison, "\\.", " "),
-         comparison = str_replace_all(comparison, "condition", "")) %>% 
+  # Apply your original character transformations to normalize text outputs
+  mutate(comparison = stringr::str_replace_all(comparison, "\\.", " "),
+         comparison = stringr::str_replace_all(comparison, "condition", "")) %>% 
   separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef")) %>% 
   select(condition = comparisonA, everything(), -comparisonRef) %>% 
-  clean_names() %>%
-  # Standardize variable schemas for direct downstream script compatibility
-  select(condition, symbol, mean = median_log_fc, lower = median_ci_l, upper = median_ci_r, 
-         ave_expr = median_ave_expr, p_val = median_p_val, adj_p_val = median_adj_p_val, 
-         pct_iterations_significant) %>%
-  # Recover unique metadata feature vectors
+  # Join fixed baseline target mapping categories from original metadata frame
   inner_join(meta_df %>% 
                select(condition, timepoint, vaccine, sample_type) %>% 
                distinct(), by = "condition") %>% 
-  mutate(organism = "Human")
+  mutate(organism = "Human") %>%
+  select(condition, symbol, mean, lower, upper, ave_expr, p_val = p_value, adj_p_val, 
+         pct_iterations_significant, timepoint, vaccine, sample_type, organism)
 
-# ---- 4. Save Final Subsampled Dataset ----
-fluad_human_subsampled_degs %>% 
-  saveRDS(file = here("tables", "influenza_fluad_human_dge_subsampled_degs.rds"))
+# ---- 5. Save Aggregated Output Matrix File ----
+# fluad_human_subsampled_degs %>% saveRDS(file = here("tables", "influenza_fluad_human_dge_subsampled_degs.rds"))
 
-# ---- 5. Validation Check: Robust DEG Counts ----
+# ---- 6. Print Summary Metric Reports ----
 fluad_human_subsampled_degs %>% 
   group_by(condition) %>%
   filter(adj_p_val <= 0.05) %>% 
-  summarise(n_degs = n())
+  summarise(n_robust_degs = n()) %>% 
+  print()
 
 ```
 
