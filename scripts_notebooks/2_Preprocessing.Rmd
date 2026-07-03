@@ -708,7 +708,7 @@ eset_human_mouse %>% saveRDS(file = here("tables", "influenza_fluad_human_mouse_
 #Import
 eset_human_mouse = readRDS(file = here("tables", "influenza_fluad_human_mouse_eset.rds"))
 human_mouse_fluad_matrix = eset_human_mouse %>% exprs()
-human_mouse_fluad_metadata = readRDS(file = here("tables", "influenza_fluad_human_mouse_metadata.rds.png"))
+human_mouse_fluad_metadata = readRDS(file = here("tables", "influenza_fluad_human_mouse_metadata.rds"))
 
 human_mouse_fluad_matrix_human = human_mouse_fluad_matrix %>% 
   as.data.frame() %>% 
@@ -856,6 +856,8 @@ library(janitor)
 
 # ---- 1. Load Filtered Input Data ----
 eset_human <- readRDS(file = here("tables", "fluad_eset_human.rds"))
+human_mouse_fluad_metadata = readRDS(file = here("tables", "influenza_fluad_human_mouse_metadata.rds"))
+
 
 # Baseline expression filtering threshold from your original script
 genes_to_keep <- exprs(eset_human) %>% 
@@ -1125,48 +1127,56 @@ fluad_human_subsampled_degs %>%
 ```
 
 Demographics
-```{r}
-
+```{r fig.height=5, fig.width=6}
 library(tibble)
-library(tidyverse)
-library(tidyverse)
-library(patchwork)
 library(tidyverse)
 library(patchwork)
 
 # ==============================================================================
 # 1. PROCESS SIMULATION ITERATIONS DATA (RAW METRICS)
 # ==============================================================================
+# Calculate mean age and male proportions per loop iteration
 demographics_summary <- df_global_runs %>%
   select(iteration, sampled_metadata) %>%
   unnest(sampled_metadata) %>%
-  select(iteration, participant_id, age, sex, race) %>%
+  select(iteration, participant_id, age, sex) %>%
   distinct() %>%
   group_by(iteration) %>%
   summarise(
-    # Keeping raw untransformed values for accurate age reflection
     mean_age   = mean(age, na.rm = TRUE), 
-    prop_male  = mean(sex == "Male", na.rm = TRUE),
-    prop_white = mean(race == "White", na.rm = TRUE),
+    prop_male  = mean(sex == "male", na.rm = TRUE),
     .groups    = "drop"
   ) %>%
   mutate(iteration = factor(iteration, levels = 1:max(iteration)))
+
+# Separate long format extraction for categorical multi-group race tracks
+subsample_race_distribution <- df_global_runs %>%
+  select(iteration, sampled_metadata) %>%
+  unnest(sampled_metadata) %>%
+  select(iteration, participant_id, race) %>%
+  distinct() %>%
+  dplyr::count(iteration, race) %>%
+  group_by(iteration) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ungroup() %>%
+  mutate(iteration = factor(iteration, levels = 1:max(as.numeric(iteration)))) 
 
 # ==============================================================================
 # 2. BUILD TOP PANEL: SUBSAMPLING RUNS (n=5 PER ITERATION)
 # ==============================================================================
 
-# Block A: Raw Mean Age Matrix Tiles
-plot_age <- ggplot(demographics_summary, aes(x = "Mean Age", y = iteration, fill = mean_age)) +
-  geom_tile(color = "white", linewidth = 0.6) +
-  # Using a standard continuous scale to represent raw years natively
-  scale_fill_viridis_c(option = "mako", name = "Mean Age\n(Years)") +
-  scale_x_discrete(position = "top") +
-  theme_minimal(base_size = 11) +
+# Block A: Raw Mean Age Matrix Tiles with Text Labels
+plot_age <- ggplot(demographics_summary, aes(x = "Mean Age", y = iteration)) +
+  geom_tile(aes(fill = mean_age), color = "white", linewidth = 0.6) +
+  geom_text(aes(label = sprintf("%.1f", mean_age)), 
+            color = "white", fontface = "bold", size = 3.5) +
+  scale_fill_viridis_c(option = "mako", name = "Mean Age\n(Years)", direction = -1) +
+  scale_x_discrete(position = "top", expand = c(0.01, 0.01)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
   theme(
     axis.title.x = element_blank(),
     axis.title.y = element_text(face = "bold"),
-    axis.text.x  = element_text(face = "bold", size = 10),
     panel.grid   = element_blank(),
     legend.position = "left"
   ) +
@@ -1181,9 +1191,9 @@ plot_sex <- demographics_summary %>%
   geom_col(width = 0.75, position = "stack") +
   scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
   scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
-  theme_minimal(base_size = 11) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
   theme(
-    axis.title.x = element_text(face = "bold", size = 10),
     axis.title.y = element_blank(),
     axis.text.y  = element_blank(),
     panel.grid.minor = element_blank(),
@@ -1191,18 +1201,17 @@ plot_sex <- demographics_summary %>%
   ) +
   labs(x = "Sex Distribution")
 
-# Block C: Subsample Race Proportions Track
-plot_race <- demographics_summary %>%
-  select(iteration, White = prop_white) %>%
-  mutate(`Non-White` = 1 - White) %>%
-  pivot_longer(cols = c(White, `Non-White`), names_to = "Race", values_to = "Proportion") %>%
-  ggplot(aes(x = Proportion, y = iteration, fill = Race)) +
+# Block C: Subsample Race Proportions Track (Multi-Categorical Custom Map)
+plot_race <- subsample_race_distribution %>% 
+  mutate(race = str_replace(race, "black or african american", "black"),
+         race = str_to_title(race)) %>% 
+  ggplot(aes(x = Proportion, y = iteration, fill = race)) +
   geom_col(width = 0.75, position = "stack") +
-  scale_fill_manual(values = c("White" = "#fec44f", "Non-White" = "#969696")) +
+  scale_fill_manual(name = "Race", values = colors$race) +
   scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
-  theme_minimal(base_size = 11) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
   theme(
-    axis.title.x = element_text(face = "bold", size = 10),
     axis.title.y = element_blank(),
     axis.text.y  = element_blank(),
     panel.grid.minor = element_blank(),
@@ -1210,67 +1219,83 @@ plot_race <- demographics_summary %>%
   ) +
   labs(x = "Race Distribution")
 
-# Combine top sub-plots side-by-side using patchwork weights
-top_panel <- plot_age + plot_sex + plot_race + plot_layout(widths = c(1, 2.5, 2.5))
+# Combine top sub-plots side-by-side using unified aspect weights
+top_panel <- plot_age + plot_sex + plot_race + plot_layout(widths = c(1, 1, 1))
 
 # ==============================================================================
 # 3. BUILD BOTTOM PANEL: ORIGINAL TOTAL COHORT BASELINE (N=100)
 # ==============================================================================
-original_demographics <- meta_df %>%
+original_demographics <- human_mouse_fluad_metadata %>%
+  filter(organism == "Human") %>% 
+  mutate(age = str_remove(age, "y") %>% as.numeric()) %>% 
   select(participant_id, age, sex, race) %>%
   distinct()
 
 # Baseline A: Continuous Raw Age Density Curve
 base_age <- ggplot(original_demographics, aes(x = age)) +
-  geom_density(fill = "#238b45", alpha = 0.4, color = "#00441b", linewidth = 0.8) +
+  geom_density(fill = "#3182bd", alpha = 0.4, color = "black", linewidth = 0.8) +
   geom_vline(xintercept = mean(original_demographics$age, na.rm = TRUE), 
-             color = "#00441b", linetype = "dashed", linewidth = 0.8) +
-  theme_minimal(base_size = 10) +
+             color = "black", linetype = "dashed", linewidth = 0.8) +
+  facet_wrap(~"Age") +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_vaxgo() +
   theme(
     panel.grid.minor = element_blank(),
     axis.title.y = element_text(face = "bold", size = 9),
     axis.title.x = element_text(face = "bold", size = 9)
   ) +
-  labs(x = "Original Cohort Age Profile (Years)", y = "Density")
+  labs(x = "Age (Years)", y = "Density")
 
 # Baseline B: Total Cohort Sex Proportions Anchor Bar
 base_sex <- original_demographics %>%
-  count(sex) %>%
+  dplyr::count(sex) %>%
   mutate(Proportion = n / sum(n)) %>%
   ggplot(aes(x = Proportion, y = "Original\nCohort (n=100)", fill = sex)) +
+  facet_wrap(~"Original\nCohort") +
   geom_col(width = 0.6, position = "stack", show.legend = FALSE) +
   scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
   scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
-  theme_minimal(base_size = 10) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme_vaxgo() +
   theme(
     axis.title = element_blank(),
-    axis.text.y = element_text(face = "bold", color = "black"),
-    panel.grid = element_blank()
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid = element_blank(),
+    axis.ticks.y = element_blank()
   )
 
 # Baseline C: Total Cohort Race Proportions Anchor Bar
 base_race <- original_demographics %>%
-  count(race) %>%
+  mutate(race = str_replace(race, "black or african american", "black"),
+         race = str_to_title(race)) %>% 
+  dplyr::count(race) %>%
   mutate(Proportion = n / sum(n)) %>%
   ggplot(aes(x = Proportion, y = "Original\nCohort (n=100)", fill = race)) +
-  geom_col(width = 0.6, position = "stack", show.legend = FALSE) +
-  scale_fill_manual(values = c("White" = "#fec44f", "Non-White" = "#969696")) +
+  facet_wrap(~"Race") +
+  geom_col(width = 0.6, position = "stack", show.legend = TRUE) +
+  scale_fill_manual(name = "Race", values = colors$race) +
   scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
-  theme_minimal(base_size = 10) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme_vaxgo() +
   theme(
     axis.title = element_blank(),
     axis.text.y = element_blank(), 
-    panel.grid = element_blank()
+    panel.grid = element_blank(),
+    axis.title.y = element_blank(),
+    axis.ticks.y = element_blank()
   )
 
-# Combine baseline anchors horizontally using matching grid widths
-bottom_panel <- base_age + base_sex + base_race + plot_layout(widths = c(1, 2.5, 2.5))
+# Combine baseline anchors horizontally matching top panel geometric widths
+bottom_panel <- base_age + base_sex + base_race + plot_layout(widths = c(1, 1, 1))
 
 # ==============================================================================
 # 4. STITCH COMPLETE GRAPHICAL CANVAS
 # ==============================================================================
 final_canvas <- top_panel / bottom_panel + 
-  plot_layout(heights = c(4, 1), guides = "collect")
+  plot_layout(heights = c(4, 1), guides = "collect") +
+  plot_annotation(title = "Fluad, Human")
 
 print(final_canvas)
 
@@ -2256,7 +2281,8 @@ all_degs_human %>% saveRDS(file = here("tables", "hepatitisb_engerixb_human_dge_
 
 ```{r Subsampling loop}
 ## 1. Load and Pre-Filter ExpressionSet Data
-eset_human <- readRDS(file = here("tables", "hepatitisb_engerixb_human_eset.rds"))
+human_metadata_filtered = readRDS(file = here("tables", "hepatitisb_engerixb_human_metadata.rds"))
+eset_human = readRDS(file = here("tables", "hepatitisb_engerixb_human_eset.rds"))
 
 # Baseline expression intensity filtering threshold
 genes_to_keep <- exprs(eset_human) %>% 
@@ -2371,6 +2397,201 @@ engerixb_human_subsampled_degs %>%
   summarise(n_robust_degs = n()) %>% 
   print()
 ```
+
+Demographics
+```{r fig.height=5, fig.width=6}
+library(tidyverse)
+library(patchwork)
+
+# ==============================================================================
+# 1. PROCESS SIMULATION ITERATIONS DATA (RAW METRICS)
+# ==============================================================================
+# Calculate mean age and male proportions per loop iteration
+demographics_summary <- df_global_runs %>%
+  select(iteration, sampled_metadata) %>%
+  unnest(sampled_metadata) %>%
+  select(iteration, participant_id, age, sex) %>%
+  distinct() %>%
+  group_by(iteration) %>%
+  summarise(
+    mean_age   = mean(age, na.rm = TRUE), 
+    prop_male  = mean(sex == "male", na.rm = TRUE),
+    .groups    = "drop"
+  ) %>%
+  mutate(iteration = factor(iteration, levels = 1:max(iteration)))
+
+# Separate long format extraction for categorical group distributions
+subsample_race_distribution <- df_global_runs %>%
+  select(iteration, sampled_metadata) %>%
+  unnest(sampled_metadata) %>%
+  select(iteration, participant_id, race) %>%
+  distinct() %>%
+  dplyr::count(iteration, race) %>%
+  group_by(iteration) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ungroup() %>%
+  mutate(iteration = factor(iteration, levels = 1:max(as.numeric(iteration)))) 
+
+# ==============================================================================
+# 2. BUILD TOP PANEL: SUBSAMPLING RUNS (n=5 PER ITERATION)
+# ==============================================================================
+
+# Block A: Raw Mean Age Matrix Tiles with Explicit Number Rendering
+plot_age <- ggplot(demographics_summary, aes(x = "Mean Age", y = iteration)) +
+  geom_tile(aes(fill = mean_age), color = "white", linewidth = 0.6) +
+  geom_text(aes(label = sprintf("%.1f", mean_age)), 
+            color = "white", fontface = "bold", size = 3.5) +
+  scale_fill_viridis_c(option = "mako", name = "Mean Age\n(Years)", direction = -1) +
+  scale_x_discrete(position = "top", expand = c(0.01, 0.01)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold"),
+    panel.grid   = element_blank(),
+    legend.position = "left"
+  ) +
+  labs(y = "Subsampling Iterations (n=5)")
+
+# Block B: Subsample Sex Proportions Track
+plot_sex <- demographics_summary %>%
+  select(iteration, Male = prop_male) %>%
+  mutate(Female = 1 - Male) %>%
+  pivot_longer(cols = c(Male, Female), names_to = "Sex", values_to = "Proportion") %>%
+  ggplot(aes(x = Proportion, y = iteration, fill = Sex)) +
+  geom_col(width = 0.75, position = "stack") +
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+  scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank()
+  ) +
+  labs(x = "Sex Distribution")
+
+# Block C: Subsample Race Proportions Track (Multi-Categorical Configuration)
+plot_race <- subsample_race_distribution %>% 
+  mutate(race = str_replace(race, "black or african american", "black"),
+         race = str_to_title(race)) %>% 
+  ggplot(aes(x = Proportion, y = iteration, fill = race)) +
+  geom_col(width = 0.75, position = "stack") +
+  scale_fill_manual(
+    name = "Race",
+    values = colors$race) +
+  scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank()
+  ) +
+  labs(x = "Race Distribution")
+
+# Combine top sub-plots side-by-side using patchwork weights
+top_panel <- plot_age + plot_sex + plot_race + plot_layout(widths = c(1, 1, 1))
+
+# ==============================================================================
+# 3. BUILD BOTTOM PANEL: ORIGINAL TOTAL COHORT BASELINE (N=100)
+# ==============================================================================
+original_demographics <- human_metadata_filtered %>%
+  mutate(age = str_remove(age, "y") %>% as.numeric()) %>% 
+  select(participant_id, age, sex, race) %>%
+  distinct()
+
+# Baseline A: Continuous Raw Age Density Curve
+base_age <- ggplot(original_demographics, aes(x = age)) +
+  geom_density(fill = "#3182bd", alpha = 0.4, color = "black", linewidth = 0.8) +
+  geom_vline(xintercept = mean(original_demographics$age, na.rm = TRUE), 
+             color = "black", linetype = "dashed", linewidth = 0.8) +
+  facet_wrap(~"Age") +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_vaxgo() +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 9),
+    axis.title.x = element_text(face = "bold", size = 9)
+  ) +
+  labs(x = "Age (Years)", y = "Density")
+
+# Baseline B: Total Cohort Sex Proportions Anchor Bar
+base_sex <- original_demographics %>%
+  dplyr::count(sex) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ggplot(aes(x = Proportion, y = "Original\nCohort (n=100)", fill = sex)) +
+  facet_wrap(~"Original\nCohort") +
+  geom_col(width = 0.6, position = "stack", show.legend = FALSE) +
+  scale_fill_manual(values = c("male" = "#3182bd", "female" = "#fa9fb5")) +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme_vaxgo() +
+  theme(
+    axis.title = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+# Baseline C: Total Cohort Race Proportions Anchor Bar (Multi-Categorical Configuration)
+base_race <- original_demographics %>%
+  mutate(race = str_replace(race, "black or african american", "black"),
+         race = str_to_title(race)) %>% 
+  dplyr::count(race) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ggplot(aes(x = Proportion, y = "Original\nCohort (n=100)", fill = race)) +
+  facet_wrap(~"Race") +
+  geom_col(width = 0.6, position = "stack", show.legend = TRUE) +
+  scale_fill_manual(
+    name = "Race",
+    values = colors$race
+  ) +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme_vaxgo() +
+  theme(
+    axis.title = element_blank(),
+    axis.text.y = element_blank(), 
+    panel.grid = element_blank(),
+    axis.title.y = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+# Combine baseline anchors horizontally using matching grid widths
+bottom_panel <- base_age + base_sex + base_race + plot_layout(widths = c(1, 1, 1))
+
+# ==============================================================================
+# 4. STITCH COMPLETE GRAPHICAL CANVAS
+# ==============================================================================
+final_canvas <- top_panel / bottom_panel + 
+  plot_layout(heights = c(4, 1), guides = "collect") +
+  plot_annotation(title = "EngerixB, Human")
+
+print(final_canvas)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ##### Simple t-Test
@@ -3655,6 +3876,7 @@ all_degs_human %>% saveRDS(file = here("tables", "saureus_infection_human_dge_li
 ```{r Subsampling loop}
 ## 1. Load and Pre-Filter ExpressionSet Data
 eset_human <- readRDS(file = here("tables", "saureus_infection_human_eset.rds"))
+human_metadata = readRDS(file = here("tables", "saureus_infection_human_metadata.rds"))
 
 # Filtering genes with intensity > 6 (log2) in at least 5 samples
 genes_to_keep <- exprs(eset_human) %>%
@@ -3678,7 +3900,10 @@ draw_flexible_subset <- function(metadata, target_n = 10) {
     if(attempts > 500) stop("Could not find a balanced subset.")
     
     # Sample target_n independent samples
-    sub_meta <- metadata %>% sample_n(target_n)
+    sub_meta <- metadata %>% 
+      group_by(pathogen) %>%
+      sample_n(target_n) %>% 
+      ungroup()
     
     # Ensure both pathogen classes are present
     has_diversity <- (length(unique(sub_meta$pathogen)) > 1)
@@ -3760,7 +3985,182 @@ saureus_human_subsampled_degs %>%
   print()
 ```
 
+Demographics
+```{r fig.height=5, fig.width=6}
+library(tidyverse)
+library(patchwork)
 
+# ==============================================================================
+# 1. PROCESS SIMULATION ITERATIONS DATA (RAW METRICS)
+# ==============================================================================
+# Calculate mean age and male proportions per loop iteration
+demographics_summary <- df_global_runs %>%
+  select(iteration, sampled_metadata) %>%
+  unnest(sampled_metadata) %>%
+  select(iteration, participant_id, age, sex) %>%
+  distinct() %>%
+  group_by(iteration) %>%
+  summarise(
+    mean_age   = mean(age, na.rm = TRUE), 
+    prop_male  = mean(sex == "male", na.rm = TRUE),
+    .groups    = "drop"
+  ) %>%
+  mutate(iteration = factor(iteration, levels = 1:max(iteration)))
+
+# Separate long format extraction for categorical group distributions
+subsample_race_distribution <- df_global_runs %>%
+  select(iteration, sampled_metadata) %>%
+  unnest(sampled_metadata) %>%
+  select(iteration, participant_id, ethnicity) %>%
+  distinct() %>%
+  dplyr::count(iteration, ethnicity) %>%
+  group_by(iteration) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ungroup() %>%
+  mutate(iteration = factor(iteration, levels = 1:max(as.numeric(iteration)))) 
+
+# ==============================================================================
+# 2. BUILD TOP PANEL: SUBSAMPLING RUNS (n=5 PER ITERATION)
+# ==============================================================================
+
+# Block A: Raw Mean Age Matrix Tiles with Explicit Number Rendering
+plot_age <- ggplot(demographics_summary, aes(x = "Mean Age", y = iteration)) +
+  geom_tile(aes(fill = mean_age), color = "white", linewidth = 0.6) +
+  geom_text(aes(label = sprintf("%.1f", mean_age)), 
+            color = "white", fontface = "bold", size = 3.5) +
+  scale_fill_viridis_c(option = "mako", name = "Mean Age\n(Years)", direction = -1) +
+  scale_x_discrete(position = "top", expand = c(0.01, 0.01)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold"),
+    panel.grid   = element_blank(),
+    legend.position = "left"
+  ) +
+  labs(y = "Subsampling Iterations (n=5)")
+
+# Block B: Subsample Sex Proportions Track
+plot_sex <- demographics_summary %>%
+  select(iteration, Male = prop_male) %>%
+  mutate(Female = 1 - Male) %>%
+  pivot_longer(cols = c(Male, Female), names_to = "Sex", values_to = "Proportion") %>%
+  ggplot(aes(x = Proportion, y = iteration, fill = Sex)) +
+  geom_col(width = 0.75, position = "stack") +
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+  scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank()
+  ) +
+  labs(x = "Sex Distribution")
+
+# Block C: Subsample Race Proportions Track (Multi-Categorical Configuration)
+plot_race <- subsample_race_distribution %>% 
+  mutate(race = str_replace(ethnicity, "black or african american", "black"),
+         race = str_to_title(ethnicity)) %>% 
+  ggplot(aes(x = Proportion, y = iteration, fill = race)) +
+  geom_col(width = 0.75, position = "stack") +
+  scale_fill_manual(
+    name = "Race",
+    values = colors$race) +
+  scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank()
+  ) +
+  labs(x = "Race Distribution")
+
+# Combine top sub-plots side-by-side using patchwork weights
+top_panel <- plot_age + plot_sex + plot_race + plot_layout(widths = c(1, 1, 1))
+
+# ==============================================================================
+# 3. BUILD BOTTOM PANEL: ORIGINAL TOTAL COHORT BASELINE (N=100)
+# ==============================================================================
+original_demographics <- human_metadata %>%
+  mutate(age = str_remove(age, "y") %>% as.numeric()) %>% 
+  select(participant_id, age, sex, ethnicity) %>%
+  distinct()
+
+# Baseline A: Continuous Raw Age Density Curve
+base_age <- ggplot(original_demographics, aes(x = age)) +
+  geom_density(fill = "#3182bd", alpha = 0.4, color = "black", linewidth = 0.8) +
+  geom_vline(xintercept = mean(original_demographics$age, na.rm = TRUE), 
+             color = "black", linetype = "dashed", linewidth = 0.8) +
+  facet_wrap(~"Age") +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_vaxgo() +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 9),
+    axis.title.x = element_text(face = "bold", size = 9)
+  ) +
+  labs(x = "Age (Years)", y = "Density")
+
+# Baseline B: Total Cohort Sex Proportions Anchor Bar
+base_sex <- original_demographics %>%
+  dplyr::count(sex) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ggplot(aes(x = Proportion, y = "Original\nCohort (n=100)", fill = sex)) +
+  facet_wrap(~"Original\nCohort") +
+  geom_col(width = 0.6, position = "stack", show.legend = FALSE) +
+  scale_fill_manual(values = c("Male" = "#3182bd", 
+                               "Female" = "#fa9fb5")) +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme_vaxgo() +
+  theme(
+    axis.title = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+# Baseline C: Total Cohort Race Proportions Anchor Bar (Multi-Categorical Configuration)
+base_race <- original_demographics %>%
+  mutate(ethnicity = str_to_title(ethnicity)) %>% 
+  dplyr::count(ethnicity) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ggplot(aes(x = Proportion, y = "Original\nCohort (n=100)", fill = ethnicity)) +
+  facet_wrap(~"Race") +
+  geom_col(width = 0.6, position = "stack", show.legend = TRUE) +
+  scale_fill_manual(
+    name = "Race",
+    values = colors$race
+  ) +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme_vaxgo() +
+  theme(
+    axis.title = element_blank(),
+    axis.text.y = element_blank(), 
+    panel.grid = element_blank(),
+    axis.title.y = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+# Combine baseline anchors horizontally using matching grid widths
+bottom_panel <- base_age + base_sex + base_race + plot_layout(widths = c(1, 1, 1))
+
+# ==============================================================================
+# 4. STITCH COMPLETE GRAPHICAL CANVAS
+# ==============================================================================
+final_canvas <- top_panel / bottom_panel + 
+  plot_layout(heights = c(4, 1), guides = "collect") +
+  plot_annotation(title = "S. aureus infection, Human")
+
+print(final_canvas)
+```
 
 
 
@@ -4778,7 +5178,6 @@ eset_human_ecoli %>% saveRDS(file = here("tables", "ecoli_infection_human_eset.r
 
 
 ###### Limma
-Paired samples design
 ```{r}
 
 #Import
@@ -4875,6 +5274,318 @@ all_degs_human_ecoli %>%
 
 
 
+####### Subsampling
+
+```{r Subsampling loop}
+## 1. Load Data & Prepare ExpressionSet
+human_metadata <- readRDS(file = here("tables", "ecoli_infection_human_metadata.rds"))
+eset_human <- readRDS(file = here("tables", "ecoli_infection_human_eset.rds"))
+
+# Filtering genes with intensity > 6 (log2) in at least 5 samples
+genes_to_keep <- exprs(eset_human) %>%
+  as.data.frame() %>%
+  mutate(across(everything(), ~ . > 6)) %>%
+  rowSums() %>%
+  { . >= 5 }
+
+eset_filtered <- eset_human[genes_to_keep, ]
+meta_df <- honest_df <- as_tibble(pData(eset_filtered), rownames = "sample_id")
+expr_matrix <- exprs(eset_filtered)
+
+# Slices exactly n_per_status arrays per distinct clinical phenotype group
+draw_stratified_samples_ecoli <- function(metadata, n_per_status = 5) {
+  valid_draw <- FALSE
+  attempts <- 0
+  
+  while(!valid_draw) {
+    attempts <- attempts + 1
+    if(attempts > 2000) stop("Could not find a mathematically stable stratified sample subset.")
+    
+    # Explicitly slice exactly 5 control/healthy and 5 infected sample arrays
+    sub_meta <- metadata %>%
+      group_by(status) %>%
+      slice_sample(n = n_per_status, replace = FALSE) %>%
+      ungroup() %>%
+      mutate(
+        status = as.factor(status),
+        sex = as.factor(sex)
+      )
+    
+    # Check 1: Verify both phenotypic statuses are captured in the slice
+    has_all_conditions <- (length(unique(sub_meta$status)) == 2)
+    
+    # Check 2: Verify both Sexes are captured to avoid model matrix collinearity
+    has_sex_diversity   <- (length(unique(sub_meta$sex)) > 1)
+    
+    if(has_all_conditions && has_sex_diversity) {
+      # Direct model formula structure: status + age + sex + 0
+      test_design <- model.matrix(~ status, data = sub_meta)
+      colnames(test_design) <- make.names(colnames(test_design))
+      
+      # Confirm the subset design matrix is full rank (invertible)
+      bad_coefs <- limma::nonEstimable(test_design)
+      if(is.null(bad_coefs)) {
+        valid_draw <- TRUE
+      }
+    }
+  }
+  return(sub_meta)
+}
+
+## 3. Multi-Iteration Simulation Loop
+
+n_iterations <- 20 
+samples_per_group <- 5  # 5 control/healthy + 5 infected = 10 total samples per iteration
+
+set.seed(123) 
+
+df_global_runs <- tibble(iteration = 1:n_iterations) %>%
+  mutate(
+    # Draw sample configurations via the corrected stratified logic
+    sampled_metadata = map(iteration, ~ draw_stratified_samples_ecoli(meta_df, n_per_status = samples_per_group)),
+    
+    limma_results = map(sampled_metadata, ~ {
+      sub_meta <- .x
+      sub_expr <- expr_matrix[, sub_meta$sample_id]
+      
+      # Build the multivariable model matrix matching your original setup
+      design_sub <- model.matrix(~ status, data = sub_meta)
+      colnames(design_sub) <- make.names(colnames(design_sub))
+      
+      # Compute localized array weights natively at the sample level
+      aw_sub <- arrayWeights(sub_expr, design_sub)
+      
+      # Fit linear model directly without block correlation factors
+      fit_sub <- lmFit(sub_expr, design = design_sub, weights = aw_sub)
+      
+      # Define directional mathematical contrasts matching column identities
+      cont.matrix <- makeContrasts(
+        statusinfected,
+        levels = design_sub
+      )
+      
+      fit2_sub <- contrasts.fit(fit_sub, cont.matrix)
+      fit2_sub <- eBayes(fit2_sub, robust = TRUE, trend = TRUE)
+      
+      res_list <- lapply(1:ncol(fit2_sub), function(i) {
+        df_res <- topTreat(fit2_sub, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE)
+        df_res$symbol <- rownames(df_res)
+        df_res$comparison <- colnames(fit2_sub)[i]
+        rownames(df_res) <- NULL
+        return(df_res)
+      })
+      
+      do.call(rbind, res_list)
+    })
+  )
+
+## 4. Data Processing & Summary
+ecoli_human_subsampled_degs <- df_global_runs %>%
+  select(iteration, limma_results) %>%
+  unnest(limma_results) %>%
+  clean_names() %>%
+  group_by(comparison, symbol) %>%
+  summarise(
+    p_value = median(p_value),
+    adj_p_val = median(adj_p_val),
+    mean_l2fc = median(log_fc),
+    ci_lower = median(ci_l),
+    ci_upper = median(ci_r),
+    ave_expr = median(ave_expr),
+    pct_iterations_significant = mean(adj_p_val <= 0.05) * 100,
+    .groups = "drop"
+  ) %>%
+  dplyr::select(comparison, everything()) %>% 
+  dplyr::mutate(condition = case_when(comparison == "statusinfected"	~ "Ecoli_24h",
+                               T~comparison),
+         organism = "Human",
+        timepoint = str_remove(condition, "Ecoli_") %>% str_remove("h")) %>% 
+  dplyr::select(condition, everything()) %>% 
+  clean_names() 
+
+# Save
+ecoli_human_subsampled_degs %>% saveRDS(file = here("tables", "ecoli_infection_human_dge_subsampled_degs.rds"))
+
+# Summary report
+ecoli_human_subsampled_degs %>% 
+  filter(adj_p_val <= 0.05) %>% 
+  summarise(n_robust_degs = n()) %>% 
+  print()
+```
+
+Demographics
+```{r fig.height=5, fig.width=6}
+library(tidyverse)
+library(patchwork)
+
+# ==============================================================================
+# 1. PROCESS SIMULATION ITERATIONS DATA (RAW METRICS)
+# ==============================================================================
+# Calculate mean age and male proportions per loop iteration
+demographics_summary <- df_global_runs %>%
+  select(iteration, sampled_metadata) %>%
+  unnest(sampled_metadata) %>%
+  select(iteration, subject_id, age, sex, ethnicity) %>%
+  distinct() %>%
+  group_by(iteration) %>%
+  summarise(
+    mean_age   = mean(age, na.rm = TRUE), 
+    prop_male  = mean(sex == "male", na.rm = TRUE),
+    .groups    = "drop"
+  ) %>%
+  mutate(iteration = factor(iteration, levels = 1:max(iteration)))
+
+# Separate long format extraction for categorical group distributions
+subsample_race_distribution <- df_global_runs %>%
+  select(iteration, sampled_metadata) %>%
+  unnest(sampled_metadata) %>%
+  select(iteration, subject_id, age, sex, ethnicity) %>%
+  distinct() %>%
+  dplyr::count(iteration, ethnicity) %>%
+  group_by(iteration) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ungroup() %>%
+  mutate(iteration = factor(iteration, levels = 1:max(as.numeric(iteration)))) 
+
+# ==============================================================================
+# 2. BUILD TOP PANEL: SUBSAMPLING RUNS (n=5 PER ITERATION)
+# ==============================================================================
+
+# Block A: Raw Mean Age Matrix Tiles with Explicit Number Rendering
+plot_age <- ggplot(demographics_summary, aes(x = "Mean Age", y = iteration)) +
+  geom_tile(aes(fill = mean_age), color = "white", linewidth = 0.6) +
+  geom_text(aes(label = sprintf("%.1f", mean_age)), 
+            color = "white", fontface = "bold", size = 3.5) +
+  scale_fill_viridis_c(option = "mako", name = "Mean Age\n(Years)", direction = -1) +
+  scale_x_discrete(position = "top", expand = c(0.01, 0.01)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold"),
+    panel.grid   = element_blank(),
+    legend.position = "left"
+  ) +
+  labs(y = "Subsampling Iterations (n=5)")
+
+# Block B: Subsample Sex Proportions Track
+plot_sex <- demographics_summary %>%
+  select(iteration, Male = prop_male) %>%
+  mutate(Female = 1 - Male) %>%
+  pivot_longer(cols = c(Male, Female), names_to = "Sex", values_to = "Proportion") %>%
+  ggplot(aes(x = Proportion, y = iteration, fill = Sex)) +
+  geom_col(width = 0.75, position = "stack") +
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+  scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank()
+  ) +
+  labs(x = "Sex Distribution")
+
+# Block C: Subsample Race Proportions Track (Multi-Categorical Configuration)
+plot_race <- subsample_race_distribution %>% 
+  ggplot(aes(x = Proportion, y = iteration, fill = ethnicity)) +
+  geom_col(width = 0.75, position = "stack") +
+  scale_fill_manual(
+    name = "Race",
+    values = colors$race) +
+  scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank()
+  ) +
+  labs(x = "Race Distribution")
+
+# Combine top sub-plots side-by-side using patchwork weights
+top_panel <- plot_age + plot_sex + plot_race + plot_layout(widths = c(1, 1, 1))
+
+# ==============================================================================
+# 3. BUILD BOTTOM PANEL: ORIGINAL TOTAL COHORT BASELINE (N=100)
+# ==============================================================================
+original_demographics <- human_metadata %>%
+  mutate(age = str_remove(age, "y") %>% as.numeric()) %>% 
+  select(subject_id, age, sex, ethnicity) %>%
+  distinct()
+
+# Baseline A: Continuous Raw Age Density Curve
+base_age <- ggplot(original_demographics, aes(x = age)) +
+  geom_density(fill = "#3182bd", alpha = 0.4, color = "black", linewidth = 0.8) +
+  geom_vline(xintercept = mean(original_demographics$age, na.rm = TRUE), 
+             color = "black", linetype = "dashed", linewidth = 0.8) +
+  facet_wrap(~"Age") +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_vaxgo() +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 9),
+    axis.title.x = element_text(face = "bold", size = 9)
+  ) +
+  labs(x = "Age (Years)", y = "Density")
+
+# Baseline B: Total Cohort Sex Proportions Anchor Bar
+base_sex <- original_demographics %>%
+  dplyr::count(sex) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ggplot(aes(x = Proportion, y = "Original\nCohort", fill = sex)) +
+  facet_wrap(~"Original\nCohort") +
+  geom_col(width = 0.6, position = "stack", show.legend = FALSE) +
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme_vaxgo() +
+  theme(
+    axis.title = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+# Baseline C: Total Cohort Race Proportions Anchor Bar (Multi-Categorical Configuration)
+base_race <- original_demographics %>%
+  mutate(ethnicity = str_to_title(ethnicity)) %>% 
+  dplyr::count(ethnicity) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ggplot(aes(x = Proportion, y = "Original\nCohort", fill = ethnicity)) +
+  facet_wrap(~"Race") +
+  geom_col(width = 0.6, position = "stack", show.legend = TRUE) +
+  scale_fill_manual(
+    name = "Race",
+    values = colors$race
+  ) +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme_vaxgo() +
+  theme(
+    axis.title = element_blank(),
+    axis.text.y = element_blank(), 
+    panel.grid = element_blank(),
+    axis.title.y = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+# Combine baseline anchors horizontally using matching grid widths
+bottom_panel <- base_age + base_sex + base_race + plot_layout(widths = c(1, 1, 1))
+
+# ==============================================================================
+# 4. STITCH COMPLETE GRAPHICAL CANVAS
+# ==============================================================================
+final_canvas <- top_panel / bottom_panel + 
+  plot_layout(heights = c(4, 1), guides = "collect") +
+  plot_annotation(title = "E. coli infection, Human")
+
+print(final_canvas)
+```
 
 ###### T test
 ```{r}
@@ -6357,7 +7068,7 @@ genes_to_keep <- exprs(eset_human) %>%
 eset_filtered <- eset_human[genes_to_keep, ]
 
 #Create model matrix
-design <- model.matrix(~ condition + age + sex + 0, # 0 defines the way we compare the samples
+design <- model.matrix(~ condition + age + sex + 0, 
                        eset_filtered) 
 
 colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
@@ -6431,6 +7142,296 @@ all_degs_human %>%
 
 ```
 
+##### Subsampling 
+
+```{r Subsampling loop}
+library(tidyverse)
+library(limma)
+library(here)
+library(janitor)
+
+## 1. Load Data & Prepare ExpressionSet
+human_log2_hgnc_symbol <- readRDS(file = here("tables", "burn_human_exprs_hgnc_symbol.rds"))
+human_metadata <- read_csv(file = here("tables", "burn_human_metadata.csv")) %>%  
+  mutate(
+    condition = paste0(treatment, "_", timepoints_new),
+    condition = fct_relevel(condition, "Control_Early_Hours")
+  )
+
+eset_human <- ExpressionSet(
+  assayData = human_log2_hgnc_symbol %>% 
+    column_to_rownames("human_symbol") %>% 
+    select(all_of(human_metadata$geo_sample)) %>%
+    as.matrix(),
+  phenoData = AnnotatedDataFrame(human_metadata %>% column_to_rownames("geo_sample"))
+)
+
+# Filtering genes with intensity > 6 (log2) in at least 5 samples
+genes_to_keep <- exprs(eset_human) %>%
+  as.data.frame() %>%
+  mutate(across(everything(), ~ . > 6)) %>%
+  rowSums() %>%
+  { . >= 5 }
+
+eset_filtered <- eset_human[genes_to_keep, ]
+meta_df <- as_tibble(pData(eset_filtered), rownames = "sample_id")
+expr_matrix <- exprs(eset_filtered)
+unique_participants <- meta_df$sample_id %>% unique()
+
+# Slices exactly n_per_condition arrays per distinct biological state grouping
+draw_stratified_samples <- function(metadata, n_per_condition = 5) {
+  valid_draw <- FALSE
+  attempts <- 0
+  
+  while(!valid_draw) {
+    attempts <- attempts + 1
+    if(attempts > 2000) stop("Could not find a mathematically stable stratified sample subset.")
+    
+    # Draw exactly n_per_condition independent samples (sample_id) from EACH group
+    sub_meta <- metadata %>%
+      group_by(condition) %>%
+      slice_sample(n = n_per_condition, replace = FALSE) %>%
+      ungroup() %>%
+      mutate(
+        condition = as.factor(condition),
+        sex = as.factor(sex)
+      )
+    
+    # Check 1: Verify all 5 categorical clinical groups are captured in the slice
+    has_all_conditions <- (length(unique(sub_meta$condition)) == 5)
+    
+    # Check 2: Verify both Sexes are captured to avoid model matrix collinearity
+    has_sex_diversity   <- (length(unique(sub_meta$sex)) > 1)
+    
+    if(has_all_conditions && has_sex_diversity) {
+      # Aligned precisely with the original design: condition + age + sex + 0
+      test_design <- model.matrix(~ condition + age + sex + 0, data = sub_meta)
+      colnames(test_design) <- make.names(colnames(test_design))
+      
+      # Confirm the subset design matrix is full rank (invertible)
+      bad_coefs <- limma::nonEstimable(test_design)
+      if(is.null(bad_coefs)) {
+        valid_draw <- TRUE
+      }
+    }
+  }
+  return(sub_meta)
+}
+
+# ==============================================================================
+# 3. RUN MULTI-ITERATION SIMULATION LOOP (DIRECT SAMPLE ESTIMATION)
+# ==============================================================================
+n_iterations <- 20 
+samples_per_group <- 5  # 5 control + (5 samples * 4 timepoints) = 25 total samples per iteration
+
+set.seed(123) 
+
+df_global_runs <- tibble(iteration = 1:n_iterations) %>%
+  mutate(
+    # Draw sample configurations via the corrected stratified logic
+    sampled_metadata = map(iteration, ~ draw_stratified_samples(meta_df, n_per_condition = samples_per_group)),
+    
+    limma_results = map(sampled_metadata, ~ {
+      sub_meta <- .x
+      sub_expr <- expr_matrix[, sub_meta$sample_id]
+      
+      # Build the multivariable model matrix identical to your original code
+      design_sub <- model.matrix(~ condition + age + sex + 0, data = sub_meta)
+      colnames(design_sub) <- make.names(colnames(design_sub))
+      
+      # Compute localized array weights natively at the sample level
+      aw_sub <- arrayWeights(sub_expr, design_sub)
+      
+      # Fit linear model directly without block correlation factors
+      fit_sub <- lmFit(sub_expr, design = design_sub, weights = aw_sub)
+      
+      # Define directional mathematical contrasts matching column identities
+      cont.matrix <- makeContrasts(
+        Burn_Early = conditionBurn_Early_Hours - conditionControl_Early_Hours,
+        Burn_D1    = conditionBurn_Day_1  - conditionControl_Early_Hours,
+        Burn_D3    = conditionBurn_Day_3  - conditionControl_Early_Hours,
+        Burn_D7    = conditionBurn_Day_7  - conditionControl_Early_Hours,
+        levels = design_sub
+      )
+      
+      fit2_sub <- contrasts.fit(fit_sub, cont.matrix)
+      fit2_sub <- eBayes(fit2_sub, robust = TRUE, trend = TRUE)
+      
+      res_list <- lapply(1:ncol(fit2_sub), function(i) {
+        df_res <- topTreat(fit2_sub, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE)
+        df_res$symbol <- rownames(df_res)
+        df_res$comparison <- colnames(fit2_sub)[i]
+        rownames(df_res) <- NULL
+        return(df_res)
+      })
+      
+      do.call(rbind, res_list)
+    })
+  )
+
+# ==============================================================================
+# 4. POST-SIMULATION COMPILATION & SIGNIFICANCE SUMMARIES
+# ==============================================================================
+burn_human_subsampled_degs <- df_global_runs %>%
+  select(iteration, limma_results) %>%
+  unnest(limma_results) %>%
+  clean_names() %>%
+  group_by(comparison, symbol) %>%
+  summarise(
+    p_value   = median(p_value),
+    adj_p_val = median(adj_p_val),
+    mean_l2fc = median(log_fc),
+    ci_lower  = median(ci_l),
+    ci_upper  = median(ci_r),
+    ave_expr  = median(ave_expr),
+    pct_iterations_significant = mean(adj_p_val <= 0.05) * 100,
+    .groups   = "drop"
+  ) %>%
+  rename(human_symbol = symbol, condition = comparison) %>%
+  mutate(organism = "Human") %>%
+  select(condition, human_symbol, mean_l2fc, ci_lower, ci_upper, ave_expr, p_value, adj_p_val, pct_iterations_significant, organism)
+
+# Save Downsampled DEGs Output Object
+burn_human_subsampled_degs %>% saveRDS(file = here("tables", "burn_human_dge_subsampled_degs.rds"))
+
+# Print Robust Differential Expression Signatures Summary
+burn_human_subsampled_degs %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarise(n_robust_degs = n()) %>%
+  print()
+```
+
+
+Demographics
+```{r fig.height=5, fig.width=8}
+library(tidyverse)
+library(patchwork)
+
+# ==============================================================================
+# 1. PROCESS SIMULATION ITERATIONS DATA (RAW METRICS)
+# ==============================================================================
+demographics_summary <- df_global_runs %>%
+  select(iteration, sampled_metadata) %>%
+  unnest(sampled_metadata) %>%
+  select(iteration, sample_id, age, sex) %>%
+  distinct() %>%
+  group_by(iteration) %>%
+  summarise(
+    mean_age   = mean(age, na.rm = TRUE), 
+    prop_male  = mean(sex == "male", na.rm = TRUE),
+    .groups    = "drop"
+  ) %>%
+  mutate(iteration = factor(iteration, levels = 1:max(iteration)))
+
+# ==============================================================================
+# 2. BUILD TOP PANEL: SUBSAMPLING RUNS (n=5 PER ITERATION)
+# ==============================================================================
+
+plot_age <- ggplot(demographics_summary, aes(x = "Mean Age", y = iteration)) +
+  geom_tile(aes(fill = mean_age), color = "white", linewidth = 0.6) +
+  geom_text(aes(label = sprintf("%.1f", mean_age)), 
+            color = "white", fontface = "bold", size = 3.5) +
+  scale_fill_viridis_c(option = "mako", name = "Mean Age\n(Years)", direction = -1) +
+  scale_x_discrete(position = "top", expand = c(0.01, 0.01)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold"),
+    panel.grid   = element_blank(),
+    legend.position = "left"
+  ) +
+  labs(y = "Subsampling Iterations (n=5)")
+
+plot_sex <- demographics_summary %>%
+  select(iteration, Male = prop_male) %>%
+  mutate(Female = 1 - Male) %>%
+  pivot_longer(cols = c(Male, Female), names_to = "Sex", values_to = "Proportion") %>%
+  ggplot(aes(x = Proportion, y = iteration, fill = Sex)) +
+  geom_col(width = 0.75, position = "stack") +
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+  scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank()
+  ) +
+  labs(x = "Sex Distribution")
+
+
+top_panel <- plot_age + plot_sex + plot_layout(widths = c(1, 1))
+
+# ==============================================================================
+# 3. BUILD BOTTOM PANEL: ORIGINAL TOTAL COHORT BASELINE (N=100)
+# ==============================================================================
+original_demographics <- human_metadata %>%
+  mutate(age = str_remove(age, "y") %>% as.numeric(),
+         sex = case_when(sex == "F" ~ "Female",
+                         sex == "M" ~ "Male",
+                         T~sex)) %>% 
+  select(geo_sample, age, sex) %>%
+  distinct()
+
+base_age <- ggplot(original_demographics, aes(x = age)) +
+  geom_density(fill = "#3182bd", alpha = 0.4, color = "black", linewidth = 0.8) +
+  geom_vline(xintercept = mean(original_demographics$age, na.rm = TRUE), 
+             color = "black", linetype = "dashed", linewidth = 0.8) +
+  facet_wrap(~"Age") +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_vaxgo() +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 9),
+    axis.title.x = element_text(face = "bold", size = 9)
+  ) +
+  labs(x = "Age (Years)", y = "Density")
+
+base_sex <- original_demographics %>%
+  dplyr::count(sex) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ggplot(aes(x = Proportion, y = "Original\nCohort", fill = sex)) +
+  facet_wrap(~"Original\nCohort") +
+  geom_col(width = 0.6, position = "stack", show.legend = FALSE) +
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme_vaxgo() +
+  theme(
+    axis.title = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+bottom_panel <- base_age + base_sex + plot_layout(widths = c(1, 1))
+
+# ==============================================================================
+# 4. STITCH COMPLETE GRAPHICAL CANVAS
+# ==============================================================================
+final_canvas <- top_panel / bottom_panel + 
+  plot_layout(heights = c(4, 1), guides = "collect") +
+  plot_annotation(title = "Burn Injury, Human Cohort Validation")
+
+print(final_canvas)
+
+```
+
+
+
+
+
+
+
+
+
+
+
 
 
 ##### T test
@@ -6468,6 +7469,7 @@ log2fc_unpaired_ttest %>%
 ####Trauma
 ##### Limma
 Unpaired
+
 ```{r}
 #Import
 human_log2_hgnc_symbol = readRDS(file = here("tables", "trauma_human_exprs_hgnc_symbol.rds"))
@@ -6492,10 +7494,7 @@ eset_human <- ExpressionSet(
     as.matrix(),
   phenoData = AnnotatedDataFrame(human_metadata %>% 
                                    column_to_rownames("geo_sample")))
-```
 
-
-```{r}
 #Check if expression is log2 transformed
 exprs(eset_human) #values must be in the 0-16 range typically
 
@@ -6590,6 +7589,298 @@ all_degs_human %>%
   summarise(n_degs = n())
 
 ```
+
+
+###### Subsampling Loop for Trauma Dataset
+
+```{r Subsampling loop}
+library(tidyverse)
+library(limma)
+library(here)
+library(janitor)
+
+## 1. Load Data, Filter Outliers, & Prepare ExpressionSet
+human_log2_hgnc_symbol <- readRDS(file = here("tables", "trauma_human_exprs_hgnc_symbol.rds"))
+outliers <- readRDS(file = here("tables", "trauma_human_metadata_outliers.rds"))
+
+human_metadata <- read_csv(file = here("tables", "trauma_human_metadata.csv")) %>%  
+  mutate(
+    condition = paste0(treatment, "_", timepoints_new),
+    condition = fct_relevel(condition, "Control_Early_Hours")
+  ) %>% 
+  filter(!subject_id %in% c(outliers))
+
+eset_human <- ExpressionSet(
+  assayData = human_log2_hgnc_symbol %>% 
+    select(-probe) %>% 
+    column_to_rownames("human_symbol") %>% 
+    select(all_of(human_metadata$geo_sample)) %>%
+    as.matrix(),
+  phenoData = AnnotatedDataFrame(human_metadata %>% column_to_rownames("geo_sample"))
+)
+
+# Filtering genes with intensity > 6 (log2) in at least 5 samples
+genes_to_keep <- exprs(eset_human) %>%
+  as.data.frame() %>%
+  mutate(across(everything(), ~ . > 6)) %>%
+  rowSums() %>%
+  { . >= 5 }
+
+eset_filtered <- eset_human[genes_to_keep, ]
+
+# Extract core matrix references for safe downsampling slices
+meta_df <- honest_df <- as_tibble(pData(eset_filtered), rownames = "sample_id")
+expr_matrix <- exprs(eset_filtered)
+
+# Slices exactly n_per_condition independent samples (sample_id) from EACH group
+draw_stratified_samples <- function(metadata, n_per_condition = 5) {
+  valid_draw <- FALSE
+  attempts <- 0
+  
+  while(!valid_draw) {
+    attempts <- attempts + 1
+    if(attempts > 2000) stop("Could not find a mathematically stable stratified sample subset.")
+    
+    # Draw exactly n_per_condition independent arrays per condition group
+    sub_meta <- metadata %>%
+      group_by(condition) %>%
+      slice_sample(n = n_per_condition, replace = FALSE) %>%
+      ungroup() %>%
+      mutate(
+        condition = as.factor(condition),
+        sex = as.factor(sex)
+      )
+    
+    # Check 1: Verify all 5 categorical clinical groups are captured in the slice
+    has_all_conditions <- (length(unique(sub_meta$condition)) == 5)
+    
+    # Check 2: Verify both Sexes are captured to avoid model matrix collinearity
+    has_sex_diversity   <- (length(unique(sub_meta$sex)) > 1)
+    
+    if(has_all_conditions && has_sex_diversity) {
+      # Aligned precisely with original design: condition + age + sex + 0
+      test_design <- model.matrix(~ condition + age + sex + 0, data = sub_meta)
+      colnames(test_design) <- make.names(colnames(test_design))
+      
+      bad_coefs <- limma::nonEstimable(test_design)
+      if(is.null(bad_coefs)) {
+        valid_draw <- TRUE
+      }
+    }
+  }
+  return(sub_meta)
+}
+
+# ==============================================================================
+# 3. RUN MULTI-ITERATION SIMULATION LOOP (DIRECT SAMPLE ESTIMATION)
+# ==============================================================================
+n_iterations <- 20 
+samples_per_group <- 5  # 5 control + (5 samples * 4 timepoints) = 25 total samples per iteration
+
+set.seed(123) 
+
+df_global_runs <- tibble(iteration = 1:n_iterations) %>%
+  mutate(
+    sampled_metadata = map(iteration, ~ draw_stratified_samples(meta_df, n_per_condition = samples_per_group)),
+    
+    limma_results = map(sampled_metadata, ~ {
+      sub_meta <- .x
+      sub_expr <- expr_matrix[, sub_meta$sample_id]
+      
+      design_sub <- model.matrix(~ condition + age + sex + 0, data = sub_meta)
+      colnames(design_sub) <- make.names(colnames(design_sub))
+      
+      # Fit linear model directly without block correlation factors or array weights
+      fit_sub <- lmFit(sub_expr, design = design_sub)
+      
+      cont.matrix <- makeContrasts(
+        Trauma_Early = conditionTrauma_Early_Hours - conditionControl_Early_Hours,
+        Trauma_D1    = conditionTrauma_Day_1  - conditionControl_Early_Hours,
+        Trauma_D3    = conditionTrauma_Day_3  - conditionControl_Early_Hours,
+        Trauma_D7    = conditionTrauma_Day_7  - conditionControl_Early_Hours,
+        levels = design_sub
+      )
+      
+      fit2_sub <- contrasts.fit(fit_sub, cont.matrix)
+      # robust = TRUE as original setup, trend = FALSE since trend was deactivated
+      fit2_sub <- eBayes(fit2_sub, robust = TRUE, trend = FALSE)
+      
+      res_list <- lapply(1:ncol(fit2_sub), function(i) {
+        df_res <- topTreat(fit2_sub, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE)
+        df_res$symbol <- rownames(df_res)
+        df_res$comparison <- colnames(fit2_sub)[i]
+        rownames(df_res) <- NULL
+        return(df_res)
+      })
+      
+      do.call(rbind, res_list)
+    })
+  )
+
+# ==============================================================================
+# 4. POST-SIMULATION COMPILATION & SIGNIFICANCE SUMMARIES
+# ==============================================================================
+trauma_human_subsampled_degs <- df_global_runs %>%
+  select(iteration, limma_results) %>%
+  unnest(limma_results) %>%
+  clean_names() %>%
+  group_by(comparison, symbol) %>%
+  summarise(
+    p_value   = median(p_value),
+    adj_p_val = median(adj_p_val),
+    mean_l2fc = median(log_fc),
+    ci_lower  = median(ci_l),
+    ci_upper  = median(ci_r),
+    ave_expr  = median(ave_expr),
+    pct_iterations_significant = mean(adj_p_val <= 0.05) * 100,
+    .groups   = "drop"
+  ) %>%
+  rename(human_symbol = symbol, condition = comparison) %>%
+  mutate(organism = "Human") %>%
+  select(condition, human_symbol, mean_l2fc, ci_lower, ci_upper, ave_expr, p_value, adj_p_val, pct_iterations_significant, organism)
+
+# Save Downsampled DEGs Object
+trauma_human_subsampled_degs %>% saveRDS(file = here("tables", "trauma_human_dge_subsampled_degs.rds"))
+
+# Print Robust Differential Expression Summary Count
+trauma_human_subsampled_degs %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarise(n_robust_degs = n()) %>%
+  print()
+
+```
+
+
+
+Demographics
+```{r fig.height=5, fig.width=8}
+library(tidyverse)
+library(patchwork)
+
+# ==============================================================================
+# 1. PROCESS SIMULATION ITERATIONS DATA (RAW METRICS)
+# ==============================================================================
+demographics_summary <- df_global_runs %>%
+  select(iteration, sampled_metadata) %>%
+  unnest(sampled_metadata) %>%
+  select(iteration, sample_id, age, sex) %>%
+  distinct() %>%
+  group_by(iteration) %>%
+  summarise(
+    mean_age   = mean(age, na.rm = TRUE), 
+    prop_male  = mean(sex == "male" | sex == "M", na.rm = TRUE),
+    .groups    = "drop"
+  ) %>%
+  mutate(iteration = factor(iteration, levels = 1:max(iteration)))
+
+# ==============================================================================
+# 2. BUILD TOP PANEL: SUBSAMPLING RUNS (n=5 PER GROUP-CONDITION SPECIFICATION)
+# ==============================================================================
+
+plot_age <- ggplot(demographics_summary, aes(x = "Mean Age", y = iteration)) +
+  geom_tile(aes(fill = mean_age), color = "white", linewidth = 0.6) +
+  geom_text(aes(label = sprintf("%.1f", mean_age)), 
+            color = "white", fontface = "bold", size = 3.5) +
+  scale_fill_viridis_c(option = "mako", name = "Mean Age\n(Years)", direction = -1) +
+  scale_x_discrete(position = "top", expand = c(0.01, 0.01)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold"),
+    panel.grid   = element_blank(),
+    legend.position = "left"
+  ) +
+  labs(y = "Subsampling Iterations (n=5)")
+
+plot_sex <- demographics_summary %>%
+  select(iteration, Male = prop_male) %>%
+  mutate(Female = 1 - Male) %>%
+  pivot_longer(cols = c(Male, Female), names_to = "Sex", values_to = "Proportion") %>%
+  ggplot(aes(x = Proportion, y = iteration, fill = Sex)) +
+  geom_col(width = 0.75, position = "stack") +
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+  scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+  theme_vaxgo() +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank()
+  ) +
+  labs(x = "Sex Distribution")
+
+top_panel <- plot_age + plot_sex + plot_layout(widths = c(1, 1))
+
+# ==============================================================================
+# 3. BUILD BOTTOM PANEL: ORIGINAL TOTAL COHORT BASELINE (N=100)
+# ==============================================================================
+original_demographics <- human_metadata %>%
+  mutate(age = str_remove(age, "y") %>% as.numeric(),
+         sex = case_when(sex == "F" ~ "Female",
+                         sex == "M" ~ "Male",
+                         TRUE ~ sex)) %>% 
+  select(geo_sample, age, sex) %>%
+  distinct()
+
+base_age <- ggplot(original_demographics, aes(x = age)) +
+  geom_density(fill = "#3182bd", alpha = 0.4, color = "black", linewidth = 0.8) +
+  geom_vline(xintercept = mean(original_demographics$age, na.rm = TRUE), 
+             color = "black", linetype = "dashed", linewidth = 0.8) +
+  facet_wrap(~"Age") +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_vaxgo() +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 9),
+    axis.title.x = element_text(face = "bold", size = 9)
+  ) +
+  labs(x = "Age (Years)", y = "Density")
+
+base_sex <- original_demographics %>%
+  dplyr::count(sex) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ggplot(aes(x = Proportion, y = "Original\nCohort", fill = sex)) +
+  facet_wrap(~"Original\nCohort") +
+  geom_col(width = 0.6, position = "stack", show.legend = FALSE) +
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme_vaxgo() +
+  theme(
+    axis.title = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+bottom_panel <- base_age + base_sex + plot_layout(widths = c(1, 1))
+
+# ==============================================================================
+# 4. STITCH COMPLETE GRAPHICAL CANVAS
+# ==============================================================================
+final_canvas <- top_panel / bottom_panel + 
+  plot_layout(heights = c(4, 1), guides = "collect") +
+  plot_annotation(title = "Trauma Injury, Human Cohort Validation")
+
+print(final_canvas)
+
+```
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -7217,7 +8508,7 @@ all_degs_human_mouse_fluad = readRDS(here("tables", "influenza_fluad_human_mouse
   mutate(pathogen = "Influenza", treatment = "Fluad") %>% 
   rename(mean_l2fc = mean, ci_lower = lower, ci_upper = upper)
 #Burn
-all_degs_human_burn = readRDS(here("tables", "burn_human_dge_limma_degs.rds")) %>% 
+all_degs_human_burn = readRDS(here("tables", "burn_human_dge_subsampled_degs.rds")) %>% 
   mutate(pathogen = "Burn", treatment = "Burn",
          timepoint = str_remove(condition, "Burn_") %>% 
            str_replace("Early", "Early hours") %>% 
@@ -7227,7 +8518,7 @@ all_degs_mouse_burn = readRDS(here("tables", "burn_mouse_dge_limma_degs.rds")) %
          timepoint = str_remove(condition, "Burn_") %>% 
            str_replace("D", "Day "))
 #Trauma
-all_degs_human_trauma = readRDS(here("tables", "trauma_human_dge_limma_degs.rds")) %>% 
+all_degs_human_trauma = readRDS(here("tables", "trauma_human_dge_subsampled_degs.rds")) %>% 
   mutate(pathogen = "Trauma", treatment = "Trauma",
          timepoint = str_remove(condition, "Trauma_") %>% 
            str_replace("Early", "Early hours") %>% 
