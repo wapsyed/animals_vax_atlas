@@ -25,54 +25,61 @@ BTMs correlation, intra- and inter-species
 
 ##### Mean Log2FC and GSEA (Immune)
 
-Compare means and NES Import
+Load the pre-computed differential expression results and the Blood Transcription Module annotation table. Join them on gene symbol to assign each gene to its BTM module, then collapse genes to module-level mean log2FC for each organism and timepoint. For each module, test whether its mean log2FC differs from zero using a one-sample t-test with Benjamini-Hochberg correction. Save the resulting module-level summary for downstream plotting.
 
 ```{r}
-#Import datasets ------
-#Import DGE output
+# Load data --------
+# Import pre-computed DGE results (limma output: mean_l2fc, adj_p_val per gene)
+# Annotate pathogen/vaccine/timepoint for downstream grouping
 all_degs_human_mouse = readRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds")) %>% 
   mutate(pathogen = "Influenza", vaccine = "Fluad",
-         timepoint = as.numeric(timepoint)) %>% 
-  rename(mean_l2fc = mean,
-         ci_lower = lower,
-         ci_upper = upper)
+         timepoint = as.numeric(timepoint)) 
 
-#Import BTMs annotation table
+# Import BTM gene-to-module mapping (one row per gene, columns: symbol, process, group, subgroup)
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
 
 filename = "influenza_fluad_human_mouse"
 
-#Clean metadata 
+# Extract unique condition labels for downstream filtering
 annotation_conditions = all_degs_human_mouse %>% 
   select(condition, timepoint, model = organism) %>% 
   distinct() 
 
-# Gene set enrichment analysis (GSEA) --------
-#Get calculate means -----
-#Annotate genes by BTM 
-
+# Annotate DEGs with BTM modules --------
+# Rename to generic "symbol" for the join, then attach BTM metadata
+# Keep only Human and Mouse (exclude any reference or FIT entries)
 dge_btm_process_genes = all_degs_human_mouse %>% 
   rename(symbol = human_symbol) %>% 
   ungroup() %>% 
   inner_join(btm_annotation_genes, by = "symbol") %>% 
   filter(organism %in% c("Human", "Mouse")) 
 
+# Save intermediate for reuse in plotting without re-joining
 dge_btm_process_genes %>% 
   saveRDS(file = here("tables", paste0(filename, "_dge_btm_process_genes.rds")))
 
+# Summarise gene-level log2FC to module-level means --------
+# For each organism x pathogen x timepoint x process:
+#   - mean, median, sd, var of the constituent genes' log2FC
+#   - n_genes: how many genes from the module were detected
+#   - group/subgroup: preserved from BTM annotation (constant per process)
 dge_btm_mean_process = dge_btm_process_genes %>% 
-  group_by(organism, timepoint, process) %>% 
+  group_by(organism, pathogen, timepoint, process) %>% 
   summarise(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc),
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
             n_genes = n(),
-            organism, pathogen,
-            group, subgroup) %>%
+            group = dplyr::first(group),
+            subgroup = dplyr::first(subgroup)) %>%
   distinct() %>% 
   ungroup() %>% 
-  mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
+  mutate(condition = paste0(organism, "_", pathogen, "_", timepoint)) 
 
+# Test if module mean log2FC differs from zero --------
+# One-sample t-test per module (mean_l2fc ~ 1, mu = 0)
+# BH correction across all modules within each group
+# Modules with <2 genes are skipped (filter(n() >= 2))
 pvals_vs_zero <- dge_btm_process_genes %>%
   group_by(organism, pathogen, timepoint, process) %>%
   filter(n() >= 2) %>% 
@@ -80,10 +87,12 @@ pvals_vs_zero <- dge_btm_process_genes %>%
   adjust_pvalue(method = "BH") %>%  
   add_significance()
 
+# Diagnostic: print modules with <2 genes (excluded from the t-test)
 dge_btm_process_genes %>%
   dplyr::count(organism, pathogen, timepoint, process) %>%
   filter(n < 2)
 
+# Join module means with their significance tests --------
 dge_btm_mean_process <- dge_btm_mean_process %>%
   left_join(
     pvals_vs_zero %>% 
@@ -92,7 +101,7 @@ dge_btm_mean_process <- dge_btm_mean_process %>%
   ) %>% 
   clean_names()
 
-#Print
+#Save
 dge_btm_mean_process %>% 
   saveRDS(file = here("tables", paste0(filename, "_dge_btm_mean_process.rds")))
 
@@ -102,13 +111,17 @@ dge_btm_mean_process %>%
 
 ##### GSEA
 
+Prepare a rank-ordered gene list from the DGE results using the combined metric `log2FC * -log(adj_p_val)` and run Gene Set Enrichment Analysis against the BTM gene sets. Merge the GSEA output (Normalized Enrichment Score, q-value) with the module-level mean log2FC table for integrated visualization of both magnitude and enrichment direction.
+
 ```{r message=FALSE}
-#Run GSEA for DGE outputs-----
-#Human ImmuneGO/BTMs
+# Prepare term-to-gene mapping for GSEA --------
+# BTM annotation already has process and symbol columns
 term2gene = btm_annotation_genes %>% 
   select(process, genes = symbol)
 
-#Clean table for GSEA standard
+# Build ranked gene list --------
+# Use a composite metric: log2FC * -log(p-value) to rank genes
+# This balances effect size and statistical significance
 df_genes2GSEA <- all_degs_human_mouse %>% 
   distinct() %>% 
   select(organism, pathogen, timepoint, 
@@ -118,21 +131,23 @@ df_genes2GSEA <- all_degs_human_mouse %>%
           log2fold_change_logp = log2fold_change * -log(adj_p_val)) %>% 
   select(condition, genes, rank = log2fold_change_logp)
 
-#Run multiple GSEA and unite means
+# Run GSEA across all conditions using the autoGSEA helper --------
+# autoGSEA iterates over each condition internally
 gsea_btm_output = autoGSEA(df = df_genes2GSEA,
          TERM2GENE = term2gene,
          geneset_name = "BTMs")
 
-
+# Merge GSEA results with module-level means --------
+# This produces a single table with both NES (from GSEA) and mean_log2fc (from summarise)
 gsea_btm_results = gsea_btm_output$gsea %>% 
   as.data.frame() %>% 
   clean_names() %>% 
   rename(process = id) %>%
-  #Unite means and GSEA
+  filter(!is.na(process)) %>% 
   full_join(dge_btm_mean_process %>% 
-              rename(p_adjust_mean = p_adjust), by = join_by("condition", "process"))
-  
-  
+              rename(p_adjust_mean = p_adjust), 
+            by = join_by("condition", "process"))
+
 #Save
 gsea_btm_results %>% 
     saveRDS(here("tables", paste0(filename, "_gsea_btm_results.rds")))
@@ -143,63 +158,62 @@ gsea_btm_results %>%
 
 ##### Mean Log2FC
 
+Repeat the module-level analysis using MSigDB Hallmarks instead of BTMs. Load the DGE results and the Hallmark gene sets, join them on gene symbol, collapse to Hallmark-level mean log2FC per organism and timepoint, and test each Hallmark against zero with a one-sample t-test and BH correction. Save the Hallmark-level summary.
+
 ```{r fig.width=10, fig.height= 8}
-#Import datasets ------
-#Import DGE output
+# Load DGE results --------
+# Same approach as the BTM analysis: annotate pathogen and cast timepoint to numeric
 all_degs_human_mouse = readRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds")) %>% 
   mutate(pathogen = "Influenza", vaccine = "Fluad",
-         timepoint = as.numeric(timepoint)) %>% 
-   rename(mean_l2fc = mean,
-         ci_lower = lower,
-         ci_upper = upper)
+         timepoint = as.numeric(timepoint)) 
 
 filename = "influenza_fluad_human_mouse"
 
-#Clean metadata 
+# Extract unique conditions for downstream use
 annotation_conditions = all_degs_human_mouse %>% 
   select(condition, timepoint, model = organism) %>% 
   distinct() 
 
-# Import Hallmarks -------
-
-#Get annotated processes
+# Load MSigDB Hallmark gene set annotation
 msigdbr_grouped = read_csv(file = here("tables", "msigdb_hallmarks_grouped_genes.csv"))
 
-# Gene set enrichment analysis (GSEA) --------
-#Get calculate means -----
-#Annotate genes by BTM 
-
+# Join DEGs with Hallmark annotation --------
 dge_hallmarks_process_genes = all_degs_human_mouse %>% 
   rename(symbol = human_symbol) %>% 
   ungroup() %>% 
   inner_join(msigdbr_grouped, by = "symbol")
 
+# Save intermediate for re-use in plotting
 dge_hallmarks_process_genes %>% 
   saveRDS(file = here("tables", paste0(filename, "_dge_hallmarks_process_genes.rds")))
 
+# Collapse genes to Hallmark-level means --------
+# Note: Hallmarks lack group/subgroup columns, so only mean_log2fc and n_genes are computed
 dge_hallmarks_mean_process = dge_hallmarks_process_genes %>% 
-  group_by(organism, timepoint, process) %>% 
+  group_by(organism, timepoint, process, pathogen) %>% 
   summarise(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc),
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
-            n_genes = n(),
-            organism, pathogen) %>%
+            n_genes = n()) %>%
   distinct() %>% 
   ungroup() %>% 
-  mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
+  mutate(condition = paste0(organism, "_", pathogen, "_", timepoint)) 
 
+# One-sample t-test per Hallmark vs zero, with BH correction
 pvals_vs_zero <- dge_hallmarks_process_genes %>%
   group_by(organism, pathogen, timepoint, process) %>%
   filter(n() >= 2) %>% 
-  rstatix::t_test(mean_l2fc ~ 1, mu = 0) %>%     # testa média contra zero
-  rstatix::adjust_pvalue(method = "BH") %>%      # corrige FDR
+  rstatix::t_test(mean_l2fc ~ 1, mu = 0) %>%
+  rstatix::adjust_pvalue(method = "BH") %>%
   rstatix::add_significance()
 
+# Print Hallmarks with fewer than 2 genes (excluded from the test)
 dge_hallmarks_process_genes %>%
   dplyr::count(organism, pathogen, timepoint, process) %>%
   filter(n < 2)
 
+# Join means with significance tests and save
 dge_hallmarks_mean_process <- dge_hallmarks_mean_process %>%
   left_join(
     pvals_vs_zero %>% 
@@ -208,20 +222,21 @@ dge_hallmarks_mean_process <- dge_hallmarks_mean_process %>%
   ) %>% 
   clean_names()
 
-#Print
+#Save
 dge_hallmarks_mean_process %>% 
   saveRDS(file = here("tables", paste0(filename, "_dge_hallmarks_mean_process.rds")))
 ```
 
 ##### GSEA
 
+Run Gene Set Enrichment Analysis against the MSigDB Hallmarks using the same composite rank metric as the BTMs analysis. Merge the GSEA output (NES, q-value) with the Hallmark-level mean log2FC table so that both magnitude and enrichment can be compared side by side.
+
 ```{r message=FALSE, warning=TRUE}
-#Run GSEA for DGE outputs-----
-#Human ImmuneGO/BTMs
+# Prepare Hallmark term-to-gene mapping --------
 term2gene = msigdbr_grouped  %>% 
   select(process, genes = symbol)
 
-#Clean table for GSEA standard
+# Build ranked gene list with the same composite metric as the BTM GSEA --------
 df_genes2GSEA <- all_degs_human_mouse %>% 
   distinct() %>% 
   select(organism, pathogen, timepoint, 
@@ -231,21 +246,21 @@ df_genes2GSEA <- all_degs_human_mouse %>%
           log2fold_change_logp = log2fold_change * -log(adj_p_val)) %>% 
   select(condition, genes, rank = log2fold_change_logp)
 
-#Run multiple GSEA and unite means
+# Run GSEA against Hallmarks --------
 gsea_hallmarks_output = autoGSEA(df = df_genes2GSEA,
          TERM2GENE = term2gene,
          geneset_name = "MSigDB Hallmarks")
 
-
+# Clean GSEA output and merge with module-level mean log2FC --------
+# The full_join keeps modules that have means but no GSEA result and vice versa
 gsea_hallmarks_results = gsea_hallmarks_output$gsea %>% 
   as.data.frame() %>% 
   clean_names() %>% 
   rename(process = id) %>%
-  #Unite means and GSEA
+  filter(!is.na(process)) %>% 
   full_join(dge_hallmarks_mean_process %>% 
               rename(p_adjust_mean = p_adjust), by = join_by("condition", "process"))
-  
-  
+
 #Save
 gsea_hallmarks_results %>% 
     saveRDS(here("tables", paste0(filename, "_gsea_hallmarks_results.rds")))
@@ -364,83 +379,87 @@ BTMs correlation, intra- and inter-species
 
 ##### Mean Log2FC
 
-Compare means and NES Import
+Repeat the same module-level analysis for Engerix B (Hepatitis B vaccine). Load the DGE results for this vaccine, join with the BTM annotation, collapse to module-level mean log2FC per organism and timepoint, test each module against zero, and save the summary.
 
 ```{r}
-#Import datasets ------
-#Import DGE output
+# Load data --------
+# Import Engerix B DGE results and annotate pathogen/vaccine
 all_degs_human_mouse = readRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds")) %>% 
   mutate(pathogen = "Hepatitis B", vaccine = "EngerixB",
          timepoint = as.numeric(timepoint))
 
-#Import BTMs annotation table
+# Import BTM annotation (same table used for all pathogens)
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
 
 filename = "hepatitisb_engerixb_human_mouse"
 
-#Clean metadata 
+# Extract unique condition labels
 annotation_conditions = all_degs_human_mouse %>% 
   select(condition, timepoint, model = organism) %>% 
   distinct() 
 
-#Get calculate means -----
-#Annotate genes by BTM 
-
+# Annotate DEGs with BTM modules --------
 dge_btm_process_genes = all_degs_human_mouse %>% 
   rename(symbol = human_symbol) %>% 
   ungroup() %>% 
   inner_join(btm_annotation_genes, by = "symbol") %>% 
   filter(organism %in% c("Human", "Mouse")) 
 
+#Save
 dge_btm_process_genes %>% 
   saveRDS(file = here("tables", paste0(filename, "_dge_btm_process_genes.rds")))
 
+# Collapse genes to module-level means per organism and timepoint --------
 dge_btm_mean_process = dge_btm_process_genes %>% 
-  group_by(organism, timepoint, process) %>% 
+  group_by(organism, pathogen, timepoint, process) %>% 
   summarise(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc),
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
             n_genes = n(),
-            organism, pathogen,
-            group, subgroup) %>%
+            group = dplyr::first(group), 
+            subgroup = dplyr::first(subgroup)) %>%
   distinct() %>% 
   ungroup() %>% 
-  mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
+  mutate(condition = paste0(organism, "_", pathogen, "_", timepoint)) 
 
+# One-sample t-test per module vs zero, with BH correction --------
 pvals_vs_zero <- dge_btm_process_genes %>%
   group_by(organism, pathogen, timepoint, process) %>%
   filter(n() >= 2) %>% 
-  rstatix::t_test(mean_l2fc ~ 1, mu = 0) %>%     # testa média contra zero
-  adjust_pvalue(method = "BH") %>%      # corrige FDR
+  rstatix::t_test(mean_l2fc ~ 1, mu = 0) %>%
+  adjust_pvalue(method = "BH") %>%
   add_significance()
 
+# Diagnostic: modules with fewer than 2 genes (excluded from the test)
 dge_btm_process_genes %>%
   dplyr::count(organism, pathogen, timepoint, process) %>%
   filter(n < 2)
 
+# Join module means with their significance tests --------
 dge_btm_mean_process <- dge_btm_mean_process %>%
   left_join(
     pvals_vs_zero %>% 
       select(organism, pathogen, timepoint, process, p, p_adjust = p.adj),
     by = c("organism", "pathogen", "timepoint", "process")
   )  
-  
 
-#Print
+#Save
 dge_btm_mean_process %>% 
   saveRDS(file = here("tables", paste0(filename, "_dge_btm_mean_process.rds")))
 ```
 
 ##### GSEA
 
+Run Gene Set Enrichment Analysis on the Engerix B DGE results using the BTM gene sets with the same composite rank metric as the Fluad analysis. Merge the GSEA output with the module-level mean log2FC table.
+
 ```{r}
-#Run GSEA for DGE outputs-----
-#Human ImmuneGO/BTMs
+# Prepare term-to-gene mapping for GSEA --------
 term2gene = btm_annotation_genes %>% 
   select(process, genes = symbol)
 
-#Clean table for GSEA standard
+# Build ranked gene list --------
+# Use the same composite metric: log2FC * -log(adj_p_val)
 df_genes2GSEA <- all_degs_human_mouse %>% 
   distinct() %>% 
   select(organism, pathogen, timepoint, 
@@ -450,21 +469,20 @@ df_genes2GSEA <- all_degs_human_mouse %>%
           log2fold_change_logp = log2fold_change * -log(adj_p_val)) %>% 
   select(condition, genes, rank = log2fold_change_logp)
 
-#Run multiple GSEA and unite means
+# Run GSEA across all conditions --------
 gsea_btm_output = autoGSEA(df = df_genes2GSEA,
          TERM2GENE = term2gene,
          geneset_name = "BTMs")
 
-
+# Clean GSEA output and merge with module-level means --------
 gsea_btm_results = gsea_btm_output$gsea %>% 
   as.data.frame() %>% 
   clean_names() %>% 
   rename(process = id) %>%
-  #Unite means and GSEA
+  filter(!is.na(process)) %>% 
   full_join(dge_btm_mean_process %>% 
               rename(p_adjust_mean = p_adjust), by = join_by("condition", "process"))
-  
-  
+
 #Save
 gsea_btm_results %>% 
     saveRDS(here("tables", paste0(filename, "_gsea_btm_results.rds")))
@@ -575,12 +593,15 @@ dge_btm_process_distribution = dge_btm_process_genes_matched %>%
        fill = "Organism",
        title = "Mouse vs Human, BTMs genes, mean Log2FC") 
 
+#Print
 dge_btm_process_distribution 
 
-dge_btm_process_distribution %>% 
-  ggsave(filename = here("Figures", paste0(filename, "_dge_btm_process_distribution.png")),
-         height = 12, 
-         width = 10)
+
+#Save
+# dge_btm_process_distribution %>% 
+#   ggsave(filename = here("Figures", paste0(filename, "_dge_btm_process_distribution.png")),
+#          height = 12, 
+#          width = 10)
 
 
 ```
@@ -621,13 +642,12 @@ dge_hallmarks_process_genes %>%
   saveRDS(file = here("tables", paste0(filename, "_dge_hallmarks_process_genes.rds")))
 
 dge_hallmarks_mean_process = dge_hallmarks_process_genes %>% 
-  group_by(organism, timepoint, process) %>% 
+  group_by(organism, pathogen, timepoint, process) %>% 
   summarise(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc),
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
-            n_genes = n(),
-            organism, pathogen) %>%
+            n_genes = n()) %>%
   distinct() %>% 
   ungroup() %>% 
   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
@@ -838,14 +858,14 @@ dge_btm_process_genes %>%
   saveRDS(file = here("tables", paste0(filename, "_dge_btm_process_genes.rds")))
 
 dge_btm_mean_process = dge_btm_process_genes %>% 
-  group_by(organism, timepoint, process) %>% 
+  group_by(organism, pathogen, timepoint, process) %>% 
   summarise(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc), 
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
             n_genes = n(),
-            organism, pathogen,
-            group, subgroup) %>%
+            group = dplyr::first(group), 
+            subgroup = dplyr::first(subgroup)) %>%
   distinct() %>% 
   ungroup() %>% 
   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
@@ -948,13 +968,12 @@ dge_hallmarks_process_genes %>%
   saveRDS(file = here("tables", paste0(filename, "_dge_hallmarks_process_genes.rds")))
 
 dge_hallmarks_mean_process = dge_hallmarks_process_genes %>% 
-  group_by(organism, timepoint, process) %>% 
+  group_by(organism, pathogen, timepoint, process) %>% 
   summarise(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc),
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
-            n_genes = n(),
-            organism, pathogen) %>%
+            n_genes = n()) %>%
   distinct() %>% 
   ungroup() %>% 
   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
@@ -995,8 +1014,11 @@ term2gene = msigdbr_grouped  %>%
 df_genes2GSEA <- all_degs_human_mouse %>% 
   distinct() %>% 
   select(organism, pathogen, timepoint, 
-         genes = human_symbol, log2fold_change = mean_l2fc, adj_p_val)  %>% 
-  filter(!is.na(genes), !is.na(log2fold_change)) %>%
+         genes = human_symbol, 
+         log2fold_change = mean_l2fc, 
+         adj_p_val)  %>% 
+  filter(!is.na(genes), 
+         !is.na(log2fold_change)) %>%
    mutate(condition = paste0(organism,"_", pathogen, "_", timepoint),
           log2fold_change_logp = log2fold_change * -log(adj_p_val)) %>% 
   select(condition, genes, rank = log2fold_change_logp)
@@ -1063,14 +1085,14 @@ dge_btm_process_genes %>%
   saveRDS(file = here("tables", paste0(filename, "_dge_btm_process_genes.rds")))
 
 dge_btm_mean_process = dge_btm_process_genes %>% 
-  group_by(organism, timepoint, process) %>% 
+  group_by(organism, pathogen, timepoint, process) %>% 
   summarise(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc),
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
             n_genes = n(),
-            organism, pathogen,
-            group, subgroup) %>%
+            group = dplyr::first(group), 
+            subgroup = dplyr::first(subgroup)) %>%
   distinct() %>% 
   ungroup() %>% 
   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
@@ -1153,9 +1175,7 @@ filename = "ecoli_infection_human_mouse"
 annotation_conditions = all_degs_human_mouse %>% 
   select(condition, timepoint, model = organism) %>% 
   distinct()
-```
 
-```{r fig.width=10, fig.height= 8}
 # Import Hallmarks -------
 
 #Get annotated processes
@@ -1174,13 +1194,12 @@ dge_hallmarks_process_genes %>%
   saveRDS(file = here("tables", paste0(filename, "_dge_hallmarks_process_genes.rds")))
 
 dge_hallmarks_mean_process = dge_hallmarks_process_genes %>% 
-  group_by(organism, timepoint, process) %>% 
+  group_by(organism, pathogen, timepoint, process) %>% 
   summarise(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc),
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
-            n_genes = n(),
-            organism, pathogen) %>%
+            n_genes = n()) %>%
   distinct() %>% 
   ungroup() %>% 
   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
@@ -1289,14 +1308,14 @@ dge_btm_process_genes %>%
   saveRDS(file = here("tables", paste0(filename, "_dge_btm_process_genes.rds")))
 
 dge_btm_mean_process = dge_btm_process_genes %>% 
-  group_by(organism, timepoint, process) %>% 
+  group_by(organism, pathogen, timepoint, process) %>% 
   summarise(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc), 
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
             n_genes = n(),
-            organism, pathogen,
-            group, subgroup) %>%
+            group = dplyr::first(group), 
+            subgroup = dplyr::first(subgroup)) %>%
   distinct() %>% 
   ungroup() %>% 
   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
@@ -1402,13 +1421,12 @@ dge_hallmarks_process_genes %>%
   saveRDS(file = here("tables", paste0(filename, "_dge_hallmarks_process_genes.rds")))
 
 dge_hallmarks_mean_process = dge_hallmarks_process_genes %>% 
-  group_by(organism, timepoint, process) %>% 
+  group_by(organism, pathogen, timepoint, process) %>% 
   summarise(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc),
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
-            n_genes = n(),
-            organism, pathogen) %>%
+            n_genes = n()) %>%
   distinct() %>% 
   ungroup() %>% 
   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
@@ -1517,14 +1535,14 @@ dge_btm_process_genes %>%
   saveRDS(file = here("tables", paste0(filename, "_dge_btm_process_genes.rds")))
 
 dge_btm_mean_process = dge_btm_process_genes %>% 
-  group_by(organism, timepoint, process) %>% 
+  group_by(organism, pathogen, timepoint, process) %>% 
   summarise(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc), 
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
             n_genes = n(),
-            organism, pathogen,
-            group, subgroup) %>%
+            group = dplyr::first(group), 
+            subgroup = dplyr::first(subgroup)) %>%
   distinct() %>% 
   ungroup() %>% 
   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
@@ -1632,13 +1650,12 @@ dge_hallmarks_process_genes %>%
   saveRDS(file = here("tables", paste0(filename, "_dge_hallmarks_process_genes.rds")))
 
 dge_hallmarks_mean_process = dge_hallmarks_process_genes %>% 
-  group_by(organism, timepoint, process) %>% 
+  group_by(organism, pathogen, timepoint, process) %>% 
   summarise(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc),
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
-            n_genes = n(),
-            organism, pathogen) %>%
+            n_genes = n()) %>%
   distinct() %>% 
   ungroup() %>% 
   mutate(condition = paste0(organism,"_", pathogen, "_", timepoint)) 
@@ -1679,7 +1696,9 @@ term2gene = msigdbr_grouped  %>%
 df_genes2GSEA <- all_degs_human_mouse %>% 
   distinct() %>% 
   select(organism, pathogen, timepoint, 
-         genes = human_symbol, log2fold_change = mean_l2fc, adj_p_val)  %>% 
+         genes = human_symbol, 
+         log2fold_change = mean_l2fc, 
+         adj_p_val)  %>% 
   filter(!is.na(genes), !is.na(log2fold_change)) %>%
    mutate(condition = paste0(organism,"_", pathogen, "_", timepoint),
           log2fold_change_logp = log2fold_change * -log(adj_p_val)) %>% 
