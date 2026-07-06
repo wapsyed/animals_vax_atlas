@@ -393,8 +393,7 @@ all_degs_mouse = all_contrasts_degs %>%
          organism = "Mouse") %>% 
   select(condition, everything()) %>% 
   clean_names() %>% 
-  select(condition, symbol, mean = log_fc, lower = ci_l, upper = ci_r, ave_expr,
-         everything())
+  select(condition, human_symbol = symbol, mean_l2fc = log_fc, ci_lower = ci_l, ci_upper = ci_r, ave_expr,  everything())
 
 all_degs_mouse %>% 
   group_by(condition) %>%
@@ -912,12 +911,6 @@ set.seed(42) # Locked seed for exact workflow reproducibility
 sub_meta <- draw_flexible_subset(unique_participants, meta_df, target_n = 5)
 sub_expr <- expr_matrix[, sub_meta$sample_id]
 
-# ---- 4. Sanity Check Dimensions (Diagnostic Prints) ----
-cat("=== FLEXIBLE DOWNSAMPLING SANITY DIAGNOSTIC ===\n")
-cat("Number of unique individuals drawn:", length(unique(sub_meta$participant_id)), "\n")
-cat("Total combined samples (Including missing data entries):", nrow(sub_meta), "\n")
-cat("Sub-expression matrix dimensions (Genes x Samples):", dim(sub_expr)[1], "x", dim(sub_expr)[2], "\n\n")
-
 # ---- 5. Resilient Linear Modeling via Limma ----
 
 # Recompute design matrix (limma dynamically handles missing rows per factor levels)
@@ -1027,7 +1020,7 @@ draw_flexible_subset <- function(participants_list, metadata, target_n = 5) {
 }
 
 # ---- 3. Run Multi-Iteration Simulation Loop ----
-n_iterations <- 20 
+n_iterations <- 200 
 mouse_n <- 5       
 
 set.seed(123) # Lock global seed for absolute drawing reproducibility
@@ -1111,7 +1104,7 @@ fluad_human_subsampled_degs <- df_global_runs %>%
                select(condition, timepoint, vaccine, sample_type) %>% 
                distinct(), by = "condition") %>% 
   mutate(organism = "Human") %>%
-  select(condition, human_symbol = symbol, mean_l2fc, ci_lower, ci_upper, ave_expr, p_value, adj_p_val, pct_iterations_significant, timepoint, vaccine, sample_type, organism)
+  rename(human_symbol = symbol)
 
 # ---- 5. Save Aggregated Output Matrix File ----
 fluad_human_subsampled_degs %>% saveRDS(file = here("tables", "influenza_fluad_human_dge_subsampled_degs.rds"))
@@ -1503,7 +1496,16 @@ human_fluad_log2fc_paired_unpaired_ttest %>%
 ## Combine datasets
 
 ```{r}
-#Sample log2fc
+#Unite DEGs ========================================
+all_degs_human = readRDS(file = here("tables", "influenza_fluad_human_dge_subsampled_degs.rds")) 
+all_degs_mouse = readRDS(file = here("tables", "influenza_fluad_mouse_dge_limma_degs.rds")) 
+
+all_degs_human_mouse = all_degs_mouse %>% 
+  bind_rows(all_degs_human) 
+
+all_degs_human_mouse %>% saveRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds"))
+
+#Sample log2fc ================================
 human_fluad_log2fc_filtered_sample_long = readRDS(here("tables", "influenza_fluad_human_log2fc_sample_long.rds"))
 mouse_fluad_log2fc_filtered_sample_long = readRDS(here("tables", "influenza_fluad_mouse_log2fc_sample_clean_long.rds"))
 
@@ -1515,7 +1517,7 @@ human_mouse_log2fc_samples = mouse_fluad_log2fc_filtered_sample_long %>%
 human_mouse_log2fc_samples %>% 
   saveRDS(file = here("tables", "influenza_fluad_human_mouse_log2fc_samples.rds"))
 
-#Unite metadata
+#Unite metadata ================================
 fluad_human_metadata = readRDS(file = here("tables", "influenza_fluad_human_metadata_clean.rds"))
 fluad_mouse_metadata = readRDS(here("tables", "influenza_fluad_mouse_metadata.rds"))
 
@@ -1532,16 +1534,7 @@ mutate(pathogen = "Influenza", vaccine = "Fluad", adjuvant = "MF59", tissue = "B
 fluad_human_mouse_metadata %>% 
   saveRDS(here("tables", "fluad_human_mouse_metadata.rds"))
 
-#Unite DEGs
-all_degs_human = readRDS(file = here("tables", "influenza_fluad_human_dge_subsampled_degs.rds")) 
-all_degs_mouse = readRDS(file = here("tables", "influenza_fluad_mouse_dge_limma_degs.rds")) 
 
-all_degs_human_mouse = all_degs_mouse %>% 
-  bind_rows(all_degs_human) %>% 
-  select(condition:ave_expr, t:organism) %>% 
-  rename(human_symbol = symbol)
-
-all_degs_human_mouse %>% saveRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds"))
 ```
 
 
@@ -2321,7 +2314,7 @@ draw_flexible_subset <- function(participants_list, metadata, target_n = 5) {
 }
 
 ## 3. Run Multi-Iteration Simulation Loop
-n_iterations <- 20 
+n_iterations <- 200 
 cohort_n <- 5       
 
 set.seed(123) 
@@ -2796,6 +2789,21 @@ beep()
 
 ## Combine datasets
 ```{r}
+# Unite DEGs =================
+all_degs_human = readRDS(file = here("tables", "hepatitisb_engerixb_human_dge_subsampled_degs.rds"))
+
+all_degs_mouse = readRDS(file = here("tables", "hepatitisb_engerixb_mouse_dge_limma_degs.rds")) %>% 
+  mutate(timepoint = str_remove(condition, "Engerix_") %>% str_remove("_PBMC"))
+
+all_degs_human_mouse = all_degs_human %>% 
+  bind_rows(all_degs_mouse) %>% 
+  select(condition, timepoint, human_symbol, everything()) %>% 
+  mutate(pathogen = "Hepatitis B", vaccine = "EngerixB",
+         timepoint = as.numeric(timepoint),
+         timepoint = if_else(organism == "Mouse", as.numeric(timepoint)/24, timepoint))
+
+all_degs_human_mouse %>% saveRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds"))
+
 #Unite Mouse and Human datasets samples ===============
 human_mouse_log2fc_samples = 
 #Mouse
@@ -2837,20 +2845,7 @@ human_mouse_engerix_metadata %>%
 
 
 
-# Unite DEGs =================
-all_degs_human = readRDS(file = here("tables", "hepatitisb_engerixb_human_dge_subsampled_degs.rds"))
 
-all_degs_mouse = readRDS(file = here("tables", "hepatitisb_engerixb_mouse_dge_limma_degs.rds")) %>% 
-  mutate(timepoint = str_remove(condition, "Engerix_") %>% str_remove("_PBMC"))
-
-all_degs_human_mouse = all_degs_human %>% 
-  bind_rows(all_degs_mouse) %>% 
-  select(condition, timepoint, human_symbol, everything()) %>% 
-  mutate(pathogen = "Hepatitis B", vaccine = "EngerixB",
-         timepoint = as.numeric(timepoint),
-         timepoint = if_else(organism == "Mouse", as.numeric(timepoint)/24, timepoint))
-
-all_degs_human_mouse %>% saveRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds"))
 ```
 
 
@@ -3932,7 +3927,7 @@ draw_flexible_subset <- function(metadata, target_n = 10) {
 
 ## 3. Multi-Iteration Simulation Loop
 
-n_iterations <- 20 
+n_iterations <- 200 
 cohort_n <- 10      
 
 set.seed(123) 
@@ -4268,8 +4263,7 @@ all_degs_mouse = read_rds(here("tables", "saureus_infection_mouse_dge_limma_degs
 all_degs_human = read_rds(here("tables", "saureus_infection_human_dge_subsampled_degs.rds")) 
 
 all_degs_human_mouse = all_degs_mouse %>% 
-  bind_rows(all_degs_human) %>% 
-  select(condition, timepoint, human_symbol, mean_l2fc:organism) 
+  bind_rows(all_degs_human) 
 
 all_degs_human_mouse %>% saveRDS(here("tables", "saureus_infection_human_mouse_dge_limma_degs.rds"))
 
@@ -5354,7 +5348,7 @@ draw_stratified_samples_ecoli <- function(metadata, n_per_status = 5) {
 
 ## 3. Multi-Iteration Simulation Loop
 
-n_iterations <- 20 
+n_iterations <- 200 
 samples_per_group <- 5  # 5 control/healthy + 5 infected = 10 total samples per iteration
 
 set.seed(123) 
@@ -5417,12 +5411,13 @@ ecoli_human_subsampled_degs <- df_global_runs %>%
     pct_iterations_significant = mean(adj_p_val <= 0.05) * 100,
     .groups = "drop"
   ) %>%
-  dplyr::select(comparison, everything()) %>% 
   dplyr::mutate(condition = case_when(comparison == "statusinfected"	~ "Ecoli_24h",
                                T~comparison),
          organism = "Human",
-        timepoint = str_remove(condition, "Ecoli_") %>% str_remove("h")) %>% 
-  dplyr::select(condition, human_symbol = symbol, everything()) %>% 
+        timepoint = str_remove(condition, "Ecoli_") %>% 
+          str_remove("h")
+        ) %>% 
+  dplyr::rename(human_symbol = symbol) %>% 
   clean_names() 
 
 # Save
@@ -5675,23 +5670,22 @@ log2fc_unpaired_ttest %>%
 
 ```{r}
 
-#Merge DGE results
+#Merge DGE results ===========
 all_degs_mouse = read_rds(here("tables", "ecoli_infection_mouse_dge_limma_degs.rds"))
 all_degs_human = read_rds(here("tables", "ecoli_infection_human_dge_subsampled_degs.rds"))
-mouse_log2fc_sample = readRDS(here("tables", "ecoli_infection_mouse_log2fc_sample_clean_long.rds")) 
-mouse_exprs = readRDS(file = here("tables", "ecoli_infection_mouse_exprs_hgnc_symbol_long.rds"))
-human_log2fc_sample = readRDS(here("tables", "ecoli_infection_human_log2fc_sample_clean_long.rds")) 
-human_exprs = readRDS(file = here("tables", "ecoli_infection_human_exprs_hgnc_symbol.rds"))
 
-#Merge DGE results ===========
 all_degs_human_mouse = all_degs_mouse %>% 
-  bind_rows(all_degs_human) %>% 
-  select(condition, timepoint, human_symbol, mean_l2fc:organism)
+  bind_rows(all_degs_human)
 
 #Save
 all_degs_human_mouse %>% saveRDS(here("tables", "ecoli_infection_human_mouse_dge_limma_degs.rds"))
 
 #Merge sample log2fc =============
+mouse_log2fc_sample = readRDS(here("tables", "ecoli_infection_mouse_log2fc_sample_clean_long.rds")) 
+mouse_exprs = readRDS(file = here("tables", "ecoli_infection_mouse_exprs_hgnc_symbol_long.rds"))
+human_log2fc_sample = readRDS(here("tables", "ecoli_infection_human_log2fc_sample_clean_long.rds")) 
+human_exprs = readRDS(file = here("tables", "ecoli_infection_human_exprs_hgnc_symbol.rds"))
+
 mouse_log2fc_sample_symbol = mouse_log2fc_sample %>% 
   inner_join(mouse_exprs %>% 
                select(human_symbol, probe_id = probe),
@@ -7243,7 +7237,7 @@ draw_stratified_samples <- function(metadata, n_per_condition = 5) {
 # ==============================================================================
 # 3. RUN MULTI-ITERATION SIMULATION LOOP (DIRECT SAMPLE ESTIMATION)
 # ==============================================================================
-n_iterations <- 20 
+n_iterations <- 200 
 samples_per_group <- 5  # 5 control + (5 samples * 4 timepoints) = 25 total samples per iteration
 
 set.seed(123) 
@@ -7312,8 +7306,7 @@ burn_human_subsampled_degs <- df_global_runs %>%
     .groups = "drop"
   ) %>%
   rename(human_symbol = symbol, condition = comparison) %>%
-  mutate(organism = "Human") %>%
-  select(condition, human_symbol, mean_l2fc, ci_lower, ci_upper, ave_expr, p_value, adj_p_val, pct_iterations_significant, organism)
+  mutate(organism = "Human") 
 
 # Save Downsampled DEGs Output Object
 burn_human_subsampled_degs %>% saveRDS(file = here("tables", "burn_human_dge_subsampled_degs.rds"))
@@ -7698,7 +7691,7 @@ draw_stratified_samples <- function(metadata, n_per_condition = 5) {
 # ==============================================================================
 # 3. RUN MULTI-ITERATION SIMULATION LOOP (DIRECT SAMPLE ESTIMATION)
 # ==============================================================================
-n_iterations <- 20 
+n_iterations <- 200 
 samples_per_group <- 5  # 5 control + (5 samples * 4 timepoints) = 25 total samples per iteration
 
 set.seed(123) 
@@ -7762,8 +7755,7 @@ trauma_human_subsampled_degs <- df_global_runs %>%
     .groups = "drop"
   ) %>%
   rename(human_symbol = symbol, condition = comparison) %>%
-  mutate(organism = "Human") %>%
-  select(condition, human_symbol, mean_l2fc, ci_lower, ci_upper, ave_expr, p_value, adj_p_val, pct_iterations_significant, organism)
+  mutate(organism = "Human")
 
 # Save Downsampled DEGs Object
 trauma_human_subsampled_degs %>% saveRDS(file = here("tables", "trauma_human_dge_subsampled_degs.rds"))
@@ -7943,6 +7935,52 @@ log2fc_unpaired_ttest %>%
 log2fc_unpaired_ttest %>% 
   filter(padj <= 0.05) %>% 
   dplyr::count(timepoints_new)
+
+```
+
+
+## Combine datasets
+
+```{r}
+
+###### DEGs
+#Burn
+all_degs_human_burn = readRDS(here("tables", "burn_human_dge_subsampled_degs.rds")) %>% 
+  mutate(pathogen = "Burn", treatment = "Burn",
+         timepoint = str_remove(condition, "Burn_") %>% 
+           str_replace("Early", "Early hours") %>% 
+           str_replace("D", "Day "))
+all_degs_mouse_burn = readRDS(here("tables", "burn_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Burn", treatment = "Burn",
+         timepoint = str_remove(condition, "Burn_") %>% 
+           str_replace("D", "Day "))
+
+all_degs_human_mouse_burn = bind_rows(all_degs_human_burn,
+                                      all_degs_mouse_burn)
+
+all_degs_human_mouse_burn %>% 
+  saveRDS(file = here("tables", "burn_human_mouse_dge_limma_degs.rds"))
+
+
+#Trauma
+all_degs_human_trauma = readRDS(here("tables", "trauma_human_dge_subsampled_degs.rds")) %>% 
+  mutate(pathogen = "Trauma", treatment = "Trauma",
+         timepoint = str_remove(condition, "Trauma_") %>% 
+           str_replace("Early", "Early hours") %>% 
+           str_replace("D", "Day "))
+
+all_degs_mouse_trauma = readRDS(here("tables", "trauma_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Trauma", treatment = "Trauma",
+         timepoint = str_remove(condition, "Trauma_") %>% 
+           str_replace("D", "Day "))
+
+all_degs_human_mouse_trauma = bind_rows(all_degs_human_trauma,
+                                      all_degs_mouse_trauma)
+
+all_degs_human_mouse_trauma %>% 
+  saveRDS(file = here("tables", "trauma_human_mouse_dge_limma_degs.rds"))
+
+
 
 ```
 
@@ -8521,8 +8559,7 @@ all_human_mouse_samples_log2fc %>%
 #Import
 #Fluad
 all_degs_human_mouse_fluad = readRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds")) %>% 
-  mutate(pathogen = "Influenza", treatment = "Fluad") %>% 
-  rename(mean_l2fc = mean, ci_lower = lower, ci_upper = upper)
+  mutate(pathogen = "Influenza", treatment = "Fluad") 
 
 #Engerix B
 all_degs_human_mouse_engerixb = readRDS(here("tables", "hepatitisb_engerixb_human_mouse_dge_limma_degs.rds")) %>% 
@@ -8538,38 +8575,16 @@ all_degs_human_mouse_ecoli = readRDS(here("tables", "ecoli_infection_human_mouse
   mutate(pathogen = "Escherichia coli", treatment = "Infection")
 
 #Burn
-all_degs_human_burn = readRDS(here("tables", "burn_human_dge_subsampled_degs.rds")) %>% 
-  mutate(pathogen = "Burn", treatment = "Burn",
-         timepoint = str_remove(condition, "Burn_") %>% 
-           str_replace("Early", "Early hours") %>% 
-           str_replace("D", "Day "))
-all_degs_mouse_burn = readRDS(here("tables", "burn_mouse_dge_limma_degs.rds")) %>% 
-  mutate(pathogen = "Burn", treatment = "Burn",
-         timepoint = str_remove(condition, "Burn_") %>% 
-           str_replace("D", "Day "))
-#Trauma
-all_degs_human_trauma = readRDS(here("tables", "trauma_human_dge_subsampled_degs.rds")) %>% 
-  mutate(pathogen = "Trauma", treatment = "Trauma",
-         timepoint = str_remove(condition, "Trauma_") %>% 
-           str_replace("Early", "Early hours") %>% 
-           str_replace("D", "Day "))
-
-all_degs_mouse_trauma = readRDS(here("tables", "trauma_mouse_dge_limma_degs.rds")) %>% 
-  mutate(pathogen = "Trauma", treatment = "Trauma",
-         timepoint = str_remove(condition, "Trauma_") %>% 
-           str_replace("D", "Day "))
+all_degs_human_mouse_burn = readRDS(here("tables", "burn_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Burn", treatment = "Injury")
 
 #Unite
 all_degs_human_mouse = bind_rows(all_degs_human_mouse_saureus, 
                                  all_degs_human_mouse_ecoli, 
                                  all_degs_human_mouse_fluad, 
                                  all_degs_human_mouse_engerixb,
-                                 #Burn
-                                 all_degs_human_burn, 
-                                 all_degs_mouse_burn, 
-                                 #Trauma
-                                 all_degs_human_trauma, 
-                                 all_degs_mouse_trauma
+                                 all_degs_human_mouse_burn, 
+                                 all_degs_human_mouse_trauma
                                  ) %>% 
   select(organism, pathogen, treatment, timepoint, condition, human_symbol, everything()) %>% 
   mutate(timepoint = if_else(pathogen == "Staphylococcus aureus" & timepoint == "1", "24", timepoint)) %>% 
