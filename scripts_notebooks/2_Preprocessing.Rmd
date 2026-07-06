@@ -4,8 +4,10 @@ output: html_document
 ---
 
 # Required
+
+Load the `here` package and source the project-wide library and utility script.
+
 ```{r}
-# install.packages("here") if needed
 install.packages("here")
 library(here)
 source(here("scripts_notebooks", "required.R"))
@@ -20,17 +22,16 @@ source(here("scripts_notebooks", "required.R"))
 
 ## Mouse
 ### Download dataset
+
+Download the Fluad/MF59 mouse dataset (GSE120661) from GEO. Extract metadata from the ExpressionSet, save it as a CSV, then extract and save the raw expression matrix.
+
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
-#Mouse-------
-#Download datasets
-
-#GSE120661 ----
-
-#Metadata 
+# Download the GEO ExpressionSet --------
 filename = "GSE120661"
 GSE120661 <- getGEO("GSE120661", GSEMatrix = TRUE) 
 eset <- GSE120661[[1]]
 
+# Clean and save metadata --------
 GSE120661_metadata = eset %>% 
   pData() %>% 
   dplyr::select( 
@@ -49,9 +50,10 @@ GSE120661_metadata = eset %>%
 #Save
 write_csv(GSE120661_metadata, file = here("tables", "influenza_hepatitisb_GSE120661_metadata.csv"))
 
-#Counts matrix from Expression set
+# Extract and save expression matrix --------
 eset <- exprs(eset)
 
+#Save
 eset %>% 
   as.data.frame() %>% 
   saveRDS(here("tables", "influenza_hepatitisb_GSE120661_exprs.rds"))
@@ -59,19 +61,21 @@ eset %>%
 ```
 
 
+Inspect the distribution of expression values for one representative sample (GSM3407136) to confirm the data are on the log2 scale.
+
 ```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
-#Import
+# Load the expression matrix --------
 GSE120661_exprs = readRDS(here("tables", "influenza_hepatitisb_GSE120661_exprs.rds"))
 GSE120661_counts_not_normalized_log2 = readRDS(here("tables","influenza_hepatitisb_GSE120661_exprs.rds"))
 
-#Check distribution
+# Pivot to long format --------
 GSE120661_exprs_distribution = GSE120661_exprs %>% 
   rownames_to_column("probes") %>% 
   pivot_longer(cols = -probes,
                names_to = "sample_id",
                values_to = "value") 
 
-#Plot
+# Plot expression histogram for the first sample --------
 GSE120661_exprs_distribution %>% 
   filter(sample_id == "GSM3407136") %>% 
   ggplot() +
@@ -81,11 +85,14 @@ GSE120661_exprs_distribution %>%
 
 
 Get metadata
+
+Reload the metadata, clean factor levels (timepoint as integer, treatment releveled with saline as reference), and create a unified condition column.
+
 ```{r}
-#Import
+# Load raw metadata --------
 GSE120661_metadata = read_csv(here("tables", "influenza_hepatitisb_GSE120661_metadata.csv")) 
 
-#Clean
+# Clean factor levels --------
 GSE120661_metadata = GSE120661_metadata %>% 
   mutate(timepoint = as.integer(timepoint) %>% 
            as.character() %>% 
@@ -99,14 +106,18 @@ GSE120661_metadata %>% saveRDS(here("tables", "influenza_fluad_mouse_metadata.rd
 ```
 
 Import
+
+Filter the mouse metadata to Fluad-treated PBMC samples only, recode timepoints from hours to days, select the corresponding expression columns, and save both the filtered metadata and expression matrix.
+
 ```{r}
-#Import
+# Load metadata and expression --------
 GSE120661_metadata = readRDS(here("tables", "influenza_fluad_mouse_metadata.rds"))
 GSE120661_exprs = read_rds(here("tables", "influenza_hepatitisb_GSE120661_exprs.rds"))
 
-#Check length
+# Check probe count --------
 GSE120661_exprs %>% rownames() %>% length()
 
+# Filter to Fluad PBMC samples, recode timepoint (hours to days) --------
 mouse_fluad_metadata = GSE120661_metadata %>% 
   filter(treatment == "Fluad",
          tissue == "PBMC") %>% 
@@ -119,30 +130,34 @@ mouse_fluad_metadata = GSE120661_metadata %>%
 mouse_fluad_metadata %>% 
   saveRDS(here("tables", "influenza_fluad_mouse_metadata.rds"))
 
-#Select only PBMC samples counts
+# Subset expression matrix to selected samples --------
 GSE120661_exprs = GSE120661_exprs %>% 
   as.data.frame() %>% 
   select(c(mouse_fluad_metadata$geo_sample)) %>% 
   as.matrix()
 
+#Save
 GSE120661_exprs %>% 
   as.data.frame() %>% 
   saveRDS(file = here("tables", "influenza_fluad_mouse_exprs.rds"))
 ```
 
 ### Annotate genes
+
+Map Agilent probe IDs to human gene symbols using Ensembl BioMart and the FIT.mouse2man orthology lookup table.
+
 ```{r}
-## Set up biomart
+# Set up Ensembl BioMart for mouse --------
 ensembl_mart <- useMart("ensembl")
 ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
 
-## Get the MGI symbol
+# Get probe IDs from the expression matrix --------
 gene_id <- GSE120661_counts_not_normalized_log2 %>% rownames()
 
-#Get other annotations
+# List available attributes --------
 listAttributes(ensembl_mart)
 
-#Annotate
+# Retrieve annotations for all probes --------
 annot <- getBM(
   attributes = c("agilent_sureprint_g3_ge_8x60k", #Agilent microarray data (design ID 028005, retrieved from GEO)
                  "ensembl_gene_id",
@@ -153,16 +168,13 @@ annot <- getBM(
   values = gene_id,
   mart = ensembl_mart)
 
-#Get lookup table from FIT
-#Install model package
-# library(devtools)
-# devtools::install_github('shenorrLabTRDF/FIT.mouse2man')
+# Load mouse-to-human orthology lookup table --------
 library(FIT.mouse2man)
 HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez %>% 
   clean_names() %>% 
   rename(mouse_entrez = mouse_ortholog)
 
-#Get annotations for each probe 
+# Summarise expression per probe, collapse to one row per gene --------
 ### Filter probes with highest median expression
 mouse_fluad_log2summary = GSE120661_exprs %>% #20,845 probes
   as.data.frame() %>% 
@@ -176,36 +188,33 @@ mouse_fluad_log2summary = GSE120661_exprs %>% #20,845 probes
   inner_join(annot %>% 
               rename(probe = agilent_sureprint_g3_ge_8x60k), 
             by = "probe") %>%  #24.009 rows
-  #Filter ensembl id
+  # Collapse multiple probes per Ensembl ID (keep highest median) --------
   group_by(ensembl_gene_id) %>% 
   slice_max(median, n = 1) %>%
   ungroup() %>% 
   select(-ensembl_gene_id) %>% 
   distinct() %>% 
   
-  #Filter entrez id
+  # Collapse multiple Ensembl IDs per Entrez ID --------
   group_by(entrezgene_id) %>% 
   slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
   ungroup() %>% 
   rename(mouse_entrez = entrezgene_id) %>% 
   
-  #Filter hgnc symbol
+  # Join human orthologs, collapse to one row per HGNC symbol --------
   inner_join(HS_MM_Symbol_Entrez, by = c("mouse_entrez", "mgi_symbol")) %>% 
   group_by(hgnc_symbol) %>% 
   slice_max(median, n = 1)  %>% #14.396
   ungroup()
 
-#Filter out genes with multiple mgi_symbols
+# Remove HGNC symbols that map to multiple MGI symbols --------
 hgnc_symbol_dupes = mouse_fluad_log2summary %>% 
-  #filter ensembl id with multiple mgi_symbols
   get_dupes(hgnc_symbol)
 
 mouse_fluad_log2summary = mouse_fluad_log2summary %>% 
   filter(!hgnc_symbol %in% c(hgnc_symbol_dupes$hgnc_symbol %>% unique())) 
 
-#Modify expression matrix
-
-#Filtered probes
+# Build filtered expression matrix with human gene symbols --------
 mouse_fluad_log2_filtered_probes = GSE120661_exprs %>% 
   as.data.frame() %>% 
   rownames_to_column("probe") %>% 
@@ -225,17 +234,17 @@ mouse_fluad_log2_hgnc_symbol %>% get_dupes(human_symbol)
 mouse_fluad_log2_hgnc_symbol %>% 
   saveRDS(here("tables", "influenza_fluad_mouse_exprs_hgnc_symbol.rds"))
 ```
-
 Create expression set
+
+Reshape the annotated expression matrix to long format, compute log2 fold-change relative to day 0 for each participant and gene, and save in both long and wide formats.
+
 ```{r}
-#Import
+# Load annotation and metadata --------
 mouse_fluad_log2_hgnc_symbol = readRDS(here("tables", "influenza_fluad_mouse_exprs_hgnc_symbol.rds"))
 mouse_fluad_metadata = readRDS(here("tables", "influenza_fluad_mouse_metadata.rds")) 
 
-
-#Annotate
+# Pivot to long, add metadata, compute log2 fold-change vs day 0 --------
 mouse_fluad_log2fc_filtered_sample_long = mouse_fluad_log2_hgnc_symbol %>%
-  # rownames_to_column("human_symbol") %>% 
   pivot_longer(cols = -human_symbol,
                names_to = "geo_sample",
                values_to = "log2") %>% 
@@ -259,8 +268,7 @@ mouse_fluad_log2fc_filtered_sample_long = mouse_fluad_log2_hgnc_symbol %>%
 mouse_fluad_log2fc_filtered_sample_long %>% 
   saveRDS(here("tables", "influenza_fluad_mouse_log2fc_sample_clean_long.rds"))
 
-
-#Pivot wider
+# Pivot to wide format (participants as columns) --------
 mouse_fluad_log2fc_filtered_sample_wide = mouse_fluad_log2fc_filtered_sample_long %>% 
   select(-c(value:day0)) %>% 
   pivot_wider(names_from = "participant_id",
@@ -269,7 +277,6 @@ mouse_fluad_log2fc_filtered_sample_wide = mouse_fluad_log2fc_filtered_sample_lon
 beep()
 
 ```
-
 
 ### Differential gene expression
 ```{r}
