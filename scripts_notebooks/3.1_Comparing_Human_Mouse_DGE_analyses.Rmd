@@ -392,7 +392,7 @@ degs_human_mouse_overlap_lineplot %>%
 
 ### 2.1. Difference in means: Genes
 
-```{r}
+```{r fig.height=20, fig.width=20}
 #DEGs (matched)
 all_degs_human_mouse =
   readRDS(here("tables", "all_human_mouse_dge_limma_degs_matched.rds"))
@@ -406,17 +406,81 @@ all_degs_human_mouse %>%
   dplyr::count(timepoint, organism, treatment, pathogen) 
 
 #Pivot wider
-human_mouse_log2fc_avg_wide = all_degs_human_mouse %>% 
-  select(pathogen, organism, human_symbol, timepoint_comparison, mean_log2fc = mean_l2fc, p_adj = adj_p_val, tstatistic = t, bstatistic = b, ci_lower, ci_upper, sd, se) %>% 
-  pivot_wider(names_from = c("organism"),
-              values_from = c(mean_log2fc, sd, se, ci_lower, ci_upper, p_adj, tstatistic, bstatistic),
-              names_sep = "_",
-              values_fn = mean) %>% 
+human_mouse_log2fc_avg_wide <- all_degs_human_mouse %>% 
+  # 1. Isolate target variables for the cross-species matrix
+  select(
+    pathogen, organism, human_symbol, timepoint_comparison, 
+    mean_log2fc = mean_l2fc, p_adj = adj_p_val, 
+    tstatistic = t, bstatistic = b, 
+    ci_lower, ci_upper, se
+  ) %>% 
+  
+  # 2. Reshape from long to wide format, segregating Human and Mouse metrics
+  pivot_wider(
+    names_from  = c("organism"),
+    values_from = c(mean_log2fc, se, ci_lower, ci_upper, p_adj, tstatistic, bstatistic),
+    names_sep   = "_",
+    values_fn   = mean
+  ) %>% 
+  
+  # 3. Enforce consistent snake_case formatting
   clean_names() %>% 
+  
+  # 4. Filter for strict 1:1 ortholog pairs with complete expression profiles
   drop_na(mean_log2fc_human, mean_log2fc_mouse) %>% 
-  mutate(mean_log2fc_diff = mean_log2fc_human - mean_log2fc_mouse)
+  
+  # 5. Compute evolutionary divergence and volatility metrics
+  mutate(
+    # Cross-species effect size delta (Directional macroevolutionary divergence)
+    mean_log2fc_diff = mean_log2fc_human - mean_log2fc_mouse,
+    
+    # Intra-Species Volatility (Coefficient of Variation - CV)
+    # --------------------------------------------------------------------------
+    cv_human = sd_human / abs(mean_log2fc_human),
+    cv_mouse = sd_mouse / abs(mean_log2fc_mouse),
+    cv_mean  = (cv_human + cv_mouse) / 2, # Combined cross-species relative noise
+    
+    # Statistical Weights for Downstream Weighted Correlation
+    # Joint geometric weight based on downsampling iteration variance (SD^2)
+    weight_sd_inverse = 1 / (sd_human^2 + sd_mouse^2),
+    # Joint geometric weight based on native linear model standard error (SE^2)
+    weight_se_inverse = 1 / (se_human^2 + se_mouse^2)
+  )
+
+# #Correlation
+# # Compute inverse-variance weighted Pearson correlation grouped by pathogen and timepoint
+# cross_species_cor_grouped <- human_mouse_log2fc_avg_wide %>% 
+#   group_by(pathogen, timepoint_comparison) %>% 
+#   summarize(
+#     # [1,2] extracts the true correlation coefficient between X and Y from the matrix
+#     weighted_r = wtd.cors(
+#       x      = mean_log2fc_human, 
+#       y      = mean_log2fc_mouse, 
+#       weight = weight_se_inverse
+#     )[1,2],
+#     
+#     # Always keep track of the ortholog count per group for statistical tracking
+#     n_orthologs = n(),
+#     .groups = "drop"
+#   )
 
 human_mouse_log2fc_avg_wide %>% 
+  ggplot() +
+  aes(x = mean_log2fc_human, y = mean_log2fc_mouse, weight = weight_se_inverse) +
+  facet_wrap(~pathogen+timepoint_comparison, scales = "free") +
+  geom_point(aes(size = weight_se_inverse),
+             alpha = 0.4) + 
+  geom_smooth(method = "lm", color = "red", linetype = "dashed") +
+  labs(
+    x = "Human Median Log2FC",
+    y = "Mouse Median Log2FC",
+    title = "Weighted Evolutionary Expression Correlation",
+    subtitle = "Points sized and regression driven by downsampling replication certainty"
+  ) +
+  theme_vaxgo()
+
+
+human_mouse_log2fc_avg_wide 
   
 
 ```
