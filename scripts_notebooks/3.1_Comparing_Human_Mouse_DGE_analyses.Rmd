@@ -388,46 +388,54 @@ degs_human_mouse_overlap_lineplot %>%
 
 ## 2. Gene expression correlation analysis
 
-### 2.1. Difference in means: Genes
+### 2.1. Correlation: Genes, means, Overall
 
 ```{r fig.height=20, fig.width=20}
+#Import datasets ==============
 #DEGs (matched)
 all_degs_human_mouse =
   readRDS(here("tables", "all_human_mouse_dge_limma_degs_matched.rds"))
+#DEGs (unmatched)
 all_degs_human_mouse_unmatched =
   readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds"))
 
-#Functional modules
-btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
- 
+#Check
 all_degs_human_mouse %>% 
   dplyr::count(timepoint, organism, treatment, pathogen) 
 
-#Pivot wider
-human_mouse_log2fc_avg_wide <- all_degs_human_mouse %>% 
-  # 1. Isolate target variables for the cross-species matrix
-  select(
-    pathogen, organism, human_symbol, timepoint_comparison, 
-    mean_log2fc = mean_l2fc, p_adj = adj_p_val, 
-    tstatistic = t, bstatistic = b, 
-    ci_lower, ci_upper, se, sd
+#Functional modules
+btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+```
+
+
+```{r fig.height=20, fig.width=20}
+#===========================
+# Different timepoints, same species
+#===========================
+
+human_mouse_log2fc_avg_wide = all_degs_human_mouse_unmatched %>% 
+  #Subset human
+  filter(organism == "Human") %>% 
+  select(pathogen:human_symbol, mean_l2fc:sd, sd_sampling_stability) %>% 
+  rename(mean_log2fc = mean_l2fc, p_adj = adj_p_val, 
+    tstatistic = t, bstatistic = b) %>% 
+  rename_with(~ paste0(.x, "_human"), all_of(c("condition", "timepoint", "mean_log2fc", "ci_lower", "ci_upper", "ave_expr", "tstatistic", "p_value", "p_adj", "bstatistic", "se", "sd", "sd_sampling_stability"))) %>% 
+  inner_join(
+  #Subset mouse
+   all_degs_human_mouse_unmatched %>% 
+  #Subset human
+  filter(organism == "Mouse") %>% 
+  select(pathogen:human_symbol, mean_l2fc:sd, sd_sampling_stability) %>% 
+  rename(mean_log2fc = mean_l2fc, p_adj = adj_p_val, 
+    tstatistic = t, bstatistic = b) %>% 
+  rename_with(~ paste0(.x, "_mouse"), all_of(c("condition", "timepoint", "mean_log2fc", "ci_lower", "ci_upper", "ave_expr", "tstatistic", "p_value", "p_adj", "bstatistic", "se", "sd", "sd_sampling_stability"))),
+  
+  by = join_by("pathogen", "treatment", "human_symbol")
   ) %>% 
-  
-  # 2. Reshape from long to wide format, segregating Human and Mouse metrics
-  pivot_wider(
-    names_from  = c("organism"),
-    values_from = c(mean_log2fc, se, sd, ci_lower, ci_upper, p_adj, tstatistic, bstatistic),
-    names_sep   = "_",
-    values_fn   = mean
-  ) %>% 
-  
-  # 3. Enforce consistent snake_case formatting
-  clean_names() %>% 
-  
-  # 4. Filter for strict 1:1 ortholog pairs with complete expression profiles
+  # Filter for strict 1:1 ortholog pairs with complete expression profiles
   drop_na(mean_log2fc_human, mean_log2fc_mouse) %>% 
   
-  # 5. Compute evolutionary divergence and volatility metrics
+  # Compute expression divergence and volatility metrics
   mutate(
     # Cross-species effect size delta (Directional macroevolutionary divergence)
     mean_log2fc_diff = mean_log2fc_human - mean_log2fc_mouse,
@@ -447,24 +455,288 @@ human_mouse_log2fc_avg_wide <- all_degs_human_mouse %>%
     se_combined = sqrt(se_human^2 + se_mouse^2)
   ) %>% 
   #Factor reordering
-mutate(pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli", "Burn", "Trauma")) %>% 
-separate(timepoint_comparison, into = c("timepoint_mouse", "timepoint_human"), sep = "-", remove = F) %>% 
+    mutate(pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli", "Burn", "Trauma"),
+       timepoint_comparison = paste0(timepoint_mouse,  sep = "-", timepoint_human)) %>% 
   filter(!c(pathogen == "Staphylococcus aureus" & timepoint_mouse == "24h")) %>%
-  mutate(timepoint = as.character(timepoint_mouse),
+  mutate(timepoint_mouse = as.character(timepoint_mouse),
+         timepoint_mouse = fct_relevel(timepoint_mouse, c("Early", "Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         timepoint_human = as.character(timepoint_human),
+         timepoint_human = fct_relevel(timepoint_human, c("Early", "Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
          treatment = case_when(pathogen %in% c("Hepatitis B", "Influenza") ~ "Vaccination",
                                pathogen %in% c( "Staphylococcus aureus", "Escherichia coli") ~ "Infection",
                                pathogen %in% c( "Burn", "Trauma") ~ "Injury",
                                T ~ pathogen),
-         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury"),
-         timepoint = fct_relevel(timepoint, c("Early", "Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7"))) %>% 
-  arrange(timepoint)
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")) %>% 
+  arrange(timepoint_mouse)
 ```
 
 
-```{r fig.height=12, fig.width=12}
-#Correlation
+```{r fig.height=20, fig.width=20}
+# Different timepoints, same species
+human_mouse_log2fc_avg_wide_all = 
 
-#Plot weighted correlation
+  #Condition 1
+  all_degs_human_mouse_unmatched %>% 
+  select(organism, pathogen:human_symbol, mean_l2fc:sd, sd_sampling_stability) %>% 
+  rename(mean_log2fc = mean_l2fc, p_adj = adj_p_val, 
+    tstatistic = t, bstatistic = b) %>% 
+  rename_with(~ paste0(.x, "_1"), all_of(c("organism", "condition", "timepoint", "mean_log2fc", "ci_lower", "ci_upper", "ave_expr", "tstatistic", "p_value", "p_adj", "bstatistic", "se", "sd", "sd_sampling_stability"))) %>% 
+  inner_join(
+  #Condition 2
+   all_degs_human_mouse_unmatched %>% 
+  select(organism, pathogen:human_symbol, mean_l2fc:sd, sd_sampling_stability) %>% 
+  rename(mean_log2fc = mean_l2fc, p_adj = adj_p_val, 
+    tstatistic = t, bstatistic = b) %>% 
+  rename_with(~ paste0(.x, "_2"), all_of(c("organism", "condition", "timepoint", "mean_log2fc", "ci_lower", "ci_upper", "ave_expr", "tstatistic", "p_value", "p_adj", "bstatistic", "se", "sd", "sd_sampling_stability"))),
+  
+  by = join_by("pathogen", "treatment", "human_symbol")
+  ) %>% 
+  
+  
+  # Filter for strict 1:1 ortholog pairs with complete expression profiles
+  drop_na(mean_log2fc_1, mean_log2fc_2) %>% 
+  
+  # Compute expression divergence and volatility metrics
+  mutate(
+    # Cross-species effect size delta (Directional macroevolutionary divergence)
+    mean_log2fc_diff = mean_log2fc_1 - mean_log2fc_2,
+    
+    # Coefficient of Variation - CV
+    # --------------------------------------------------------------------------
+    cv_1 = sd_1 / abs(mean_log2fc_1),
+    cv_2 = sd_2 / abs(mean_log2fc_2),
+    cv_mean  = (cv_1 + cv_2) / 2, # Combined cross-species relative noise
+    
+    # Statistical Weights for Downstream Weighted Correlation
+    # Joint geometric weight based on downsampling iteration variance (SD^2)
+    weight_sd_inverse = 1 / (sd_1^2 + sd_2^2),
+    # Joint geometric weight based on native linear model standard error (SE^2)
+    weight_se_inverse = 1 / (se_1^2 + se_2^2),
+    
+    se_combined = sqrt(se_1^2 + se_2^2)
+  ) %>% 
+  
+  
+  #Factor reordering
+    mutate(pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli", "Burn", "Trauma"),
+       timepoint_comparison = paste0(timepoint_1,  sep = "-", timepoint_2)) %>% 
+  # filter(!c(pathogen == "Staphylococcus aureus" & timepoint_mouse == "24h")) %>%
+  mutate(timepoint_2 = as.character(timepoint_2),
+         timepoint_2 = fct_relevel(timepoint_2, c("Early", "Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         timepoint_1 = as.character(timepoint_1),
+         timepoint_1 = fct_relevel(timepoint_1, c("Early", "Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         treatment = case_when(pathogen %in% c("Hepatitis B", "Influenza") ~ "Vaccination",
+                               pathogen %in% c( "Staphylococcus aureus", "Escherichia coli") ~ "Infection",
+                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
+                               T ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")) %>% 
+  arrange(timepoint_1) %>%
+  #Annotate Inter and intra-species comparisons
+  mutate(comparison_set = case_when(organism_1 != organism_2 ~ "Inter-species",
+                                    organism_1 == organism_2 ~ "Intra-species",
+                                    T ~ NA)) 
+
+
+#Get immune and non immune genes
+human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune = 
+  
+  human_mouse_log2fc_avg_wide_all %>%
+  mutate(gene_set = "All genes") %>% 
+  
+  bind_rows(
+  #Same DEGs
+  human_mouse_log2fc_avg_wide_all %>%
+  filter(p_adj_1 <= 0.05 & p_adj_2 <= 0.05) %>% 
+  mutate(gene_set = "DEGs"), 
+  
+  #Classify as immune or non_immune 
+  human_mouse_log2fc_avg_wide_all %>% 
+  mutate(gene_set = if_else(human_symbol %in% c(btm_annotation_genes %>%
+                               filter(module_category == "immune") %>% 
+                               pull(symbol)),
+                             "Immune",
+                             "Not-immune")) %>% 
+  filter(p_adj_1 <= 0.05 & p_adj_2 <= 0.05))
+```
+
+
+
+```{r fig.height=20, fig.width=20}
+#####################
+#Correlation (Weighted)
+#####################
+
+# Inter-species ==========
+correlation_filtered_inter_weighted =      
+  human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>%
+  #In the inter-species set, keep the Human as a reference (Organism_1)
+  filter(!(comparison_set == "Inter-species" & organism_1 == "Mouse")) %>% 
+  filter(comparison_set == "Inter-species") %>% 
+  group_by(comparison_set, treatment, pathogen, 
+           timepoint_1, timepoint_2,
+           gene_set) %>%
+  summarise({
+    # Compute weighted correlation
+    res <- wtd.cor(x = rank(mean_log2fc_1), 
+                   y = rank(mean_log2fc_2), 
+                   weight = weight_se_inverse)
+    
+    # Extract statistics
+    data.frame(
+      rho = res[1, "correlation"],
+      se  = res[1, "std.err"],
+      t   = res[1, "t.value"],
+      p   = res[1, "p.value"]
+    )
+  }, .groups = 'drop')  %>% 
+  #Rename 1 and 2 as human and mouse, respectively
+     rename_with(
+    ~ str_replace(.x, "_1$", "_human"), 
+    ends_with("_1")
+  ) %>% 
+  rename_with(
+    ~ str_replace(.x, "_2$", "_mouse"), 
+    ends_with("_2")
+  ) %>% 
+  mutate(p_adj = p.adjust(p, method = "BH"),
+         comparison = "Human vs. Mouse",
+         timepoint_comparison = paste0(timepoint_human,  sep = "-", timepoint_mouse)) %>% 
+  
+  #Standardize factors
+     mutate(
+         timepoint_human = str_replace(timepoint_human,"Early hours", "Early\nhours"),
+         timepoint_mouse = str_replace(timepoint_mouse,"Early hours", "Early\nhours"),
+         timepoint_mouse = str_replace(timepoint_mouse,"Day ", "Day\n"),
+         timepoint_human = fct_relevel(timepoint_human, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         timepoint_mouse = fct_relevel(timepoint_mouse, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day\n1", "Day\n3", "Day\n7")),
+         pathogen = as.character(pathogen),
+         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
+                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
+                              pathogen == "Escherichia coli" ~ "E. coli",
+                              T ~pathogen),
+          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
+                               T ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")) 
+
+#Summary
+degs_immune_nonimmune_summary = human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>%
+  filter(comparison_set == "Inter-species") %>%  
+  group_by(pathogen, timepoint_comparison, gene_set) %>% 
+  summarise(n_genes = n(), .groups = "drop")
+
+# Intra-species ==========
+correlation_filtered_intra_weighted <- human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>%
+  filter(comparison_set == "Intra-species") %>% 
+  group_by(
+    comparison_set, organism_1, treatment, pathogen,
+    timepoint_1, timepoint_2, gene_set
+  ) %>%
+  summarise({
+    # Capture the data for the current group
+    d <- cur_data()
+    
+    # Clean: filter out NAs and invalid weights
+    valid_data <- d %>% 
+      filter(!is.na(mean_log2fc_1), 
+             !is.na(mean_log2fc_2), 
+             weight_se_inverse > 0)
+    
+    # Check if we have enough observations (e.g., at least 3)
+    if (nrow(valid_data) >= 3) {
+      res <- wtd.cor(
+        x = rank(valid_data$mean_log2fc_1), 
+        y = rank(valid_data$mean_log2fc_2), 
+        weight = valid_data$weight_se_inverse
+      )
+      
+      data.frame(
+        rho = res[1, "correlation"],
+        se  = res[1, "std.err"],
+        t   = res[1, "t.value"],
+        p   = res[1, "p.value"]
+      )
+    } else {
+      # Return NAs if the group is too small or invalid
+      data.frame(rho = NA, se = NA, t = NA, p = NA)
+    }
+  }, .groups = 'drop') %>% 
+  mutate(comparison = paste0(organism_1, " vs. ", organism_1),
+         timepoint_comparison = paste0(timepoint_1, "-", timepoint_2)) %>%
+
+  #Standardize factors
+  mutate(timepoint_label = if_else(pathogen %in% c("Staphylococcus aureus", "Escherichia coli"),
+                                   timepoint_2, timepoint_1),
+         timepoint_label = as.character(timepoint_label),
+         timepoint_label = str_replace(timepoint_label,"Early hours", "Early\nhours"),
+         timepoint_1 = str_replace(timepoint_1,"Early hours", "Early\nhours"),
+         timepoint_2 = str_replace(timepoint_2,"Early hours", "Early\nhours"),
+         timepoint_2 = str_replace(timepoint_2,"Day ", "Day\n"),
+         timepoint = fct_relevel(timepoint_label, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         timepoint_1 = fct_relevel(timepoint_1, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         timepoint_2 = fct_relevel(timepoint_2, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day\n1", "Day\n3", "Day\n7")),
+         pathogen = as.character(pathogen),
+         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
+                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
+                              pathogen == "Escherichia coli" ~ "E. coli",
+                              T ~pathogen),
+          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
+                               T ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury"))
+
+
+# Create Biological null distribution =====
+# Define the mapping logic
+null_map <- tribble(
+  ~target_pathogen, ~target_treatment, ~null_pathogen, ~null_treatment, ~null_timepoint,
+  "Escherichia coli", "Infection",     "Hepatitis B", "Vaccination",    "Day 1",
+  "Staphylococcus aureus", "Infection", "Hepatitis B", "Vaccination",    "Day 1",
+  "Trauma",           "Injury",        "Hepatitis B", "Vaccination",    "Day 1",
+  "Burn",             "Injury",        "Hepatitis B", "Vaccination",    "Day 1",
+  "Hepatitis B",      "Vaccination",   "Staphylococcus aureus", "Infection", "6h",
+  "Influenza",        "Vaccination",   "Staphylococcus aureus", "Infection", "6h"
+)
+
+# Create a Generator Function
+generate_comparison <- function(target_pathogen, target_treatment, null_pathogen, null_treatment, null_timepoint) {
+  
+  # 1. Get the target data using the arguments
+  target_df <- human_mouse_log2fc_avg_wide %>%
+    filter(pathogen == target_pathogen, treatment == target_treatment) %>%
+    mutate(divergence = mean_log2fc_human - mean_log2fc_mouse, 
+           model_type = "Observed Target")
+  
+  # 2. Get the biological null data and join
+  null_df <- human_mouse_log2fc_avg_wide %>%
+    filter(pathogen == null_pathogen, treatment == null_treatment, timepoint_human == null_timepoint) %>%
+    select(human_symbol, mean_log2fc_mouse) %>%
+    inner_join(target_df %>% select(-mean_log2fc_mouse, -model_type, -divergence), 
+               by = "human_symbol") %>%
+    mutate(divergence = mean_log2fc_human - mean_log2fc_mouse, 
+           model_type = "Biological Null")
+  
+  # 3. Return combined rows
+  bind_rows(target_df, null_df)
+}
+
+# Execute the comparison for every row in the mapping table
+human_mouse_log2fc_avg_wide_bionull <- pmap_dfr(null_map, generate_comparison)
+
+
+
+```
+
+
+
+
+
+```{r fig.height=16, fig.width=16}
+#Plot weighted correlation scatterplot
 human_mouse_log2fc_avg_wide %>%
   mutate(diff_log2FC_cat = case_when(
     mean_log2fc_diff < -2 ~ "<-2",
@@ -472,520 +744,54 @@ human_mouse_log2fc_avg_wide %>%
     TRUE        ~ as.character(round(mean_log2fc_diff, 0))),
   diff_log2FC_cat = fct_relevel(diff_log2FC_cat, "<-2", "-2", "-1", "0", "1", "2", ">2")) %>% 
   ggplot() +
-  aes(x = mean_log2fc_human, y = mean_log2fc_mouse, weight = weight_se_inverse) +
+  aes(x = mean_log2fc_human, y = mean_log2fc_mouse) +
   facet_wrap(~treatment+pathogen+timepoint_comparison, scales = "free") +
   geom_point(aes(size = weight_se_inverse,
                  fill = diff_log2FC_cat),
              alpha = 0.5,
              stroke = 0,
              pch = 21) +
-  geom_smooth(method = "lm", color = "red", linetype = "dashed") +
+  # Weighted Regression Line
+  geom_smooth(aes(weight = weight_se_inverse), 
+              method = "lm", color = "red", linetype = "dashed", se = T) +
+  
+  # Unweighted Regression Line
+  geom_smooth(method = "lm", color = "blue", linetype = "solid", se = T) +
+  
   scale_fill_manual(
-    values = c(
-  "<-2" = "darkred", 
-  "-2" = "red", "-1" = "orange", 
-  "0" = "gray", 
-  "1" = "orange", "2" = "red", 
-  ">2" = "darkred"
-  )
+    values = c("<-2" = "darkred", "-2" = "red", "-1" = "orange", 
+               "0" = "gray", "1" = "orange", "2" = "red", ">2" = "darkred")
   ) +
   labs(
     x = "Human Median Log2FC",
     y = "Mouse Median Log2FC",
-    title = "Weighted Evolutionary Expression Correlation",
-    subtitle = "Points sized and regression driven by downsampling replication certainty"
+    title = "Comparison: Weighted vs Unweighted Regression",
+    subtitle = "Red Dashed: Weighted | Blue Solid: Unweighted"
   ) +
-  theme_vaxgo()
-```
-
-
-```{r fig.height=4, fig.width=6}
-# Criar biological null
-# 1. Separar o seu sinal biológico principal (Target)
-df_target <- human_mouse_log2fc_avg_wide %>%
-  filter(treatment == "Infection",
-         pathogen == "Escherichia coli") %>% # Altere para o seu tratamento principal
-  mutate(
-    divergence = mean_log2fc_human - mean_log2fc_mouse,
-    model_type = "Observed Target"
-  )
-
-# 2. Construir o Modelo Nulo Baseado no Tratamento Controle
-df_biological_null <- human_mouse_log2fc_avg_wide %>%
-  filter(treatment == "Vaccination",
-         pathogen == "Hepatitis B",
-         timepoint_human == "Day 1") %>% # O tratamento usado como controle de especificidade
-  mutate(
-    model_type = "Biological Null"
-  ) %>% 
-  select(human_symbol, 
-         mean_log2fc_mouse,
-         model_type) %>% 
-  inner_join(df_target %>% 
-               select(!c(mean_log2fc_mouse, model_type)),
-             by = join_by("human_symbol")) %>% 
-  #Human reference and Control Mouse
-  mutate(divergence = mean_log2fc_human - mean_log2fc_mouse)
-
-# 3. Combinar os dataframes mantendo o pareamento por Patógeno e Tempo
-df_density_bionull <- bind_rows(df_target, df_biological_null)
-
-
-
-
-df_density_bionull_plot =   df_density_bionull %>% 
-  filter(p_adj_human < 0.05) %>% 
-    ggplot() +
-  # Eixo X agora usa nossa coluna unificada 'divergence'
-  aes(x = abs(divergence)) +
-  
-  # 2. Camada de frente: Suas linhas reais e longitudinais mapeadas pelo Mako
-  geom_density(
-    data = filter(df_density_bionull, model_type == "Observed Target"),
-    aes(color = timepoint_comparison,
-        # linetype = model_type
-        ),
-    alpha = 1, size = 1
-  ) +
-  
-  # 1. Camada de fundo: A distribuição nula simulada (Sombra cinza estável)
-  geom_density(
-    data = filter(df_density_bionull, model_type == "Biological Null"),
-    aes(y = ..density..),
-    color = "red",size = 0.5, linetype = 1,  alpha = 1
-  ) +
-  
-  geom_vline(xintercept = 0, color = "red", linetype = 2) +
-  
-  # Facetamento controlado por patógeno
-  facet_wrap(~pathogen, scales = "free") +
-  
-  # Manter sua paleta profissional
-  scale_color_viridis_d(option = "mako", direction = -1) +
-    
-  # scale_x_continuous(limits = c(-2, 2)) +
-  
-  labs(
-    x = "Relative Expression Divergence (Log2FC Human - Log2FC Mouse)", # Atualizado de 'Absolute' para 'Relative'
-    y = "Density",
-    title = "Empirical vs. Biological Null Distribution of Cross-Species Divergence",
-    subtitle = "Red curve sets the independent baseline drift utilizing an unmatched vaccine control (Hepatitis B Day 1)",
-    color = "Infection Timeline"
-  ) +
-  theme_vaxgo() +
+  theme_vaxgo()+
   theme(legend.position = "top")
-  
-df_density_bionull_plot
-
-# Agora rode o teste
-results_wilcox <- df_density_bionull %>%
-  group_by(timepoint_comparison) %>%
-  do(tidy(wilcox.test(abs(divergence) ~ model_type, data = .))) %>%
-  ungroup()
-
-# 2. Aplicar correção de Benjamini-Hochberg (FDR)
-# Isso é fundamental para revisores não alegarem que você "pescou" p-valores significativos
-results_wilcox <- results_wilcox %>%
-  mutate(p_adj = p.adjust(p.value, method = "BH"))
-
-# Visualizar o resultado
-print(results_wilcox)
-
-```
-
-
-```{r fig.height=8, fig.width=12}
-#Distribution of Cross-Species Divergence Magnitude
-ggplot(human_mouse_log2fc_avg_wide) +
-  aes(x = cv_mean,
-      y = mean_log2fc_diff, 
-      color = weight_se_inverse) +
-  geom_point(alpha = 1, size = 1) +
-  facet_wrap(~pathogen+timepoint_mouse, scales = "free") +
-  scale_color_viridis_c(option = "mako", direction = -1) +
-  # scale_fill_manual(values = colors$timepoint) +
-  theme_vaxgo()
-
-
-
-ggplot(human_mouse_log2fc_avg_wide) +
-  aes(x = abs(mean_log2fc_diff),
-      y = se_mouse, 
-      color = weight_se_inverse) +
-  geom_point(alpha = 1, size = 1) +
-  facet_wrap(~pathogen+timepoint_mouse, scales = "free") +
-  scale_color_viridis_c(option = "mako", direction = -1) +
-  # scale_fill_manual(values = colors$timepoint) +
-  theme_vaxgo()
-
-ggplot(human_mouse_log2fc_avg_wide) +
-  aes(x = mean_log2fc_human,
-      y = se_human, 
-      color = weight_se_inverse) +
-  geom_point(alpha = 1, size = 1) +
-  facet_wrap(~pathogen+timepoint_mouse, scales = "free") +
-  scale_color_viridis_c(option = "mako", direction = -1) +
-  # scale_fill_manual(values = colors$timepoint) +
-  theme_vaxgo()
-
-
-
-human_mouse_se = bind_rows(
-human_mouse_log2fc_avg_wide %>% 
-  group_by(pathogen, timepoint_comparison) %>% 
-  summarise(median_se = median(se_human, na.rm = T),
-            median_diff = median(mean_log2fc_diff, na.rm = T)) %>% 
-  mutate(organism = "Human") %>% 
-  ungroup(),
-
-human_mouse_log2fc_avg_wide %>% 
-  group_by(pathogen, timepoint_comparison) %>% 
-  summarise(median_se = median(se_mouse, na.rm = T),
-            median_diff = median(mean_log2fc_diff, na.rm = T)) %>% 
-  mutate(organism = "Mouse") %>% 
-  ungroup(),
-
-human_mouse_log2fc_avg_wide %>% 
-  group_by(pathogen, timepoint_comparison) %>% 
-  summarise(median_se = median(se_combined, na.rm = T),
-            median_diff = median(mean_log2fc_diff, na.rm = T)) %>% 
-  mutate(organism = "Mouse-Human") %>% 
-  ungroup())
-
-
-human_mouse_se %>% 
-  ggplot() +
-  aes(x = timepoint_comparison,
-      y = median_se,
-      color = organism,
-      group = organism) +
-  geom_line() +
-  geom_point() +
-  facet_wrap(~pathogen, scales = "free_x")
-
-human_mouse_se %>% 
-  ggplot() +
-  aes(x = timepoint_comparison,
-      y = abs(median_diff),
-      color = organism,
-      group = organism) +
-  geom_line() +
-  geom_point() +
-  facet_wrap(~pathogen, scales = "free_x")
-
-```
-
-
-
-
-
-
-### 2.2. Correlation: Genes, means, Overall
-
-```{r}
-#Import
-#Log2FC from samples
-# log2fc_samples = 
-#   readRDS(here("tables", "all_human_mouse_samples_log2fc.rds"))
-
-#Metadata from samples
-# all_human_mouse_metadata =
-#   readRDS(here("tables", "all_human_mouse_metadata.rds"))
-
-
-#DEGs (matched)
-all_degs_human_mouse =
-  readRDS(here("tables", "all_human_mouse_dge_limma_degs_matched.rds"))
-all_degs_human_mouse_unmatched =
-  readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds"))
-
-#Functional modules
-btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
- 
-all_degs_human_mouse %>% 
-  dplyr::count(timepoint, organism, treatment, pathogen) 
-
-#Pivot wider
-human_mouse_log2fc_avg_wide = all_degs_human_mouse %>% 
-  select(pathogen, organism, human_symbol, timepoint_comparison, mean_log2fc = mean_l2fc, p_adj = adj_p_val, tstatistic = t) %>% 
-  pivot_wider(names_from = c("organism"),
-              values_from = c(mean_log2fc, p_adj, tstatistic),
-              names_sep = "_",
-              values_fn = mean) %>% 
-  clean_names() %>% 
-  drop_na(mean_log2fc_human, mean_log2fc_mouse)
-
-human_mouse_log2fc_avg_wide
-
-# Calculate the correlation
-#Get immune and non immune genes
-human_mouse_log2fc_avg_wide_degs_immune_nonimmune = 
-  
-  human_mouse_log2fc_avg_wide %>%
-  mutate(gene_type = "All genes") %>% 
-  
-  bind_rows(
-  #Same DEGs
-  human_mouse_log2fc_avg_wide %>%
-  filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05) %>% 
-  mutate(gene_type = "DEGs"), 
-  #Classify as immune or non_immune 
-  human_mouse_log2fc_avg_wide %>% 
-  mutate(gene_type = if_else(human_symbol %in% c(btm_annotation_genes %>%
-                               filter(module_category == "immune") %>% 
-                               pull(symbol)),
-                             "Immune",
-                             "Not-immune")) %>% 
-  filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05)) 
-  
-   
-
-#Summary
-degs_immune_nonimmune_summary = human_mouse_log2fc_avg_wide_degs_immune_nonimmune %>% 
-  group_by(pathogen, timepoint_comparison, gene_type) %>% 
-  summarise(n_genes = n(), .groups = "drop")
-
-# # Calculate the correlation
-# safe_cor_test <- purrr::possibly(
-#   function(x, y, method = "spearman") {
-#     cor.test(x, y, method = method)
-#   },
-#   otherwise = NULL
-# )
-
-degs_immune_nonimmune_summary
 ```
 
 
 
 #### Matrix plot
 
-Compute correlation for intra-species and inter-species comparisons
-```{r}
-genes_shared <- all_degs_human_mouse %>%
-  select(organism, pathogen, human_symbol) %>% 
-  distinct() %>% 
-  # Get genes that are present in both species
-  group_by(human_symbol, pathogen) %>%
-  filter(n_distinct(organism) == 2) %>%  
-  ungroup()
-
-genes_log2fc_input = all_degs_human_mouse_unmatched %>% 
-  rename(log2fc = mean_l2fc) %>% 
-  inner_join(genes_shared, by = join_by(organism, pathogen, human_symbol)) %>% 
-  #Rank
-  group_by(pathogen, organism, timepoint) %>% 
-  mutate(rank = rank(log2fc * -log(adj_p_val))) %>% 
-  ungroup()
-
-# 1. Define Inputs and Gene Subsets -----------------------------------------
-# We create a list to automate the loop over both sets
-gene_sets_list <- list(
-  "AllGenes" = genes_log2fc_input,
-  "DEGs" = genes_log2fc_input %>% 
-                 filter(adj_p_val <= 0.05),
-  "Immune"   = genes_log2fc_input %>% 
-                 filter(human_symbol %in% (btm_annotation_genes %>% 
-                                          filter(module_category == "immune") %>% 
-                                          pull(symbol) %>% unique()))
-)
-
-# Data Preparation: Long format to Wide Matrix
-  genes_samples_long <- genes_log2fc_input %>%
-    select(pathogen, organism, human_symbol, timepoint, log2fc) %>%
-    distinct() %>%
-    mutate(condition = paste0(pathogen, "_", organism, "_", timepoint))
-
-  samples_annotation <- genes_samples_long %>%
-    select(pathogen, organism, timepoint, condition) %>%
-    distinct() 
-
-  genes_samples_wide <- genes_samples_long %>%
-    select(human_symbol, condition, log2fc) %>% 
-    distinct() %>%
-    pivot_wider(names_from = "condition", values_from = "log2fc", values_fn = mean) %>%
-    column_to_rownames("human_symbol")
-
-# 2. Main Processing Loop ----------------------------------------------------
-# map_dfr iterates through "AllGenes" and "Immune", stacking the results
-all_human_mouse_dge_correlation <- map_dfr(names(gene_sets_list), function(set_name) {
-  
-  message(paste("Processing gene set:", set_name))
-  current_data <- gene_sets_list[[set_name]]
-  
-  # Data Preparation: Long format to Wide Matrix
-  genes_samples_long <- current_data %>%
-    select(pathogen, organism, human_symbol, timepoint, log2fc) %>%
-    distinct() %>%
-    mutate(condition = paste0(pathogen, "_", organism, "_", timepoint))
-
-  samples_annotation <- genes_samples_long %>%
-    select(pathogen, organism, timepoint, condition) %>%
-    distinct() 
-
-  genes_samples_wide <- genes_samples_long %>%
-    select(human_symbol, condition, log2fc) %>% 
-    distinct() %>%
-    pivot_wider(names_from = "condition", values_from = "log2fc", values_fn = mean) %>%
-    column_to_rownames("human_symbol")
-
-  # 3. Pathogen-Specific Correlation Calculation -----------------------------
-  pathogen_list <- unique(samples_annotation$pathogen)
-  
-  map_dfr(pathogen_list, function(path) {
-    
-    pathogen_samples <- samples_annotation %>% 
-      filter(pathogen == path) %>% 
-      pull(condition) 
-    
-    # Subset matrix and drop NAs
-    matrix_subset <- genes_samples_wide %>%
-      select(all_of(intersect(pathogen_samples, colnames(.)))) %>%
-      # drop_na() %>%
-      as.matrix()
-    
-    if(nrow(matrix_subset) <= 4 | ncol(matrix_subset) < 2) {
-      warning(paste("Skipping pathogen:", path, "- only", nrow(matrix_subset), "shared genes found."))
-      return(NULL)
-    }
-    
-    # Calculate Spearman Correlation
-    cor_obj <- rcorr(matrix_subset, type = "spearman")
-    
-    # Tidy extraction of Rho and P-values
-    r_long <- as.data.frame(cor_obj$r) %>%
-      rownames_to_column("condition1") %>%
-      pivot_longer(-condition1, names_to = "condition2", values_to = "rho")
-    
-    # p_long <- as.data.frame(cor_obj$P) %>%
-    #   rownames_to_column("condition1") %>%
-    #   pivot_longer(-condition1, names_to = "condition2", values_to = "p_val")
-    
-    # Join with Metadata and Filter Duplicates
-    r_long %>%
-      # left_join(p_long, by = c("condition1", "condition2")) %>%
-      ##Filter duplicates
-      # filter(condition1 < condition2) %>%
-      left_join(samples_annotation %>% select(condition, organism1 = organism, timepoint1 = timepoint), 
-                by = c("condition1" = "condition")) %>%
-      left_join(samples_annotation %>% select(condition, organism2 = organism, timepoint2 = timepoint), 
-                by = c("condition2" = "condition")) %>%
-      mutate(pathogen = path, gene_set = set_name)
-  })
-})
-
-all_human_mouse_dge_correlation
-
-#Save
-# all_human_mouse_dge_correlation %>% 
-#   saveRDS(file = here("tables", "all_human_mouse_dge_correlation.rds"))
-
-#Get Inter-species correlations
-correlation_filtered_inter <- all_human_mouse_dge_correlation %>% 
-      #Filter duplicates
-      filter(condition1 < condition2) %>%
-  # Keep Human as reference for cross-species comparisons
-  filter(organism1 == "Human" & organism2 == "Mouse") %>% 
-  mutate(comparison = paste0(organism1, " vs. ", organism2),
-         timepoint_comparison = paste0(timepoint1, "-", timepoint2)) %>% 
-  # filter(comparison == "Human vs. Mouse") %>% 
-  mutate(timepoint_label = if_else(pathogen %in% c("Staphylococcus aureus", "Escherichia coli"), 
-                                   timepoint2, timepoint1),
-         timepoint_label = as.character(timepoint_label),
-         timepoint_label = str_replace(timepoint_label,"Early hours", "Early\nhours"),
-         timepoint1 = str_replace(timepoint1,"Early hours", "Early\nhours"),
-         timepoint2 = str_replace(timepoint2,"Early hours", "Early\nhours"),
-         timepoint2 = str_replace(timepoint2,"Day ", "Day\n"),
-         timepoint = fct_relevel(timepoint_label, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         timepoint1 = fct_relevel(timepoint1, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         timepoint2 = fct_relevel(timepoint2, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day\n1", "Day\n3", "Day\n7")),
-         pathogen = as.character(pathogen),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T ~pathogen),
-          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
-         gene_set = str_replace(gene_set, "AllGenes", "All genes"),
-         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
-                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
-                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
-                               T ~ pathogen),
-         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")) 
-
-#Get intra-species correlation
-correlation_filtered_intra <- all_human_mouse_dge_correlation %>% 
-  filter(organism1 == organism2) %>% 
-  mutate(comparison = paste0(organism1, " vs. ", organism2),
-         timepoint_comparison = paste0(timepoint1, "-", timepoint2)) %>% 
-  mutate(timepoint_label = if_else(pathogen %in% c("Staphylococcus aureus", "Escherichia coli"), 
-                                   timepoint2, timepoint1),
-         timepoint_label = as.character(timepoint_label),
-         timepoint_label = str_replace(timepoint_label,"Early hours", "Early\nhours"),
-         timepoint1 = str_replace(timepoint1,"Early hours", "Early\nhours"),
-         timepoint2 = str_replace(timepoint2,"Early hours", "Early\nhours"),
-         timepoint2 = str_replace(timepoint2,"Day ", "Day\n"),
-         timepoint = fct_relevel(timepoint_label, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         timepoint1 = fct_relevel(timepoint1, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         timepoint2 = fct_relevel(timepoint2, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day\n1", "Day\n3", "Day\n7")),
-         pathogen = as.character(pathogen),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T ~pathogen),
-          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
-         gene_set = str_replace(gene_set, "AllGenes", "All genes"),
-         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
-                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
-                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
-                               T ~ pathogen),
-         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")) 
-
-correlation_filtered_intra
-
-```
-
-
-
-
-Gene correlation distribution
-```{r fig.height=10, fig.width=10}
-all_human_mouse_dge_correlation %>% 
-  filter(pathogen == "Staphylococcus aureus",
-         organism1 != organism2) %>% 
-  ggplot() +
-  aes(x = rho) +
-  geom_density() +
-  geom_point(y = 0) +
-  facet_wrap(~pathogen+timepoint1,
-             scales = "free") +
-  theme_vaxgo()
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 ##### Interspecies
-```{r fig.height=8, fig.width=10}
-#All
-correlation_heatmap_all = correlation_filtered_inter %>% 
+
+
+```{r fig.height=10, fig.width=11}
+
+# Plot Matrices
+# All
+correlation_heatmap_all = correlation_filtered_inter_weighted %>% 
   ggplot() +
-  aes(x = timepoint2,
-      y = timepoint1) +
+  aes(x = timepoint_mouse,
+      y = timepoint_human) +
   #Facet
-  facet_nested_wrap(~gene_set+treatment+pathogen,
+    facet_nested_wrap(~gene_set+treatment+pathogen,
                     scales = "free",
-                    nrow = 3, 
+                    nrow = 4, 
                     axes = "all",
                     remove_labels = "none",
                     strip = strip_nested(size = "variable")) +
@@ -1026,18 +832,18 @@ correlation_heatmap_all = correlation_filtered_inter %>%
 correlation_heatmap_all 
 
 correlation_heatmap_all %>%
-  ggsave(filename = here("Figures", "all_human_mouse_dge_correlation_interspecies_matrixplot.png"),
+  ggsave(filename = here("Figures", "all_human_mouse_dge_correlation_interspecies_matrixplot_weighted.png"),
          width = 11, height = 8)
-```
 
+```
 
 ```{r fig.height=6, fig.width=12}
 #Except immune
-correlation_heatmap_all_degs = correlation_filtered_inter %>% 
+correlation_heatmap_all_degs = correlation_filtered_inter_weighted %>% 
   filter(gene_set != "Immune") %>% 
   ggplot() +
-  aes(x = timepoint2,
-      y = timepoint1) +
+  aes(x = timepoint_mouse,
+      y = timepoint_human) +
   #Facet
   facet_nested_wrap(~gene_set+treatment+pathogen,
                     scales = "free",
@@ -1087,13 +893,13 @@ correlation_heatmap_all_degs %>%
 ```
 
 
-```{r fig.height=2.7, fig.width=10}
+```{r fig.height=3, fig.width=12}
 #Only DEGs
-correlation_heatmap_degs = correlation_filtered_inter %>% 
+correlation_heatmap_degs = correlation_filtered_inter_weighted %>% 
   filter(gene_set == "DEGs") %>% 
   ggplot() +
-  aes(x = timepoint2,
-      y = timepoint1) +
+  aes(x = timepoint_mouse,
+      y = timepoint_human) +
   #Facet
   facet_nested_wrap(~gene_set+treatment+pathogen,
                     scales = "free",
@@ -1140,8 +946,8 @@ correlation_heatmap_degs = correlation_filtered_inter %>%
 correlation_heatmap_degs 
 
 correlation_heatmap_degs %>%
-  ggsave(filename = here("Figures", "all_human_mouse_dge_correlation_interspecies_matrixplot_degs.png"),
-         width = 10, height = 2.7)
+  ggsave(filename = here("Figures", "all_human_mouse_dge_correlation_interspecies_matrixplot_degs_weighted.png"),
+         width = 12, height = 3)
 
 
 
@@ -1153,17 +959,17 @@ All
 ```{r fig.height=12, fig.width=18}
 #Matrix plot for intraspecies correlation =======
 #Human vs Human
-correlation_heatmap_intra_human_all = correlation_filtered_intra %>% 
+correlation_heatmap_intra_human_all = correlation_filtered_intra_weighted %>% 
   filter(!(pathogen %in% c("S. aureus", "E. coli") & organism1 == "Human")) %>% 
-  filter(organism1 == "Human",
+  filter(organism_1 == "Human",
          gene_set != "Immune") %>% 
   ggplot() +
-  aes(x = timepoint2,
-      y = timepoint1) +
+  aes(x = timepoint_2,
+      y = timepoint_1) +
   labs(x = "Timepoint",
        y = "Timepoint") +
   #Facet
-  facet_nested_wrap(~organism1+gene_set+treatment+pathogen,
+  facet_nested_wrap(~organism_1+gene_set+treatment+pathogen,
                     scales = "free", trim_blank = F, nrow = 2,
                     strip = strip_nested(size = "variable")) +
   geom_tile(aes(fill = rho),
@@ -1206,18 +1012,18 @@ correlation_heatmap_intra_human_all = correlation_filtered_intra %>%
 correlation_heatmap_intra_human_all
 
 #Mouse vs. Mouse
-correlation_heatmap_intra_mouse_all = correlation_filtered_intra %>% 
+correlation_heatmap_intra_mouse_all = correlation_filtered_inter_weighted %>% 
   filter(!(pathogen %in% c("S. aureus", "E. coli") & organism1 == "Human")) %>% 
   filter(organism1 == "Mouse",
           gene_set != "Immune") %>% 
   # View()
   ggplot() +
-  aes(x = timepoint2,
-      y = timepoint1) +
+  aes(x = timepoint_2,
+      y = timepoint_1) +
   labs(x = "Timepoint",
        y = "Timepoint") +
   #Facet
-  facet_nested_wrap(~organism1+gene_set+treatment+pathogen,
+  facet_nested_wrap(~organism_1+gene_set+treatment+pathogen,
                     scales = "free",
                     trim_blank = F,
                     strip = strip_nested(size = "variable")) +
@@ -1280,7 +1086,7 @@ correlation_heatmap_intra_human_mouse_all
 
 #Save
 correlation_heatmap_intra_human_mouse_all %>%
-  ggsave(filename = here("Figures", "all_human_mouse_dge_correlation_intraspecies_matrixplot_all.png"),
+  ggsave(filename = here("Figures", "all_human_mouse_dge_correlation_intraspecies_matrixplot_all_weighted.png"),
          width = 18, height = 10)
 
 
@@ -1858,6 +1664,178 @@ human_mouse_rank_rank_avg_wide_scatterplot %>%
          width = 16, height = 12)
 
 ```
+
+
+
+
+#### Other exploration analysis
+
+Compare Diff Log2FC distributions
+```{r fig.height=4, fig.width=6}
+#Compare distributions =============
+
+#Plot
+log2fc_diff_density_bionull_plot =   human_mouse_log2fc_avg_wide_bionull %>% 
+  filter(p_adj_human < 0.05) %>% 
+    ggplot() +
+  # Eixo X agora usa nossa coluna unificada 'divergence'
+  aes(x = abs(divergence)) +
+  
+  # 2. Camada de frente: Suas linhas reais e longitudinais mapeadas pelo Mako
+  geom_density(
+    data = filter(human_mouse_log2fc_avg_wide_bionull, model_type == "Observed Target"),
+    aes(color = timepoint_comparison,
+        # linetype = model_type
+        ),
+    alpha = 1, size = 1
+  ) +
+  
+  # 1. Camada de fundo: A distribuição nula simulada (Sombra cinza estável)
+  geom_density(
+    data = filter(human_mouse_log2fc_avg_wide_bionull, model_type == "Biological Null"),
+    aes(y = ..density..),
+    color = "red",size = 0.5, linetype = 1,  alpha = 1
+  ) +
+  
+  geom_vline(xintercept = 0, color = "red", linetype = 2) +
+  
+  # Facetamento controlado por patógeno
+  facet_wrap(~pathogen, scales = "free") +
+  
+  # Manter sua paleta profissional
+  scale_color_viridis_d(option = "mako", direction = -1) +
+    
+  # scale_x_continuous(limits = c(-2, 2)) +
+  
+  labs(
+    x = "Relative Expression Divergence (Log2FC Human - Log2FC Mouse)", # Atualizado de 'Absolute' para 'Relative'
+    y = "Density",
+    title = "Empirical vs. Biological Null Distribution of Cross-Species Divergence",
+    subtitle = "Red curve sets the independent baseline drift utilizing an unmatched vaccine control (Hepatitis B Day 1)",
+    color = "Infection Timeline"
+  ) +
+  theme_vaxgo() +
+  theme(legend.position = "top")
+  
+log2fc_diff_density_bionull_plot
+
+```
+
+
+```{r fig.height=8, fig.width=12}
+#Distribution of Cross-Species Divergence Magnitude
+ggplot(human_mouse_log2fc_avg_wide) +
+  aes(x = cv_mean,
+      y = mean_log2fc_diff, 
+      color = weight_se_inverse) +
+  geom_point(alpha = 1, size = 1) +
+  facet_wrap(~pathogen+timepoint_mouse, scales = "free") +
+  scale_color_viridis_c(option = "mako", direction = -1) +
+  # scale_fill_manual(values = colors$timepoint) +
+  theme_vaxgo()
+
+
+
+ggplot(human_mouse_log2fc_avg_wide) +
+  aes(x = abs(mean_log2fc_diff),
+      y = se_mouse, 
+      color = weight_se_inverse) +
+  geom_point(alpha = 1, size = 1) +
+  facet_wrap(~pathogen+timepoint_mouse, scales = "free") +
+  scale_color_viridis_c(option = "mako", direction = -1) +
+  # scale_fill_manual(values = colors$timepoint) +
+  theme_vaxgo()
+
+ggplot(human_mouse_log2fc_avg_wide) +
+  aes(x = mean_log2fc_human,
+      y = se_human, 
+      color = weight_se_inverse) +
+  geom_point(alpha = 1, size = 1) +
+  facet_wrap(~pathogen+timepoint_mouse, scales = "free") +
+  scale_color_viridis_c(option = "mako", direction = -1) +
+  # scale_fill_manual(values = colors$timepoint) +
+  theme_vaxgo()
+
+
+
+human_mouse_se = bind_rows(
+human_mouse_log2fc_avg_wide %>% 
+  group_by(pathogen, timepoint_mouse) %>% 
+  summarise(median_se = median(se_human, na.rm = T),
+            median_cv = median(cv_human, na.rm = T),
+            median_diff = median(mean_log2fc_diff, na.rm = T)) %>% 
+  mutate(organism = "Human") %>% 
+  ungroup(),
+
+human_mouse_log2fc_avg_wide %>% 
+  group_by(pathogen, timepoint_mouse) %>% 
+  summarise(median_se = median(se_mouse, na.rm = T),
+            median_cv = median(cv_mouse, na.rm = T),
+            median_diff = median(mean_log2fc_diff, na.rm = T)) %>% 
+  mutate(organism = "Mouse") %>% 
+  ungroup(),
+
+human_mouse_log2fc_avg_wide %>% 
+  group_by(pathogen, timepoint_mouse) %>% 
+  summarise(median_se = median(se_combined, na.rm = T),
+            median_cv = median(cv_mean, na.rm = T),
+            median_diff = median(mean_log2fc_diff, na.rm = T)) %>% 
+  mutate(organism = "Mouse-Human") %>% 
+  ungroup())
+
+
+human_mouse_se %>% 
+  ggplot() +
+  aes(x = timepoint_mouse,
+      y = median_se,
+      color = organism,
+      group = organism) +
+  geom_line() +
+  geom_point() +
+  geom_line(aes(x = timepoint_mouse,
+      y = abs(median_diff),
+      group = organism),
+      color = "black") +
+  geom_point(aes(x = timepoint_mouse,
+      y = abs(median_diff),
+      group = organism),
+      color = "black") +
+  facet_wrap(~pathogen, scales = "free_x")
+
+human_mouse_se %>% 
+  ggplot() +
+  aes(x = timepoint_mouse,
+      y = abs(median_diff),
+      color = organism,
+      group = organism) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~pathogen, scales = "free")
+```
+
+
+```{r fig.height=3, fig.width=9}
+human_mouse_se %>% 
+  ggplot() +
+  aes(y = abs(median_diff),
+      x = median_se,
+      color = timepoint_mouse,
+      shape = pathogen) +
+  geom_point() +
+  facet_wrap(~organism, scales = "free") +
+  theme_vaxgo()+
+  theme(legend.position = "top")
+
+```
+
+
+
+
+
+
+
+
+
 
 
 
