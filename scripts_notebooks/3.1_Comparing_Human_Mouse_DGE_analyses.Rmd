@@ -442,25 +442,53 @@ human_mouse_log2fc_avg_wide <- all_degs_human_mouse %>%
     # Joint geometric weight based on downsampling iteration variance (SD^2)
     weight_sd_inverse = 1 / (sd_human^2 + sd_mouse^2),
     # Joint geometric weight based on native linear model standard error (SE^2)
-    weight_se_inverse = 1 / (se_human^2 + se_mouse^2)
-  )
+    weight_se_inverse = 1 / (se_human^2 + se_mouse^2),
+    
+    se_combined = sqrt(se_human^2 + se_mouse^2)
+  ) %>% 
+  #Factor reordering
+mutate(pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli", "Burn", "Trauma")) %>% 
+separate(timepoint_comparison, into = c("timepoint_mouse", "timepoint_human"), sep = "-", remove = F) %>% 
+  filter(!c(pathogen == "Staphylococcus aureus" & timepoint_mouse == "24h")) %>%
+  mutate(timepoint = as.character(timepoint_mouse),
+         treatment = case_when(pathogen %in% c("Hepatitis B", "Influenza") ~ "Vaccination",
+                               pathogen %in% c( "Staphylococcus aureus", "Escherichia coli") ~ "Infection",
+                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
+                               T ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury"),
+         timepoint = fct_relevel(timepoint, c("Early", "Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7"))) %>% 
+  arrange(timepoint)
+```
 
-# #Correlation
+
+```{r fig.height=12, fig.width=12}
+#Correlation
 
 #Plot weighted correlation
 human_mouse_log2fc_avg_wide %>%
+  mutate(diff_log2FC_cat = case_when(
+    mean_log2fc_diff < -2 ~ "<-2",
+    mean_log2fc_diff > 2  ~ ">2",
+    TRUE        ~ as.character(round(mean_log2fc_diff, 0))),
+  diff_log2FC_cat = fct_relevel(diff_log2FC_cat, "<-2", "-2", "-1", "0", "1", "2", ">2")) %>% 
   ggplot() +
   aes(x = mean_log2fc_human, y = mean_log2fc_mouse, weight = weight_se_inverse) +
-  facet_wrap(~pathogen+timepoint_comparison, scales = "free") +
+  facet_wrap(~treatment+pathogen+timepoint_comparison, scales = "free") +
   geom_point(aes(size = weight_se_inverse,
-                 fill = mean_log2fc_diff),
-             alpha = 0.4,
+                 fill = diff_log2FC_cat),
+             alpha = 0.5,
+             stroke = 0,
              pch = 21) +
   geom_smooth(method = "lm", color = "red", linetype = "dashed") +
-  scale_fill_gradient2(mid = "red",
-                        high = "black",
-                       low = "black",
-                       midpoint = 0) +
+  scale_fill_manual(
+    values = c(
+  "<-2" = "darkred", 
+  "-2" = "red", "-1" = "orange", 
+  "0" = "gray", 
+  "1" = "orange", "2" = "red", 
+  ">2" = "darkred"
+  )
+  ) +
   labs(
     x = "Human Median Log2FC",
     y = "Mouse Median Log2FC",
@@ -471,23 +499,179 @@ human_mouse_log2fc_avg_wide %>%
 ```
 
 
-```{r fig.height=6, fig.width=12}
+```{r fig.height=4, fig.width=6}
+# Criar biological null
+# 1. Separar o seu sinal biológico principal (Target)
+df_target <- human_mouse_log2fc_avg_wide %>%
+  filter(treatment == "Infection",
+         pathogen == "Escherichia coli") %>% # Altere para o seu tratamento principal
+  mutate(
+    divergence = mean_log2fc_human - mean_log2fc_mouse,
+    model_type = "Observed Target"
+  )
+
+# 2. Construir o Modelo Nulo Baseado no Tratamento Controle
+df_biological_null <- human_mouse_log2fc_avg_wide %>%
+  filter(treatment == "Vaccination",
+         pathogen == "Hepatitis B",
+         timepoint_human == "Day 1") %>% # O tratamento usado como controle de especificidade
+  mutate(
+    model_type = "Biological Null"
+  ) %>% 
+  select(human_symbol, 
+         mean_log2fc_mouse,
+         model_type) %>% 
+  inner_join(df_target %>% 
+               select(!c(mean_log2fc_mouse, model_type)),
+             by = join_by("human_symbol")) %>% 
+  #Human reference and Control Mouse
+  mutate(divergence = mean_log2fc_human - mean_log2fc_mouse)
+
+# 3. Combinar os dataframes mantendo o pareamento por Patógeno e Tempo
+df_density_bionull <- bind_rows(df_target, df_biological_null)
+
+
+
+
+df_density_bionull_plot =   df_density_bionull %>% 
+  filter(p_adj_human < 0.05) %>% 
+    ggplot() +
+  # Eixo X agora usa nossa coluna unificada 'divergence'
+  aes(x = abs(divergence)) +
+  
+  # 2. Camada de frente: Suas linhas reais e longitudinais mapeadas pelo Mako
+  geom_density(
+    data = filter(df_density_bionull, model_type == "Observed Target"),
+    aes(color = timepoint_comparison,
+        # linetype = model_type
+        ),
+    alpha = 1, size = 1
+  ) +
+  
+  # 1. Camada de fundo: A distribuição nula simulada (Sombra cinza estável)
+  geom_density(
+    data = filter(df_density_bionull, model_type == "Biological Null"),
+    aes(y = ..density..),
+    color = "red",size = 0.5, linetype = 1,  alpha = 1
+  ) +
+  
+  geom_vline(xintercept = 0, color = "red", linetype = 2) +
+  
+  # Facetamento controlado por patógeno
+  facet_wrap(~pathogen, scales = "free") +
+  
+  # Manter sua paleta profissional
+  scale_color_viridis_d(option = "mako", direction = -1) +
+    
+  # scale_x_continuous(limits = c(-2, 2)) +
+  
+  labs(
+    x = "Relative Expression Divergence (Log2FC Human - Log2FC Mouse)", # Atualizado de 'Absolute' para 'Relative'
+    y = "Density",
+    title = "Empirical vs. Biological Null Distribution of Cross-Species Divergence",
+    subtitle = "Red curve sets the independent baseline drift utilizing an unmatched vaccine control (Hepatitis B Day 1)",
+    color = "Infection Timeline"
+  ) +
+  theme_vaxgo() +
+  theme(legend.position = "top")
+  
+df_density_bionull_plot
+
+# Agora rode o teste
+results_wilcox <- df_density_bionull %>%
+  group_by(timepoint_comparison) %>%
+  do(tidy(wilcox.test(abs(divergence) ~ model_type, data = .))) %>%
+  ungroup()
+
+# 2. Aplicar correção de Benjamini-Hochberg (FDR)
+# Isso é fundamental para revisores não alegarem que você "pescou" p-valores significativos
+results_wilcox <- results_wilcox %>%
+  mutate(p_adj = p.adjust(p.value, method = "BH"))
+
+# Visualizar o resultado
+print(results_wilcox)
+
+```
+
+
+```{r fig.height=8, fig.width=12}
 #Distribution of Cross-Species Divergence Magnitude
 ggplot(human_mouse_log2fc_avg_wide) +
-  aes(x = mean_log2fc_diff, fill = timepoint_comparison) +
-  geom_density(alpha = 0.5, color = NA) +
-  facet_wrap(~pathogen, scales = "free") +
-  scale_fill_viridis_d(option = "mako") +
+  aes(x = cv_mean,
+      y = mean_log2fc_diff, 
+      color = weight_se_inverse) +
+  geom_point(alpha = 1, size = 1) +
+  facet_wrap(~pathogen+timepoint_mouse, scales = "free") +
+  scale_color_viridis_c(option = "mako", direction = -1) +
   # scale_fill_manual(values = colors$timepoint) +
-  labs(
-    x = "Absolute Divergence (|Log2FC Human - Log2FC Mouse|)",
-    y = "Density",
-    title = "Distribution of Cross-Species Divergence Magnitude",
-    subtitle = "Quantifying the gap between humanized downsamples and experimental mouse models"
-  ) +
   theme_vaxgo()
 
 
+
+ggplot(human_mouse_log2fc_avg_wide) +
+  aes(x = abs(mean_log2fc_diff),
+      y = se_mouse, 
+      color = weight_se_inverse) +
+  geom_point(alpha = 1, size = 1) +
+  facet_wrap(~pathogen+timepoint_mouse, scales = "free") +
+  scale_color_viridis_c(option = "mako", direction = -1) +
+  # scale_fill_manual(values = colors$timepoint) +
+  theme_vaxgo()
+
+ggplot(human_mouse_log2fc_avg_wide) +
+  aes(x = mean_log2fc_human,
+      y = se_human, 
+      color = weight_se_inverse) +
+  geom_point(alpha = 1, size = 1) +
+  facet_wrap(~pathogen+timepoint_mouse, scales = "free") +
+  scale_color_viridis_c(option = "mako", direction = -1) +
+  # scale_fill_manual(values = colors$timepoint) +
+  theme_vaxgo()
+
+
+
+human_mouse_se = bind_rows(
+human_mouse_log2fc_avg_wide %>% 
+  group_by(pathogen, timepoint_comparison) %>% 
+  summarise(median_se = median(se_human, na.rm = T),
+            median_diff = median(mean_log2fc_diff, na.rm = T)) %>% 
+  mutate(organism = "Human") %>% 
+  ungroup(),
+
+human_mouse_log2fc_avg_wide %>% 
+  group_by(pathogen, timepoint_comparison) %>% 
+  summarise(median_se = median(se_mouse, na.rm = T),
+            median_diff = median(mean_log2fc_diff, na.rm = T)) %>% 
+  mutate(organism = "Mouse") %>% 
+  ungroup(),
+
+human_mouse_log2fc_avg_wide %>% 
+  group_by(pathogen, timepoint_comparison) %>% 
+  summarise(median_se = median(se_combined, na.rm = T),
+            median_diff = median(mean_log2fc_diff, na.rm = T)) %>% 
+  mutate(organism = "Mouse-Human") %>% 
+  ungroup())
+
+
+human_mouse_se %>% 
+  ggplot() +
+  aes(x = timepoint_comparison,
+      y = median_se,
+      color = organism,
+      group = organism) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~pathogen, scales = "free_x")
+
+human_mouse_se %>% 
+  ggplot() +
+  aes(x = timepoint_comparison,
+      y = abs(median_diff),
+      color = organism,
+      group = organism) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~pathogen, scales = "free_x")
 
 ```
 
