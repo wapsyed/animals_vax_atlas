@@ -36,7 +36,7 @@ Github: https://github.com/shenorrLabTRDF/FIT.mouse2man
 ```{r}
 #Install model package
 # library(devtools)
-# devtools::install_github('shenorrLabTRDF/FIT.mouse2man')
+pak::pak('shenorrLabTRDF/FIT.mouse2man')
 library(FIT.mouse2man)
 
 #Import files
@@ -68,7 +68,10 @@ AllData_V2.0 = FIT.mouse2man::AllData_V2.0 %>%
   separate(csp_id_short, into = c("del", "csp_id_index")) %>% 
   select(-del)
   
+#Check
 AllData_V2.0$csp_id_index %>% unique()
+
+
 
 ```
 
@@ -117,6 +120,7 @@ fit_training_datasets_metadata_newcols = fit_training_datasets_metadata %>%
 fit_training_datasets_metadata_clean = fit_training_datasets_metadata %>% 
   filter(!row_number() %in% c(1:2)) %>% 
   setNames(fit_training_datasets_metadata_newcols %>% pull()) %>% 
+    clean_names() %>%
   fill(disease, .direction = "down")
 
 fit_training_datasets_metadata_clean %>% 
@@ -394,6 +398,8 @@ disease_short = case_when(
 )
   )
 
+fit_training_datasets_metadata_clean
+
 #Import
 AllData_V2.0_blood = read_rds(here("tables", "AllData_FIT_training_blood.rds"))
 ImmuneGO_BTM_grouped_genes = read_csv(file = here("VaxGO", "ImmuneGO_BTM_grouped_genes.csv"))
@@ -405,6 +411,12 @@ AllData_V2.0_manual = AllData_V2.0 %>%
                rename(CSP_ID = comparison_id),
              by = "CSP_ID") %>% 
   clean_names() 
+
+#Save
+# AllData_V2.0_manual %>% 
+#   saveRDS(here("tables", "fit_training_datasets_expression.rds"))
+
+
 
 
 ```
@@ -523,16 +535,16 @@ AllData_V2.0_distributions_all
 ```{r fig.height=12, fig.width=10}
 # Calculate the correlation
 
-AllData_V2.0_manual_Blood = AllData_V2.0_manual %>%
+AllData_V2.0_manual_correlation = AllData_V2.0_manual %>%
   clean_names() %>%
   # filter(qval_hs <= 0.05 | qval_mm <= 0.05) %>%
-  filter(str_detect(human_tissue_control, "Blood"),
-         str_detect(mouse_tissue_disease, "Blood")) %>% 
+  # filter(str_detect(human_tissue_control, "Blood"),
+  #        str_detect(mouse_tissue_disease, "Blood")) %>% 
   mutate(
     csp_id_index = parse_number(csp_id)
   ) 
 
-cor_data <- AllData_V2.0_manual_Blood %>% 
+cor_data <- AllData_V2.0_manual_correlation %>% 
   group_by(disease, csp_id_index) %>%
   dplyr::summarise(
     test = list(
@@ -561,7 +573,7 @@ cor_data <- AllData_V2.0_manual_Blood %>%
   select(-test)
 
 
-cor_data_degs <- AllData_V2.0_manual_Blood %>% 
+cor_data_degs <- AllData_V2.0_manual_correlation %>% 
   filter(qval_hs <= 0.05 & qval_mm <= 0.05) %>% 
   drop_na(fc_mm, fc_hs) %>% 
   group_by(disease, csp_id_index) %>%
@@ -597,7 +609,7 @@ cor_data_degs <- AllData_V2.0_manual_Blood %>%
 cor_data
 cor_data_degs
 
-AllData_V2.0_manual_Blood_cor = AllData_V2.0_manual_Blood %>% 
+AllData_V2.0_manual_cor = AllData_V2.0_manual_correlation %>% 
   full_join(cor_data %>% select(disease, csp_id_index, label_all),
              by = join_by("disease", "csp_id_index")) %>% 
   full_join(cor_data_degs %>% select(disease, csp_id_index, label_degs),
@@ -607,7 +619,8 @@ AllData_V2.0_manual_Blood_cor = AllData_V2.0_manual_Blood %>%
 
 ```{r fig.height=10, fig.width=16}
 #Log2FC scatterplot
-blood_l2fc_scatterplot = AllData_V2.0_manual_Blood_cor %>%
+blood_l2fc_scatterplot = AllData_V2.0_manual_cor %>%
+  filter(human_tissue_disease == "Blood" & mouse_tissue_disease == "Blood") %>% 
   filter(qval_hs <= 0.05 | qval_mm <= 0.05) %>%
   mutate(
     csp_id_index = parse_number(csp_id),
@@ -635,7 +648,8 @@ blood_l2fc_scatterplot = AllData_V2.0_manual_Blood_cor %>%
              pch = 21,
              
              #Get only shared DEGs
-             data = AllData_V2.0_manual_Blood_cor %>% 
+             data = AllData_V2.0_manual_cor %>%
+  filter(human_tissue_disease == "Blood" & mouse_tissue_disease == "Blood") %>% 
                filter(qval_hs <= 0.05 & qval_mm <= 0.05)
              ) +
   
@@ -831,5 +845,97 @@ blood_l2fc_scatterplot %>%
 #               ncol =  2)
   
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Duchenne
+
+
+```{r fig.height=10, fig.width=10}
+expression_dmd = AllData_V2.0_manual_cor %>% 
+  filter(disease_short == "DMD") 
+
+expression_dmd %>% 
+  filter(qval_hs <= 0.05 | qval_mm <= 0.05) %>%
+  mutate(
+    csp_id_index = parse_number(csp_id),
+    comparison = paste("Comparison", csp_id_index)
+  ) %>%
+
+  #Plot
+  ggplot() +
+  aes(x = fc_mm,
+      y = fc_hs) +
+  
+  facet_nested_wrap(~disease+paste("Comparison", csp_id_index, "\n All: ", label_all, "\n DEGs: ", label_degs), 
+                    scales = "free", nest_line = T,
+                    nrow = 4,
+                    strip = strip_nested(size = "variable")) +
+  
+  #All DEGs
+  geom_point(color = "gray90") +
+  
+  #DEGs in both organisms
+  geom_point(color = "#4DBBD5FF",
+             fill = "#4DBBD5FF",
+             alpha = 1.5,
+             size = 1,
+             pch = 21,
+             
+             #Get only shared DEGs
+             data = expression_dmd %>% 
+               filter(qval_hs <= 0.05 & qval_mm <= 0.05)
+             ) +
+  
+  #Add linear models
+  stat_smooth(method = "lm", geom = "line", color = "black", alpha = 0.5, se = F, size = 1) +
+  
+  #Add lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
+  
+  #Theme
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size =8),
+        axis.text.y = element_text(size = 8),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+        legend.position = "none",
+        panel.spacing.y = unit(0, "lines"),
+        legend.direction = "horizontal") +
+  labs(x = "Mouse L2FC",
+       y = "Human L2FC",
+       title= "Correlation plot, Log2-Fold Change")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

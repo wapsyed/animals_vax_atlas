@@ -24,7 +24,7 @@ bioc_pkgs <- c(
   "limma", "fgsea"
 )
 
-github_pkgs <- c("RRHO2/RRHO2", "YuLab-SMU/ggmsa")
+
 
 # 3. Safe, Non-Destructive Loading Pipeline
 # Combining lists to load sequentially via base R
@@ -39,6 +39,11 @@ for (pkg in all_packages) {
     ))
   }
 }
+
+# github_pkgs <- c("RRHO2/RRHO2", "YuLab-SMU/ggmsa")
+#Download FIT 
+# pak::pak('shenorrLabTRDF/FIT.mouse2man')
+
 
 
 ######### RENV

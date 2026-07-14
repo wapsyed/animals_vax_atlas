@@ -180,19 +180,25 @@ degs_human_mouse_overlap_genes_summary = degs_human_mouse_overlap_genes %>%
   ungroup() %>% 
   separate(timepoint_comparison, into = c("timepoint_mouse", "timepoint_human"), sep = "-", remove = F) %>% 
   filter(!c(pathogen == "Staphylococcus aureus" & timepoint_mouse == "24h")) %>% 
-  mutate(condition_new = case_when(condition == "Human NOT Mouse" ~ "Human only",
+    mutate(condition_new = case_when(condition == "Human NOT Mouse" ~ "Human only",
                                    condition == "Mouse NOT Human" ~ "Mouse only",
                                    condition == "Mouse AND Human" ~ "Shared",
                                    T~condition),
          condition_new = fct_relevel(condition_new,  "Human only",  "Mouse only", "Shared")) %>% 
-  mutate(timepoint = as.character(timepoint_mouse),
-         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+  #Factor reordering
+    mutate(pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli", "Burn", "Trauma"),
+       timepoint_comparison = paste0(timepoint_mouse,  sep = "-", timepoint_human)) %>% 
+  filter(!c(pathogen == "Staphylococcus aureus" & timepoint_mouse == "24h")) %>%
+  mutate(timepoint_mouse = as.character(timepoint_mouse),
+         timepoint_mouse = fct_relevel(timepoint_mouse, c("Early", "Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         timepoint_human = as.character(timepoint_human),
+         timepoint_human = fct_relevel(timepoint_human, c("Early", "Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         treatment = case_when(pathogen %in% c("Hepatitis B", "Influenza") ~ "Vaccination",
                                pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
                                pathogen %in% c( "Burn", "Trauma") ~ "Injury",
                                T ~ pathogen),
-         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury"),
-         timepoint = fct_relevel(timepoint, c("Early", "Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7"))) %>% 
-  arrange(timepoint) 
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")) %>% 
+  arrange(timepoint_mouse)
   
 
 ranges_y = degs_human_mouse_overlap_genes_summary %>%
@@ -323,7 +329,7 @@ degs_human_mouse_overlap_lineplot = degs_human_mouse_overlap_genes_summary %>%
   distinct() %>% 
   ggplot() +
   
-  aes(x = timepoint,
+  aes(x = timepoint_mouse,
       y = n,
       fill = condition_new,
       color = condition_new,
@@ -390,6 +396,7 @@ degs_human_mouse_overlap_lineplot %>%
 
 ### 2.1. Correlation: Genes, means, Overall
 
+#### Pivot DEGs table
 ```{r fig.height=20, fig.width=20}
 #Import datasets ==============
 #DEGs (matched)
@@ -405,74 +412,12 @@ all_degs_human_mouse %>%
 
 #Functional modules
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
-```
 
 
-```{r fig.height=20, fig.width=20}
-#===========================
+#####################################
 # Different timepoints, same species
-#===========================
+#####################################
 
-human_mouse_log2fc_avg_wide = all_degs_human_mouse_unmatched %>% 
-  #Subset human
-  filter(organism == "Human") %>% 
-  select(pathogen:human_symbol, mean_l2fc:sd, sd_sampling_stability) %>% 
-  rename(mean_log2fc = mean_l2fc, p_adj = adj_p_val, 
-    tstatistic = t, bstatistic = b) %>% 
-  rename_with(~ paste0(.x, "_human"), all_of(c("condition", "timepoint", "mean_log2fc", "ci_lower", "ci_upper", "ave_expr", "tstatistic", "p_value", "p_adj", "bstatistic", "se", "sd", "sd_sampling_stability"))) %>% 
-  inner_join(
-  #Subset mouse
-   all_degs_human_mouse_unmatched %>% 
-  #Subset human
-  filter(organism == "Mouse") %>% 
-  select(pathogen:human_symbol, mean_l2fc:sd, sd_sampling_stability) %>% 
-  rename(mean_log2fc = mean_l2fc, p_adj = adj_p_val, 
-    tstatistic = t, bstatistic = b) %>% 
-  rename_with(~ paste0(.x, "_mouse"), all_of(c("condition", "timepoint", "mean_log2fc", "ci_lower", "ci_upper", "ave_expr", "tstatistic", "p_value", "p_adj", "bstatistic", "se", "sd", "sd_sampling_stability"))),
-  
-  by = join_by("pathogen", "treatment", "human_symbol")
-  ) %>% 
-  # Filter for strict 1:1 ortholog pairs with complete expression profiles
-  drop_na(mean_log2fc_human, mean_log2fc_mouse) %>% 
-  
-  # Compute expression divergence and volatility metrics
-  mutate(
-    # Cross-species effect size delta (Directional macroevolutionary divergence)
-    mean_log2fc_diff = mean_log2fc_human - mean_log2fc_mouse,
-    
-    # Intra-Species Volatility (Coefficient of Variation - CV)
-    # --------------------------------------------------------------------------
-    cv_human = sd_human / abs(mean_log2fc_human),
-    cv_mouse = sd_mouse / abs(mean_log2fc_mouse),
-    cv_mean  = (cv_human + cv_mouse) / 2, # Combined cross-species relative noise
-    
-    # Statistical Weights for Downstream Weighted Correlation
-    # Joint geometric weight based on downsampling iteration variance (SD^2)
-    weight_sd_inverse = 1 / (sd_human^2 + sd_mouse^2),
-    # Joint geometric weight based on native linear model standard error (SE^2)
-    weight_se_inverse = 1 / (se_human^2 + se_mouse^2),
-    
-    se_combined = sqrt(se_human^2 + se_mouse^2)
-  ) %>% 
-  #Factor reordering
-    mutate(pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli", "Burn", "Trauma"),
-       timepoint_comparison = paste0(timepoint_mouse,  sep = "-", timepoint_human)) %>% 
-  filter(!c(pathogen == "Staphylococcus aureus" & timepoint_mouse == "24h")) %>%
-  mutate(timepoint_mouse = as.character(timepoint_mouse),
-         timepoint_mouse = fct_relevel(timepoint_mouse, c("Early", "Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         timepoint_human = as.character(timepoint_human),
-         timepoint_human = fct_relevel(timepoint_human, c("Early", "Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         treatment = case_when(pathogen %in% c("Hepatitis B", "Influenza") ~ "Vaccination",
-                               pathogen %in% c( "Staphylococcus aureus", "Escherichia coli") ~ "Infection",
-                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
-                               T ~ pathogen),
-         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")) %>% 
-  arrange(timepoint_mouse)
-```
-
-
-```{r fig.height=20, fig.width=20}
-# Different timepoints, same species
 human_mouse_log2fc_avg_wide_all = 
 
   #Condition 1
@@ -557,10 +502,54 @@ human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune =
                              "Immune",
                              "Not-immune")) %>% 
   filter(p_adj_1 <= 0.05 & p_adj_2 <= 0.05))
+
+# #Save
+# human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>% 
+#   saveRDS(here("tables", "human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune.rds"))
 ```
 
 
 
+
+
+
+
+#### Create Biological null distribution
+```{r}
+biological_null_degs = readRDS(file = here("tables", "duchenne_mouse_dge_limma_degs.rds")) %>% 
+  select(-comparison) %>% 
+  rename(mean_log2fc = mean_l2fc, 
+         p_adj = adj_p_val, 
+         tstatistic = t, 
+         bstatistic = b) %>% 
+  rename_with(~ paste0(.x, "_mouse"), all_of(c( "condition", "timepoint", "mean_log2fc", "ci_lower", "ci_upper", "ave_expr", "tstatistic", "p_value", "p_adj", "bstatistic", "se", "sd")))
+
+# Create Biological null distribution =====
+
+  
+  # 1. Get the target data using the arguments
+  target_df <- human_mouse_log2fc_avg_wide_all %>%
+  filter(organism_1 == "Human", organism_2 == "Mouse") %>% 
+    mutate(divergence = mean_log2fc_1 - mean_log2fc_2, 
+           model_type = "Observed Target") %>% 
+  rename_with(~ str_replace(.x, "_2$", "_mouse"), ends_with("_2")) %>% 
+  rename_with(~ str_replace(.x, "_1$", "_human"), ends_with("_1"))
+  
+  # 2. Get the biological null data and join
+  null_df <- biological_null_degs %>%
+    filter(condition_mouse == "DMD_Day28") %>% 
+    rename(pathogen_null = pathogen, treatment_null = treatment,) %>% 
+    inner_join(target_df %>% select(!ends_with("_mouse")), 
+               by = "human_symbol") %>%
+    mutate(divergence = mean_log2fc_human - mean_log2fc_mouse, 
+           model_type = "Biological Null")
+  
+  # 3. Return combined rows
+  human_mouse_log2fc_avg_wide_bionull = bind_rows(target_df, null_df)
+
+```
+
+Compute correlation
 ```{r fig.height=20, fig.width=20}
 #####################
 #Correlation (Weighted)
@@ -690,42 +679,6 @@ correlation_filtered_intra_weighted <- human_mouse_log2fc_avg_wide_degs_all_immu
          treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury"))
 
 
-# Create Biological null distribution =====
-# Define the mapping logic
-null_map <- tribble(
-  ~target_pathogen, ~target_treatment, ~null_pathogen, ~null_treatment, ~null_timepoint,
-  "Escherichia coli", "Infection",     "Hepatitis B", "Vaccination",    "Day 1",
-  "Staphylococcus aureus", "Infection", "Hepatitis B", "Vaccination",    "Day 1",
-  "Trauma",           "Injury",        "Hepatitis B", "Vaccination",    "Day 1",
-  "Burn",             "Injury",        "Hepatitis B", "Vaccination",    "Day 1",
-  "Hepatitis B",      "Vaccination",   "Staphylococcus aureus", "Infection", "6h",
-  "Influenza",        "Vaccination",   "Staphylococcus aureus", "Infection", "6h"
-)
-
-# Create a Generator Function
-generate_comparison <- function(target_pathogen, target_treatment, null_pathogen, null_treatment, null_timepoint) {
-  
-  # 1. Get the target data using the arguments
-  target_df <- human_mouse_log2fc_avg_wide %>%
-    filter(pathogen == target_pathogen, treatment == target_treatment) %>%
-    mutate(divergence = mean_log2fc_human - mean_log2fc_mouse, 
-           model_type = "Observed Target")
-  
-  # 2. Get the biological null data and join
-  null_df <- human_mouse_log2fc_avg_wide %>%
-    filter(pathogen == null_pathogen, treatment == null_treatment, timepoint_human == null_timepoint) %>%
-    select(human_symbol, mean_log2fc_mouse) %>%
-    inner_join(target_df %>% select(-mean_log2fc_mouse, -model_type, -divergence), 
-               by = "human_symbol") %>%
-    mutate(divergence = mean_log2fc_human - mean_log2fc_mouse, 
-           model_type = "Biological Null")
-  
-  # 3. Return combined rows
-  bind_rows(target_df, null_df)
-}
-
-# Execute the comparison for every row in the mapping table
-human_mouse_log2fc_avg_wide_bionull <- pmap_dfr(null_map, generate_comparison)
 
 
 
@@ -735,42 +688,6 @@ human_mouse_log2fc_avg_wide_bionull <- pmap_dfr(null_map, generate_comparison)
 
 
 
-```{r fig.height=16, fig.width=16}
-#Plot weighted correlation scatterplot
-human_mouse_log2fc_avg_wide %>%
-  mutate(diff_log2FC_cat = case_when(
-    mean_log2fc_diff < -2 ~ "<-2",
-    mean_log2fc_diff > 2  ~ ">2",
-    TRUE        ~ as.character(round(mean_log2fc_diff, 0))),
-  diff_log2FC_cat = fct_relevel(diff_log2FC_cat, "<-2", "-2", "-1", "0", "1", "2", ">2")) %>% 
-  ggplot() +
-  aes(x = mean_log2fc_human, y = mean_log2fc_mouse) +
-  facet_wrap(~treatment+pathogen+timepoint_comparison, scales = "free") +
-  geom_point(aes(size = weight_se_inverse,
-                 fill = diff_log2FC_cat),
-             alpha = 0.5,
-             stroke = 0,
-             pch = 21) +
-  # Weighted Regression Line
-  geom_smooth(aes(weight = weight_se_inverse), 
-              method = "lm", color = "red", linetype = "dashed", se = T) +
-  
-  # Unweighted Regression Line
-  geom_smooth(method = "lm", color = "blue", linetype = "solid", se = T) +
-  
-  scale_fill_manual(
-    values = c("<-2" = "darkred", "-2" = "red", "-1" = "orange", 
-               "0" = "gray", "1" = "orange", "2" = "red", ">2" = "darkred")
-  ) +
-  labs(
-    x = "Human Median Log2FC",
-    y = "Mouse Median Log2FC",
-    title = "Comparison: Weighted vs Unweighted Regression",
-    subtitle = "Red Dashed: Weighted | Blue Solid: Unweighted"
-  ) +
-  theme_vaxgo()+
-  theme(legend.position = "top")
-```
 
 
 
@@ -960,9 +877,10 @@ All
 #Matrix plot for intraspecies correlation =======
 #Human vs Human
 correlation_heatmap_intra_human_all = correlation_filtered_intra_weighted %>% 
-  filter(!(pathogen %in% c("S. aureus", "E. coli") & organism1 == "Human")) %>% 
+  # filter(!(pathogen %in% c("S. aureus", "E. coli") & organism_1 == "Human")) %>%
   filter(organism_1 == "Human",
-         gene_set != "Immune") %>% 
+         # gene_set != "Immune"
+         ) %>% 
   ggplot() +
   aes(x = timepoint_2,
       y = timepoint_1) +
@@ -970,22 +888,23 @@ correlation_heatmap_intra_human_all = correlation_filtered_intra_weighted %>%
        y = "Timepoint") +
   #Facet
   facet_nested_wrap(~organism_1+gene_set+treatment+pathogen,
-                    scales = "free", trim_blank = F, nrow = 2,
+                    scales = "free", trim_blank = F, ncol = 6,
                     strip = strip_nested(size = "variable")) +
   geom_tile(aes(fill = rho),
             color = "white",
             size = 0.5) +
     geom_text(aes(label = round(rho, 2), 
-              color = ifelse(abs(rho) > 0.2, "white", "black")), 
-          size = 3, 
+              color = ifelse(abs(rho) > 0.5, "white", "black")), 
+          size = 4, 
           fontface = "bold") +
   scale_color_identity() +
   scale_x_discrete(expand = c(0,0)) +
   scale_y_discrete(expand = c(0,0)) +
   scale_fill_gradientn(
         colors = c("#4DBBD5FF", "white","#4361ee"),
-        values = scales::rescale(seq(-1, 1, length.out = 10)),
-        limits = c(-1, 1),
+        na.value = "white",
+        values = scales::rescale(seq(-0.999999, 0.999999, length.out = 10)),
+        limits = c(-0.999999, 0.99999),
         name = "Spearman's rho",
         guide = guide_colorbar(
           barwidth = 15,
@@ -1008,14 +927,21 @@ correlation_heatmap_intra_human_all = correlation_filtered_intra_weighted %>%
         panel.spacing.x = unit(0.2, "lines"),
         plot.margin = margin(0, 0, 0, 0, unit = "cm"),
         ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) 
-
+#Print
 correlation_heatmap_intra_human_all
 
+#Save
+correlation_heatmap_intra_human_all %>%
+  ggsave(filename = here("Figures", "all_human_mouse_dge_correlation_intraspecies_matrixplot_human_weighted.png"),
+         width = 18, height = 10)
+
+
 #Mouse vs. Mouse
-correlation_heatmap_intra_mouse_all = correlation_filtered_inter_weighted %>% 
-  filter(!(pathogen %in% c("S. aureus", "E. coli") & organism1 == "Human")) %>% 
-  filter(organism1 == "Mouse",
-          gene_set != "Immune") %>% 
+correlation_heatmap_intra_mouse_all = correlation_filtered_intra_weighted %>% 
+  filter(!(pathogen %in% c("S. aureus", "E. coli") & organism_1 == "Human")) %>% 
+  filter(organism_1 == "Mouse",
+          # gene_set != "Immune"
+         ) %>% 
   # View()
   ggplot() +
   aes(x = timepoint_2,
@@ -1026,21 +952,23 @@ correlation_heatmap_intra_mouse_all = correlation_filtered_inter_weighted %>%
   facet_nested_wrap(~organism_1+gene_set+treatment+pathogen,
                     scales = "free",
                     trim_blank = F,
+                    ncol = 6,
                     strip = strip_nested(size = "variable")) +
   geom_tile(aes(fill = rho),
             color = "white",
             size = 0.5) +
   geom_text(aes(label = round(rho, 2), 
-              color = ifelse(abs(rho) > 0.2, "white", "black")), 
-          size = 3, 
+              color = ifelse(abs(rho) > 0.5, "white", "black")), 
+          size = 4, 
           fontface = "bold") +
   scale_color_identity() +
   scale_x_discrete(expand = c(0,0)) +
   scale_y_discrete(expand = c(0,0)) +
   scale_fill_gradientn(
         colors = c("#4DBBD5FF", "white","#4361ee"),
-        values = scales::rescale(seq(-1, 1, length.out = 10)),
-        limits = c(-1, 1),
+        na.value = "white",
+        values = scales::rescale(seq(-0.999999, 0.999999, length.out = 10)),
+        limits = c(-0.999999, 0.99999),
         name = "Spearman's rho",
         guide = guide_colorbar(
           barwidth = 15,
@@ -1063,8 +991,19 @@ correlation_heatmap_intra_mouse_all = correlation_filtered_inter_weighted %>%
         panel.spacing.x = unit(0.2, "lines"),
         plot.margin = margin(0, 0, 0, 0, unit = "cm"),
         ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) 
+#Print
+correlation_heatmap_intra_mouse_all
 
-# correlation_heatmap_intra_mouse_all
+#Save
+correlation_heatmap_intra_mouse_all %>%
+  ggsave(filename = here("Figures", "all_human_mouse_dge_correlation_intraspecies_matrixplot_mouse_weighted.png"),
+         width = 18, height = 10)
+
+
+correlation_filtered_intra_weighted %>% 
+  filter(!(pathogen %in% c("S. aureus", "E. coli") & organism_1 == "Human")) %>% 
+  filter(organism_1 == "Mouse",
+          gene_set != "Immune") 
 ```
 
 
@@ -1231,18 +1170,59 @@ correlation_heatmap_intra_human_mouse %>%
 
 #### Scatter plots
 
+
+
+```{r fig.height=16, fig.width=16}
+#Plot weighted correlation scatterplot
+human_mouse_log2fc_avg_wide %>%
+  mutate(diff_log2FC_cat = case_when(
+    mean_log2fc_diff < -2 ~ "<-2",
+    mean_log2fc_diff > 2  ~ ">2",
+    TRUE        ~ as.character(round(mean_log2fc_diff, 0))),
+  diff_log2FC_cat = fct_relevel(diff_log2FC_cat, "<-2", "-2", "-1", "0", "1", "2", ">2")) %>% 
+  ggplot() +
+  aes(x = mean_log2fc_human, y = mean_log2fc_mouse) +
+  facet_wrap(~treatment+pathogen+timepoint_comparison, scales = "free") +
+  geom_point(aes(size = weight_se_inverse,
+                 fill = diff_log2FC_cat),
+             alpha = 0.5,
+             stroke = 0,
+             pch = 21) +
+  # Weighted Regression Line
+  geom_smooth(aes(weight = weight_se_inverse), 
+              method = "lm", color = "red", linetype = "dashed", se = T) +
+  
+  # Unweighted Regression Line
+  geom_smooth(method = "lm", color = "blue", linetype = "solid", se = T) +
+  
+  scale_fill_manual(
+    values = c("<-2" = "darkred", "-2" = "red", "-1" = "orange", 
+               "0" = "gray", "1" = "orange", "2" = "red", ">2" = "darkred")
+  ) +
+  labs(
+    x = "Human Median Log2FC",
+    y = "Mouse Median Log2FC",
+    title = "Comparison: Weighted vs Unweighted Regression",
+    subtitle = "Red Dashed: Weighted | Blue Solid: Unweighted"
+  ) +
+  theme_vaxgo()+
+  theme(legend.position = "top")
+```
+
+##### Log2FC vs Log2fc
+
 ```{r}
 #Correlation ------
 
 #Log2fc vs Log2fc
 cor_data <- human_mouse_log2fc_avg_wide_degs_immune_nonimmune %>%
-  group_by(pathogen, timepoint_comparison, gene_type) %>%
+  group_by(pathogen, timepoint_comparison, gene_set) %>%
   summarise(
     cor_test_spearman = list(safe_cor_test(mean_log2fc_mouse, mean_log2fc_human, method = "spearman")),
     cor_test_pearson = list(safe_cor_test(mean_log2fc_mouse, mean_log2fc_human, method = "pearson")),,
     .groups = "drop"
   ) %>%
-  inner_join(degs_immune_nonimmune_summary, by = join_by("pathogen", "timepoint_comparison", "gene_type")) %>% 
+  inner_join(degs_immune_nonimmune_summary, by = join_by("pathogen", "timepoint_comparison", "gene_set")) %>% 
   mutate(
     #Spearman
     cor_value_spearman = map_dbl(cor_test_spearman, ~ if (is.null(.x)) NA_real_ else .x$estimate),
@@ -1270,8 +1250,8 @@ cor_data <- human_mouse_log2fc_avg_wide_degs_immune_nonimmune %>%
   drop_na(cor_value_spearman,
           cor_value_pearson) %>% 
   mutate(
-    gene_type = factor(gene_type, levels = c("All genes", "DEGs", "Not-immune", "Immune")),
-    facet_label = paste0(gene_type, ": ", label_spearman)) %>% 
+    gene_set = factor(gene_set, levels = c("All genes", "DEGs", "Not-immune", "Immune")),
+    facet_label = paste0(gene_set, ": ", label_spearman)) %>% 
     #Reorder timepoints
   separate(timepoint_comparison, into = c("timepoint_mouse", "timepoint_human"), remove = F) %>% 
   mutate(timepoint_mouse = fct_relevel(timepoint_mouse, c("2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7"))) %>% 
@@ -1279,7 +1259,7 @@ cor_data <- human_mouse_log2fc_avg_wide_degs_immune_nonimmune %>%
   mutate(timepoint_comparison = fct_inorder(timepoint_comparison))
 
 cor_data_facetted = cor_data %>% 
-  arrange(gene_type) %>% 
+  arrange(gene_set) %>% 
    group_by(pathogen, timepoint_comparison) %>%
   summarise(
     facet_label = paste(facet_label, collapse = "\n"),
@@ -1328,95 +1308,9 @@ human_mouse_log2fc_avg_wide_labels_filters =
 
 
 
-#t vs t
-cor_data_t <- human_mouse_log2fc_avg_wide_degs_immune_nonimmune %>%
-  group_by(pathogen, timepoint_comparison, gene_type) %>%
-  summarise(
-    cor_test_spearman = list(safe_cor_test(tstatistic_mouse, tstatistic_human, method = "spearman")),
-    cor_test_pearson = list(safe_cor_test(tstatistic_mouse, tstatistic_human, method = "pearson")),,
-    .groups = "drop"
-  ) %>%
-  inner_join(degs_immune_nonimmune_summary, by = join_by("pathogen", "timepoint_comparison", "gene_type")) %>% 
-  mutate(
-    #Spearman
-    cor_value_spearman = map_dbl(cor_test_spearman, ~ if (is.null(.x)) NA_real_ else .x$estimate),
-    p_spearman   = map_dbl(cor_test_spearman, ~ if (is.null(.x)) NA_real_ else .x$p.value),
-    p_label_spearman = case_when(
-      is.na(p_spearman)      ~ "ns",
-      p_spearman <= 0.01     ~ "***",
-      p_spearman <= 0.05     ~ "**",
-      p_spearman <= 0.10     ~ "*",
-      TRUE                ~ "ns"
-    ),
-    label_spearman = paste0("rho=", round(cor_value_spearman, 2), ", n=", n_genes, ", ", p_label_spearman),
-    #Pearson
-    cor_value_pearson = map_dbl(cor_test_pearson, ~ if (is.null(.x)) NA_real_ else .x$estimate),
-    p_pearson   = map_dbl(cor_test_pearson, ~ if (is.null(.x)) NA_real_ else .x$p.value),
-    p_label_pearson = case_when(
-      is.na(p_pearson)      ~ "ns",
-      p_pearson <= 0.01     ~ "***",
-      p_pearson <= 0.05     ~ "**",
-      p_pearson <= 0.10     ~ "*",
-      TRUE                ~ "ns"
-    ),
-    label_pearson = paste0("r=", round(cor_value_pearson, 2), ", n=", n_genes, ", ", p_label_pearson)
-  ) %>% 
-  drop_na(cor_value_spearman,
-          cor_value_pearson) %>% 
-  mutate(
-    gene_type = factor(gene_type, levels = c("All genes", "DEGs", "Not-immune", "Immune")),
-    facet_label = paste0(gene_type, ": ", label_spearman))
-
-cor_data_t_facetted = cor_data_t %>% 
-  arrange(gene_type) %>% 
-   group_by(pathogen, timepoint_comparison) %>%
-  summarise(
-    facet_label = paste(facet_label, collapse = "\n"),
-    .groups = "drop"
-  )  %>% 
-  mutate(facet_label = paste0(timepoint_comparison, "\n", facet_label),
-         facet_label = fct_relevel(facet_label, c("2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")))
-
-
-human_mouse_t_avg_wide_labels = human_mouse_log2fc_avg_wide %>% 
-  inner_join(cor_data_t_facetted, 
-             by = join_by("pathogen", "timepoint_comparison")) %>% 
-  mutate(pathogen = fct_relevel(pathogen, "Influenza", "Hepatitis B", "Staphylococcus aureus", "Escherichia coli", "Burn", "Trauma")) %>% 
-  distinct() 
-
-
-human_mouse_t_avg_wide_labels_filters <- 
-  bind_rows(
-    #All genes
-    human_mouse_t_avg_wide_labels %>% 
-  mutate(color_group = "All genes"),
-
-    #All DEGs
-   human_mouse_t_avg_wide_labels %>% 
-  filter(p_adj_human <= 0.05 | p_adj_mouse <= 0.05) %>% 
-  mutate(color_group = "All DEGs"),
-
-   #Shared DEGs
-   human_mouse_t_avg_wide_labels %>% 
-  filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05) %>% 
-  mutate(color_group = "Shared DEGs"),
-
-  #Immune DEGs
-    human_mouse_t_avg_wide_labels %>% 
-  filter(human_symbol %in% c(btm_annotation_genes %>% 
-                               filter(module_category == "immune") %>% 
-                               pull(symbol)),
-         p_adj_human <= 0.05 & p_adj_mouse <= 0.05) %>% 
-  mutate(color_group = "Immune")
-  ) %>% 
-  mutate(color_group = fct_relevel(color_group, "All genes", "All DEGs", "Shared DEGs", "Immune"))
-
-human_mouse_t_avg_wide_labels_filters$timepoint_comparison
-
 ```
 
 
-Log2FC vs Log2fc
 ```{r fig.height=12, fig.width=16}
 # Log2FC vs Log2fc
 human_mouse_log2fc_log2fc_avg_wide_scatterplot = human_mouse_log2fc_avg_wide_labels_filters %>% 
@@ -1489,179 +1383,103 @@ human_mouse_log2fc_log2fc_avg_wide_scatterplot = human_mouse_log2fc_avg_wide_lab
 human_mouse_log2fc_log2fc_avg_wide_scatterplot 
 
 #Save
-human_mouse_log2fc_log2fc_avg_wide_scatterplot %>%
-  ggsave(filename = here("Figures", "all_human_mouse_dge_degs_scatterplot.png"),
-         width = 16, height = 12)
+# human_mouse_log2fc_log2fc_avg_wide_scatterplot %>%
+#   ggsave(filename = here("Figures", "all_human_mouse_dge_degs_scatterplot.png"),
+#          width = 16, height = 12)
 
 ```
 
 
-
-t-statistic vs t-statistic
-```{r fig.height=12, fig.width=16}
-
-#t-statistic vs t-statistic
-human_mouse_t_t_avg_wide_scatterplot = human_mouse_t_avg_wide_labels_filters %>% 
-  
-  #Plot
-  ggplot() +
-  aes(x = tstatistic_mouse,
-      y = tstatistic_human) +
-  #Facet
-  facet_nested_wrap(vars(pathogen, facet_label),
-                    scales = "free",
-                    nrow = 4,
-                    strip = strip_nested(size = "variable")) +
-  
-  geom_point(aes(fill = color_group),
-             alpha = 1,
-             color = "gray95",
-             pch = 21,
-             size = 1.5,
-             data = . %>% filter(color_group == "All genes")) +
-  
-  geom_point(aes(fill = color_group),
-             alpha = 1,
-             color = "gray85",
-             pch = 21,
-             size = 1.5,
-             data = . %>% filter(color_group == "All DEGs")) +
-  
-  geom_point(aes(fill = color_group,
-                 color = color_group),
-             alpha = 1,
-             pch = 21,
-             size = 1.5,
-             data = . %>% filter(!color_group %in% c("All genes", "All DEGs"))) +
-  
-  #Regression line: Linear model, Pearson
-  stat_smooth(method = "lm", geom = "line", alpha = 1, se = F, size = 1,
-              mapping = aes(group = color_group,
-                        color = color_group)) +
-  guides(fill = guide_legend(override.aes = list(size = 4)),
-         color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
-         ) +
-  scale_fill_manual(values = colors$shared) +
-  scale_color_manual(values = colors$shared) +
-  #Add lines
-  geom_abline(alpha = 0.2, linetype = 2) +
-  geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
-  geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
-  #Theme
-  theme_vaxgo() +
-  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size =10),
-        axis.text.y = element_text(size = 10),
-        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
-        legend.position = "top",
-        legend.direction = "horizontal",
-        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) +
-  labs(x = "Mouse (tstatistic)",
-       y = "Human (tstatistic)",
-       fill = "Gene type",
-       color = "Linear regression",
-       title = "Correlation plot,\nHuman vs Mouse")
-
-
-human_mouse_t_t_avg_wide_scatterplot 
-
-#Save
-human_mouse_t_t_avg_wide_scatterplot %>%
-  ggsave(filename = here("Figures", "all_human_mouse_dge_degs_scatterplot_tstatistic.png"),
-         width = 16, height = 12)
-
-```
-
-
-Ranks vs Ranks
+##### Ranks vs Ranks
 
 ```{r fig.height=12, fig.width=16}
-
-#Create ranks
-human_mouse_log2fc_avg_wide_labels_ranked <-
-  human_mouse_log2fc_avg_wide_labels %>%
-  group_by(pathogen, facet_label) %>%
-  mutate(
-    rank_log2fc_mouse = dense_rank(mean_log2fc_mouse),
-    rank_log2fc_human = dense_rank(mean_log2fc_human)
-  ) %>%
-  ungroup()
-
-
-human_mouse_rank_rank_avg_wide_scatterplot = human_mouse_log2fc_avg_wide_labels_ranked %>% 
-  
-  #Plot
-  ggplot() +
-  aes(x = rank_log2fc_mouse,
-      y = rank_log2fc_human) +
-  #Facet
-  facet_nested_wrap(vars(pathogen, facet_label),
-                    scales = "free",
-                    nrow = 4,
-                    strip = strip_nested(size = "variable")) +
-  
-  geom_point(aes(color = color_group,
-                 fill = color_group),
-             alpha = 1,
-             size = 1.5,
-             data = human_mouse_log2fc_avg_wide_labels_ranked %>% 
-               mutate(color_group = "All genes")) +
-  
-  #All DEGs
-  geom_point(aes(color = color_group,
-                 fill = color_group), 
-             alpha = 1,
-             size = 1.5,
-             data = human_mouse_log2fc_avg_wide_labels_ranked %>% 
-               filter(p_adj_human <= 0.05 | p_adj_mouse <= 0.05) %>% 
-               mutate(color_group = "All DEGs")) +
-  
-  #DEGs in both organisms
-  geom_point(aes(fill = color_group,
-                 color = color_group),
-             alpha = 1,
-             size = 1.5,
-             pch = 21,
-             data = human_mouse_log2fc_avg_wide_labels_ranked %>%
-               #Filter DEGs in both organisms, same sign
-               filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05) %>% 
-             mutate(color_group = "Shared DEGs")) +
-
-  #Immune DEGs
-  geom_point(aes(fill = color_group,
-                 color = color_group),
-             alpha = 1,
-             size = 1.5,
-             pch = 21,
-             data = human_mouse_log2fc_avg_wide_labels_ranked %>%
-               filter(human_symbol %in% c(btm_annotation_genes %>%                                                
-                                            filter(module_category == "immune") %>%
-                                            pull(symbol)),
-                      p_adj_human <= 0.05 & p_adj_mouse <= 0.05) %>% 
-               mutate(color_group = "Immune")) +
-  guides(color = "none",
-         fill = guide_legend(override.aes = list(size = 4))) +
-  scale_fill_manual(values = colors$shared) +
-  scale_color_manual(values = colors$shared) +
-  #Add lines
-  geom_abline(alpha = 0.2, linetype = 2) +
-  #Theme
-  theme_vaxgo() +
-  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size =10),
-        axis.text.y = element_text(size = 10),
-        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
-        legend.position = "top",
-        legend.direction = "horizontal",
-        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) +
-  labs(x = "Mouse L2FC",
-       y = "Human L2FC",
-       fill = "Gene type",
-       title = "Correlation plot,\nHuman vs Mouse")
-
-
-human_mouse_rank_rank_avg_wide_scatterplot 
-human_mouse_rank_rank_avg_wide_scatterplot %>%
-  ggsave(filename = here("Figures", "all_human_mouse_dge_degs_scatterplot_ranks.png"),
-         width = 16, height = 12)
+# 
+# #Create ranks
+# human_mouse_log2fc_avg_wide_labels_ranked <-
+#   human_mouse_log2fc_avg_wide_labels %>%
+#   group_by(pathogen, facet_label) %>%
+#   mutate(
+#     rank_log2fc_mouse = dense_rank(mean_log2fc_mouse),
+#     rank_log2fc_human = dense_rank(mean_log2fc_human)
+#   ) %>%
+#   ungroup()
+# 
+# 
+# human_mouse_rank_rank_avg_wide_scatterplot = human_mouse_log2fc_avg_wide_labels_ranked %>% 
+#   
+#   #Plot
+#   ggplot() +
+#   aes(x = rank_log2fc_mouse,
+#       y = rank_log2fc_human) +
+#   #Facet
+#   facet_nested_wrap(vars(pathogen, facet_label),
+#                     scales = "free",
+#                     nrow = 4,
+#                     strip = strip_nested(size = "variable")) +
+#   
+#   geom_point(aes(color = color_group,
+#                  fill = color_group),
+#              alpha = 1,
+#              size = 1.5,
+#              data = human_mouse_log2fc_avg_wide_labels_ranked %>% 
+#                mutate(color_group = "All genes")) +
+#   
+#   #All DEGs
+#   geom_point(aes(color = color_group,
+#                  fill = color_group), 
+#              alpha = 1,
+#              size = 1.5,
+#              data = human_mouse_log2fc_avg_wide_labels_ranked %>% 
+#                filter(p_adj_human <= 0.05 | p_adj_mouse <= 0.05) %>% 
+#                mutate(color_group = "All DEGs")) +
+#   
+#   #DEGs in both organisms
+#   geom_point(aes(fill = color_group,
+#                  color = color_group),
+#              alpha = 1,
+#              size = 1.5,
+#              pch = 21,
+#              data = human_mouse_log2fc_avg_wide_labels_ranked %>%
+#                #Filter DEGs in both organisms, same sign
+#                filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05) %>% 
+#              mutate(color_group = "Shared DEGs")) +
+# 
+#   #Immune DEGs
+#   geom_point(aes(fill = color_group,
+#                  color = color_group),
+#              alpha = 1,
+#              size = 1.5,
+#              pch = 21,
+#              data = human_mouse_log2fc_avg_wide_labels_ranked %>%
+#                filter(human_symbol %in% c(btm_annotation_genes %>%                                                
+#                                             filter(module_category == "immune") %>%
+#                                             pull(symbol)),
+#                       p_adj_human <= 0.05 & p_adj_mouse <= 0.05) %>% 
+#                mutate(color_group = "Immune")) +
+#   guides(color = "none",
+#          fill = guide_legend(override.aes = list(size = 4))) +
+#   scale_fill_manual(values = colors$shared) +
+#   scale_color_manual(values = colors$shared) +
+#   #Add lines
+#   geom_abline(alpha = 0.2, linetype = 2) +
+#   #Theme
+#   theme_vaxgo() +
+#   theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size =10),
+#         axis.text.y = element_text(size = 10),
+#         strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+#         legend.position = "top",
+#         legend.direction = "horizontal",
+#         ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) +
+#   labs(x = "Mouse L2FC",
+#        y = "Human L2FC",
+#        fill = "Gene type",
+#        title = "Correlation plot,\nHuman vs Mouse")
+# 
+# 
+# human_mouse_rank_rank_avg_wide_scatterplot 
+# human_mouse_rank_rank_avg_wide_scatterplot %>%
+#   ggsave(filename = here("Figures", "all_human_mouse_dge_degs_scatterplot_ranks.png"),
+#          width = 16, height = 12)
 
 ```
 
@@ -1670,7 +1488,7 @@ human_mouse_rank_rank_avg_wide_scatterplot %>%
 
 #### Other exploration analysis
 
-Compare Diff Log2FC distributions
+##### Compare Diff Log2FC distributions
 ```{r fig.height=4, fig.width=6}
 #Compare distributions =============
 
