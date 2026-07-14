@@ -482,6 +482,65 @@ human_mouse_log2fc_avg_wide_all =
                                     T ~ NA)) 
 
 
+
+```
+
+
+
+
+
+
+
+#### Create Biological null distribution
+```{r}
+biological_null_degs = readRDS(file = here("tables", "duchenne_mouse_dge_limma_degs.rds")) %>% 
+  select(-comparison) %>% 
+  rename(mean_log2fc = mean_l2fc, 
+         p_adj = adj_p_val, 
+         tstatistic = t, 
+         bstatistic = b) %>% 
+  rename_with(~ paste0(.x, "_2"), all_of(c( "organism", "treatment", "condition", "timepoint", "mean_log2fc", "ci_lower", "ci_upper", "ave_expr", "tstatistic", "p_value", "p_adj", "bstatistic", "se", "sd")))
+
+# Create Biological null distribution =====
+
+
+# 1. Get the target data using the arguments
+target_df <- human_mouse_log2fc_avg_wide_all %>%
+  filter(organism_1 == "Human", organism_2 == "Mouse") %>%
+  mutate(divergence = mean_log2fc_1 - mean_log2fc_2, model_type = "Observed Target") %>% 
+  rename(pathogen_1 = pathogen, treatment_1 = treatment) %>% 
+  mutate(pathogen_2 = pathogen_1, treament_2 = treatment_1)
+
+# 2. Get the biological null data and join
+null_df <- biological_null_degs %>%
+  filter(condition_2 == "DMD_Day28") %>%
+  inner_join(target_df %>% select(!ends_with("_2")), by = "human_symbol", suffix = c("_2", "_1")) %>%
+  mutate(divergence = mean_log2fc_1 - mean_log2fc_2,
+         model_type = "Biological Null") %>% 
+  # Compute expression divergence and volatility metrics
+  mutate(
+    # Cross-species effect size delta (Directional macroevolutionary divergence)
+    mean_log2fc_diff = mean_log2fc_1 - mean_log2fc_2,
+    
+    # Coefficient of Variation - CV
+    # --------------------------------------------------------------------------
+    cv_1 = sd_1 / abs(mean_log2fc_1),
+    cv_2 = sd_2 / abs(mean_log2fc_2),
+    cv_mean  = (cv_1 + cv_2) / 2, # Combined cross-species relative noise
+    
+    # Statistical Weights for Downstream Weighted Correlation
+    # Joint geometric weight based on downsampling iteration variance (SD^2)
+    weight_sd_inverse = 1 / (sd_1^2 + sd_2^2),
+    # Joint geometric weight based on native linear model standard error (SE^2)
+    weight_se_inverse = 1 / (se_1^2 + se_2^2),
+    
+    se_combined = sqrt(se_1^2 + se_2^2)
+  ) 
+
+# 3. Return combined rows
+human_mouse_log2fc_avg_wide_bionull = bind_rows(target_df, null_df)
+
+
 #Get immune and non immune genes
 human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune = 
   
@@ -506,50 +565,10 @@ human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune =
 # #Save
 # human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>% 
 #   saveRDS(here("tables", "human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune.rds"))
-```
-
-
-
-
-
-
-
-#### Create Biological null distribution
-```{r}
-biological_null_degs = readRDS(file = here("tables", "duchenne_mouse_dge_limma_degs.rds")) %>% 
-  select(-comparison) %>% 
-  rename(mean_log2fc = mean_l2fc, 
-         p_adj = adj_p_val, 
-         tstatistic = t, 
-         bstatistic = b) %>% 
-  rename_with(~ paste0(.x, "_mouse"), all_of(c( "condition", "timepoint", "mean_log2fc", "ci_lower", "ci_upper", "ave_expr", "tstatistic", "p_value", "p_adj", "bstatistic", "se", "sd")))
-
-# Create Biological null distribution =====
-
-  
-  # 1. Get the target data using the arguments
-  target_df <- human_mouse_log2fc_avg_wide_all %>%
-  filter(organism_1 == "Human", organism_2 == "Mouse") %>% 
-    mutate(divergence = mean_log2fc_1 - mean_log2fc_2, 
-           model_type = "Observed Target") %>% 
-  rename_with(~ str_replace(.x, "_2$", "_mouse"), ends_with("_2")) %>% 
-  rename_with(~ str_replace(.x, "_1$", "_human"), ends_with("_1"))
-  
-  # 2. Get the biological null data and join
-  null_df <- biological_null_degs %>%
-    filter(condition_mouse == "DMD_Day28") %>% 
-    rename(pathogen_null = pathogen, treatment_null = treatment,) %>% 
-    inner_join(target_df %>% select(!ends_with("_mouse")), 
-               by = "human_symbol") %>%
-    mutate(divergence = mean_log2fc_human - mean_log2fc_mouse, 
-           model_type = "Biological Null")
-  
-  # 3. Return combined rows
-  human_mouse_log2fc_avg_wide_bionull = bind_rows(target_df, null_df)
 
 ```
 
-Compute correlation
+#### Compute correlation
 ```{r fig.height=20, fig.width=20}
 #####################
 #Correlation (Weighted)
