@@ -1,0 +1,868 @@
+---
+title: "Preprocessing (Refactored)"
+output: html_document
+---
+
+# Required
+
+```{r}
+library(here)
+source(here("scripts_notebooks", "required.R"))
+```
+
+# Functions
+
+```{r, include=FALSE}
+
+# ──────────────────────────────────────────────
+# A. PROBE ANNOTATION & GENE COLLAPSE (MOUSE)
+# ──────────────────────────────────────────────
+
+annotate_mouse_probes <- function(exprs_matrix, probe_attribute, output_prefix) {
+  ensembl_mart <- useMart("ensembl")
+  ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
+
+  gene_id <- exprs_matrix %>% rownames()
+
+  annot <- getBM(
+    attributes = c(probe_attribute,
+                   "ensembl_gene_id",
+                   "entrezgene_id",
+                   "mgi_symbol",
+                   "description"),
+    filters = probe_attribute,
+    values = gene_id,
+    mart = ensembl_mart)
+
+  annot %>% saveRDS(here("tables", paste0(output_prefix, "_probe_annot.rds")))
+  beep()
+
+  library(FIT.mouse2man)
+  HS_MM_Symbol_Entrez <- FIT.mouse2man::HS_MM_Symbol_Entrez %>%
+    clean_names() %>%
+    rename(mouse_entrez = mouse_ortholog)
+
+  probe_col <- setNames("probe", probe_attribute)
+
+  log2summary <- exprs_matrix %>%
+    as.data.frame() %>%
+    rownames_to_column("probe") %>%
+    pivot_longer(cols = -probe, names_to = "sample", values_to = "expression") %>%
+    group_by(probe) %>%
+    summarise(mean = mean(expression, na.rm = TRUE),
+              median = median(expression, na.rm = TRUE)) %>%
+    inner_join(annot %>% rename(!!probe_col), by = "probe") %>%
+    group_by(ensembl_gene_id) %>%
+    slice_max(median, n = 1) %>%
+    ungroup() %>%
+    select(-ensembl_gene_id) %>%
+    distinct() %>%
+    group_by(entrezgene_id) %>%
+    slice_max(median, n = 1) %>%
+    ungroup() %>%
+    rename(mouse_entrez = entrezgene_id) %>%
+    inner_join(HS_MM_Symbol_Entrez, by = c("mouse_entrez", "mgi_symbol")) %>%
+    group_by(hgnc_symbol) %>%
+    slice_max(median, n = 1) %>%
+    ungroup()
+
+  hgnc_dupes <- log2summary %>% get_dupes(hgnc_symbol)
+  log2summary <- log2summary %>%
+    filter(!hgnc_symbol %in% unique(hgnc_dupes$hgnc_symbol))
+
+  exprs_hgnc <- exprs_matrix %>%
+    as.data.frame() %>%
+    rownames_to_column("probe") %>%
+    inner_join(log2summary %>% select(probe, hgnc_symbol), by = "probe") %>%
+    select(human_symbol = hgnc_symbol, everything(), -probe) %>%
+    distinct()
+
+  exprs_hgnc %>% saveRDS(here("tables", paste0(output_prefix, "_exprs_hgnc.rds")))
+
+  list(exprs = exprs_hgnc, summary = log2summary, annot = annot)
+}
+
+
+# ──────────────────────────────────────────────
+# B. HUMAN PROBE ANNOTATION (platform file)
+# ──────────────────────────────────────────────
+
+annotate_human_probes <- function(exprs_matrix, platform_file, sample_ids) {
+  probes_annotation <- read.delim(here("tables", platform_file),
+                                  skip = 19, header = TRUE, sep = "\t", quote = "") %>%
+    select(gene_id = ID, entrez_id = ENTREZ_GENE_ID,
+           ensembl_id = ENSEMBL_ID, gene_symbol = GENE_SYMBOL) %>%
+    mutate(gene_id = as.character(gene_id))
+
+  counts <- exprs_matrix %>%
+    as.data.frame() %>%
+    rownames_to_column("gene_id") %>%
+    inner_join(probes_annotation, by = "gene_id") %>%
+    select(gene_id, entrez_id, ensembl_id, gene_symbol, all_of(sample_ids)) %>%
+    mutate(entrez_id = as.character(entrez_id))
+
+  counts_genes <- counts %>%
+    pivot_longer(cols = -c(gene_id, entrez_id, ensembl_id, gene_symbol),
+                 names_to = "sample", values_to = "expression") %>%
+    group_by(entrez_id, gene_id) %>%
+    drop_na(entrez_id) %>%
+    summarise(median = median(expression),
+              median = round(median, 10)) %>%
+    slice_max(median, n = 1) %>%
+    ungroup()
+
+  counts_raw <- counts %>%
+    inner_join(counts_genes %>% select(gene_id, entrez_id),
+               by = join_by("gene_id", "entrez_id"))
+
+  dupes_entrez <- counts_genes %>%
+    get_dupes(entrez_id) %>%
+    group_by(entrez_id) %>%
+    slice_sample(n = 1)
+
+  exprs_entrez <- counts_raw %>%
+    select(-gene_symbol) %>%
+    filter(!gene_id %in% dupes_entrez$gene_id) %>%
+    distinct() %>%
+    select(entrez_id, all_of(sample_ids)) %>%
+    column_to_rownames("entrez_id")
+
+  counts_genes_symbol <- counts %>%
+    pivot_longer(cols = -c(gene_id, entrez_id, ensembl_id, gene_symbol),
+                 names_to = "sample", values_to = "expression") %>%
+    group_by(gene_symbol, gene_id) %>%
+    filter(gene_symbol != "") %>%
+    drop_na(gene_symbol) %>%
+    summarise(median = median(expression), median = round(median, 10)) %>%
+    slice_max(median, n = 1) %>%
+    ungroup()
+
+  counts_raw_symbol <- counts %>%
+    inner_join(counts_genes_symbol %>% select(gene_id, gene_symbol),
+               by = join_by("gene_id", "gene_symbol"))
+
+  dupes_symbol <- counts_genes_symbol %>%
+    get_dupes(gene_symbol) %>%
+    group_by(gene_symbol) %>%
+    slice_sample(n = 1)
+
+  exprs_symbol <- counts_raw_symbol %>%
+    filter(!gene_symbol %in% dupes_symbol$gene_symbol) %>%
+    distinct() %>%
+    select(gene_symbol, all_of(sample_ids)) %>%
+    column_to_rownames("gene_symbol")
+
+  symbol_entrez <- counts_raw_symbol %>%
+    filter(!gene_symbol %in% dupes_symbol$gene_symbol) %>%
+    distinct() %>%
+    select(symbol = gene_symbol, entrez_id)
+
+  exprs_symbol %>% saveRDS(here("tables", paste0(output_prefix, "_exprs.rds")))
+
+  list(exprs = exprs_symbol, entrez = exprs_entrez, symbol_entrez = symbol_entrez)
+}
+
+
+# ──────────────────────────────────────────────
+# C. EXPRESSION SET CREATION
+# ──────────────────────────────────────────────
+
+create_eset <- function(exprs_hgnc, metadata, symbol_col = "human_symbol",
+                         id_col = "geo_sample", normalize = FALSE) {
+  expr_matrix <- exprs_hgnc %>%
+    as.data.frame() %>%
+    column_to_rownames(symbol_col) %>%
+    as.matrix()
+
+  if (normalize) {
+    expr_matrix <- normalizeBetweenArrays(expr_matrix, method = "quantile")
+  }
+
+  pdata <- metadata %>%
+    mutate(across(where(is.character), as.factor)) %>%
+    column_to_rownames(id_col)
+
+  eset <- ExpressionSet(
+    assayData = expr_matrix,
+    phenoData = AnnotatedDataFrame(pdata))
+
+  eset
+}
+
+
+# ──────────────────────────────────────────────
+# D. LOG2 FOLD-CHANGE (LONGITUDINAL / PAIRED)
+# ──────────────────────────────────────────────
+
+compute_log2fc_longitudinal <- function(exprs_hgnc, metadata, symbol_col = "human_symbol",
+                                         id_col = "geo_sample",
+                                         participant_col = "participant_id",
+                                         timepoint_col = "timepoint",
+                                         baseline = "0",
+                                         prefix = "day_",
+                                         keep_probe = NULL) {
+  id_vars <- symbol_col
+  if (!is.null(keep_probe)) id_vars <- c(id_vars, keep_probe)
+
+  long <- exprs_hgnc %>%
+    as.data.frame() %>%
+    pivot_longer(cols = -all_of(id_vars), names_to = id_col, values_to = "log2") %>%
+    inner_join(metadata %>% select(all_of(c(id_col, participant_col, timepoint_col))),
+               by = id_col) %>%
+    select(all_of(c(participant_col, symbol_col, timepoint_col)), value = log2) %>%
+    distinct() %>%
+    pivot_wider(names_from = all_of(timepoint_col), values_from = value, names_prefix = prefix) %>%
+    pivot_longer(cols = starts_with(prefix),
+                 names_to = timepoint_col, names_prefix = prefix, values_to = "value") %>%
+    group_by(!!sym(participant_col), !!sym(symbol_col)) %>%
+    mutate(day0 = value[!!sym(timepoint_col) == baseline]) %>%
+    ungroup() %>%
+    mutate(log2fc = value - day0) %>%
+    filter(!!sym(timepoint_col) != baseline)
+
+  wide <- long %>%
+    select(-value, -day0) %>%
+    pivot_wider(names_from = all_of(participant_col), values_from = "log2fc")
+
+  list(long = long, wide = wide)
+}
+
+
+# ──────────────────────────────────────────────
+# E. LOG2 FOLD-CHANGE (INDEPENDENT / UNPAIRED)
+# ──────────────────────────────────────────────
+
+compute_log2fc_independent <- function(exprs_long_format, metadata, control_condition,
+                                        value_col = "value_raw", id_cols = c("probe_id"),
+                                        group_col = "treatment", subject_col = "participant_id") {
+  controls <- exprs_long_format %>%
+    filter(!!sym(group_col) == control_condition) %>%
+    group_by(!!!syms(id_cols)) %>%
+    summarise(day0_value_raw = mean(!!sym(value_col), na.rm = TRUE)) %>%
+    ungroup()
+
+  log2fc <- exprs_long_format %>%
+    filter(!!sym(group_col) != control_condition) %>%
+    inner_join(controls, by = id_cols) %>%
+    mutate(log2fc = !!sym(value_col) - day0_value_raw) %>%
+    distinct()
+
+  log2fc
+}
+
+
+# ──────────────────────────────────────────────
+# F. LIMMA (LONGITUDINAL / PAIRED)
+# ──────────────────────────────────────────────
+
+run_limma_longitudinal <- function(eset, participant_col = "participant_id",
+                                    timepoint_col = "timepoint",
+                                    condition_col = "condition",
+                                    contrasts_list,
+                                    condition_map,
+                                    output_prefix,
+                                    min_log2 = 6, min_samples = 5,
+                                    covariate_formula = NULL) {
+  genes_to_keep <- exprs(eset) %>%
+    as.data.frame() %>%
+    mutate(across(everything(), ~ . > min_log2)) %>%
+    rowSums() %>%
+    { . >= min_samples }
+
+  eset_filtered <- eset[genes_to_keep, ]
+
+  if (is.null(covariate_formula)) {
+    design <- model.matrix(~ . + 0,
+                           data = pData(eset_filtered)[, timepoint_col, drop = FALSE])
+  } else {
+    design <- model.matrix(covariate_formula, data = pData(eset_filtered))
+  }
+  colnames(design) <- make.names(colnames(design))
+
+  corfit <- duplicateCorrelation(eset_filtered, design = design,
+                                  block = pData(eset_filtered)[[participant_col]])
+
+  aw <- arrayWeights(eset_filtered, design)
+  barplot(aw, names.arg = pData(eset_filtered)[[condition_col]],
+          main = "Sample Weights Diagnostic", ylab = "Weight",
+          las = 2, cex.names = 0.7, col = "skyblue")
+
+  fit <- lmFit(eset_filtered, design, weights = aw,
+               block = pData(eset_filtered)[[participant_col]],
+               correlation = corfit$consensus)
+
+  cont.matrix <- makeContrasts(contrasts = contrasts_list, levels = design)
+  fit2 <- contrasts.fit(fit, cont.matrix)
+  fit2 <- eBayes(fit2, robust = TRUE, trend = TRUE)
+
+  plotSA(fit2, main = "Sigma vs Abundance (Weights Applied)")
+
+  results_list <- lapply(1:ncol(fit2), function(i) {
+    topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+      mutate(comparison = colnames(fit2)[i]) %>%
+      rownames_to_column("symbol")
+  })
+
+  all_degs <- bind_rows(results_list) %>%
+    select(comparison, everything()) %>%
+    clean_names() %>%
+    separate(comparison, sep = " - ", into = c("comparisonA", "comparisonRef"), remove = FALSE) %>%
+    mutate(condition = case_when(!!!condition_map, TRUE ~ comparisonA),
+           organism = "Mouse") %>%
+    select(condition, everything()) %>%
+    rename(human_symbol = symbol, mean_l2fc = log_fc,
+           ci_lower = ci_l, ci_upper = ci_r)
+
+  all_degs %>% saveRDS(here("tables", paste0(output_prefix, "_dge_limma_degs.rds")))
+
+  all_degs %>%
+    group_by(condition) %>%
+    filter(adj_p_val <= 0.05) %>%
+    summarise(n_degs = n()) %>%
+    print()
+
+  all_degs
+}
+
+
+# ──────────────────────────────────────────────
+# G. LIMMA (INDEPENDENT)
+# ──────────────────────────────────────────────
+
+run_limma_independent <- function(eset, design_formula, contrasts_list,
+                                   condition_map, output_prefix,
+                                   min_log2 = 6, min_samples = 5,
+                                   block_col = NULL, var_group_col = NULL) {
+  genes_to_keep <- exprs(eset) %>%
+    as.data.frame() %>%
+    mutate(across(everything(), ~ . > min_log2)) %>%
+    rowSums() %>%
+    { . >= min_samples }
+
+  eset_filtered <- eset[genes_to_keep, ]
+
+  design <- model.matrix(design_formula, data = pData(eset_filtered))
+  colnames(design) <- make.names(colnames(design))
+
+  aw <- arrayWeights(eset_filtered, design,
+                     var.group = if (!is.null(var_group_col)) pData(eset_filtered)[[var_group_col]] else NULL)
+
+  barplot(aw, names.arg = pData(eset_filtered)$condition,
+          main = "Sample Weights Diagnostic", ylab = "Weight",
+          las = 2, cex.names = 0.7, col = "skyblue")
+
+  if (!is.null(block_col)) {
+    corfit <- duplicateCorrelation(eset_filtered, design = design,
+                                    block = pData(eset_filtered)[[block_col]])
+    fit <- lmFit(eset_filtered, design, weights = aw,
+                 block = pData(eset_filtered)[[block_col]],
+                 correlation = corfit$consensus)
+  } else {
+    fit <- lmFit(eset_filtered, design, weights = aw)
+  }
+
+  cont.matrix <- makeContrasts(contrasts = contrasts_list, levels = design)
+  fit2 <- contrasts.fit(fit, cont.matrix)
+  fit2 <- eBayes(fit2, robust = TRUE, trend = TRUE)
+
+  plotSA(fit2, main = "Sigma vs Abundance (Weights Applied)")
+
+  results_list <- lapply(1:ncol(fit2), function(i) {
+    topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+      mutate(comparison = colnames(fit2)[i]) %>%
+      rownames_to_column("symbol")
+  })
+
+  all_degs <- bind_rows(results_list) %>%
+    select(comparison, everything()) %>%
+    clean_names() %>%
+    mutate(condition = case_when(!!!condition_map, TRUE ~ comparison),
+           organism = "Mouse") %>%
+    select(condition, everything()) %>%
+    rename(human_symbol = symbol, mean_l2fc = log_fc,
+           ci_lower = ci_l, ci_upper = ci_r)
+
+  all_degs %>% saveRDS(here("tables", paste0(output_prefix, "_dge_limma_degs.rds")))
+
+  all_degs %>%
+    group_by(condition) %>%
+    filter(adj_p_val <= 0.05) %>%
+    summarise(n_degs = n()) %>%
+    print()
+
+  all_degs
+}
+
+
+# ──────────────────────────────────────────────
+# H. T-TEST (LONGITUDINAL)
+# ──────────────────────────────────────────────
+
+run_ttest_longitudinal <- function(exprs_hgnc, metadata, symbol_col = "human_symbol",
+                                    id_col = "geo_sample",
+                                    participant_col = "participant_id",
+                                    timepoint_col = "timepoint",
+                                    timepoint_names, prefix = "day_",
+                                    output_prefix, organism = "Mouse") {
+  wide <- exprs_hgnc %>%
+    as.data.frame() %>%
+    pivot_longer(cols = -all_of(symbol_col), names_to = id_col, values_to = "log2") %>%
+    inner_join(metadata %>% select(all_of(c(id_col, participant_col, timepoint_col))),
+               by = id_col) %>%
+    select(all_of(c(participant_col, symbol_col, timepoint_col)), value = log2) %>%
+    distinct() %>%
+    pivot_wider(names_from = all_of(timepoint_col), values_from = value, names_prefix = prefix)
+
+  ttest_wrapper <- function(cols, paired = TRUE) {
+    wide %>%
+      group_by(!!sym(symbol_col)) %>%
+      summarise(!!!setNames(
+        lapply(names(timepoint_names), function(tp) {
+          expr <- paste0("tryCatch(t.test(", prefix, tp, ", ", prefix, "0, paired = ",
+                         tolower(paired), ", var.equal = FALSE, alternative = 'two.sided')$p.value,
+                         error = function(e) NA_real_)")
+          parse(text = expr)
+        }),
+        paste0("pval_", prefix, names(timepoint_names))
+      ), .groups = "drop") %>%
+      mutate(!!!setNames(
+        lapply(names(timepoint_names), function(tp) {
+          expr <- paste0("p.adjust(pval_", prefix, tp, ", method = 'fdr')")
+          parse(text = expr)
+        }),
+        paste0("padj_", prefix, names(timepoint_names))
+      )) %>%
+      pivot_longer(
+        cols = starts_with(c("pval_", "padj_")),
+        names_to = c(".value", "timepoint"),
+        names_pattern = paste0("(pval|padj)_", prefix, "(.+)")
+      ) %>%
+      mutate(timepoint = str_remove(timepoint, prefix),
+             test = "t-Test", paired = ifelse(paired, "Paired", "Unpaired"))
+  }
+
+  paired_res <- ttest_wrapper(timepoint_names, paired = TRUE)
+  unpaired_res <- ttest_wrapper(timepoint_names, paired = FALSE)
+
+  combined <- bind_rows(paired_res, unpaired_res)
+  combined %>% saveRDS(here("tables", paste0(output_prefix, "_paired_unpaired_ttest.rds")))
+
+  combined
+}
+
+
+# ──────────────────────────────────────────────
+# I. SUBSAMPLING (LONGITUDINAL)
+# ──────────────────────────────────────────────
+
+subsampling_longitudinal <- function(eset, metadata, n_iterations = 200, cohort_n = 5,
+                                      participant_col = "participant_id",
+                                      timepoint_col = "timepoint",
+                                      condition_col = "condition",
+                                      contrasts_list, condition_map,
+                                      output_prefix, seed = 123) {
+  genes_to_keep <- exprs(eset) %>%
+    as.data.frame() %>%
+    mutate(across(everything(), ~ . > 6)) %>%
+    rowSums() %>%
+    { . >= 5 }
+
+  eset_filtered <- eset[genes_to_keep, ]
+  meta_df <- as_tibble(pData(eset_filtered), rownames = "sample_id")
+  expr_matrix <- exprs(eset_filtered)
+  unique_participants <- unique(meta_df[[participant_col]])
+
+  draw_flexible_subset <- function(participants_list, metadata, target_n = 5) {
+    valid_draw <- FALSE
+    attempts <- 0
+    while (!valid_draw) {
+      attempts <- attempts + 1
+      if (attempts > 500) stop("Could not find a balanced subset.")
+      selected_ids <- sample(participants_list, size = target_n, replace = FALSE)
+      sub_meta <- metadata %>% filter(!!sym(participant_col) %in% selected_ids)
+      has_all_timepoints <- length(unique(sub_meta[[timepoint_col]])) == length(unique(metadata[[timepoint_col]]))
+      if (has_all_timepoints) valid_draw <- TRUE
+    }
+    sub_meta
+  }
+
+  set.seed(seed)
+
+  df_global_runs <- tibble(iteration = 1:n_iterations) %>%
+    mutate(
+      sampled_metadata = map(iteration, ~ draw_flexible_subset(unique_participants, meta_df, cohort_n)),
+      limma_results = map(sampled_metadata, ~ {
+        sub_meta <- .x
+        sub_expr <- expr_matrix[, sub_meta$sample_id]
+
+        design_sub <- model.matrix(as.formula(paste0("~ ", timepoint_col, " + 0")), data = sub_meta)
+        colnames(design_sub) <- make.names(colnames(design_sub))
+
+        corfit_sub <- duplicateCorrelation(sub_expr, design = design_sub,
+                                            block = sub_meta[[participant_col]])
+        aw_sub <- arrayWeights(sub_expr, design_sub)
+
+        fit_sub <- lmFit(sub_expr, design = design_sub, weights = aw_sub,
+                         block = sub_meta[[participant_col]],
+                         correlation = corfit_sub$consensus)
+
+        cont.matrix <- makeContrasts(contrasts = contrasts_list, levels = design_sub)
+        fit2_sub <- contrasts.fit(fit_sub, cont.matrix)
+        fit2_sub <- eBayes(fit2_sub, robust = TRUE, trend = TRUE)
+
+        res_list <- lapply(1:ncol(fit2_sub), function(i) {
+          df_res <- topTreat(fit2_sub, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE)
+          df_res$symbol <- rownames(df_res)
+          df_res$comparison <- colnames(fit2_sub)[i]
+          rownames(df_res) <- NULL
+          df_res
+        })
+        do.call(rbind, res_list)
+      })
+    )
+
+  subsampled_degs <- df_global_runs %>%
+    select(iteration, limma_results) %>%
+    unnest(limma_results) %>%
+    clean_names() %>%
+    mutate(
+      se_iteration = abs(log_fc / t),
+      sd_iteration = se_iteration / sqrt(0.4)) %>%
+    group_by(comparison, symbol) %>%
+    summarise(
+      p_value = median(p_value),
+      adj_p_val = median(adj_p_val),
+      mean_l2fc = median(log_fc),
+      sd_sampling_stability = sd(log_fc),
+      se = median(se_iteration),
+      sd = median(sd_iteration),
+      ci_lower = median(ci_l),
+      ci_upper = median(ci_r),
+      t = median(t),
+      b = median(b),
+      ave_expr = median(ave_expr),
+      pct_iterations_significant = mean(adj_p_val <= 0.05) * 100,
+      .groups = "drop") %>%
+    mutate(
+      comparison = str_replace_all(comparison, "\\.\\.\\.", "_"),
+      condition = case_when(!!!condition_map, TRUE ~ comparison),
+      organism = "Human") %>%
+    select(condition, everything()) %>%
+    clean_names() %>%
+    rename(human_symbol = symbol)
+
+  subsampled_degs %>% saveRDS(here("tables", paste0(output_prefix, "_dge_subsampled_degs.rds")))
+
+  subsampled_degs %>%
+    group_by(condition) %>%
+    filter(adj_p_val <= 0.05) %>%
+    summarise(n_robust_degs = n()) %>%
+    print()
+
+  list(degs = subsampled_degs, runs = df_global_runs)
+}
+
+
+# ──────────────────────────────────────────────
+# J. SUBSAMPLING (INDEPENDENT)
+# ──────────────────────────────────────────────
+
+subsampling_independent <- function(eset, metadata, n_iterations = 200, cohort_n = 10,
+                                     balance_col = "pathogen",
+                                     design_formula, contrasts_list,
+                                     output_prefix, seed = 123,
+                                     block_col = NULL, var_group_col = NULL) {
+  genes_to_keep <- exprs(eset) %>%
+    as.data.frame() %>%
+    mutate(across(everything(), ~ . > 6)) %>%
+    rowSums() %>%
+    { . >= 5 }
+
+  eset_filtered <- eset[genes_to_keep, ]
+  meta_df <- as_tibble(pData(eset_filtered), rownames = "sample_id")
+  expr_matrix <- exprs(eset_filtered)
+
+  draw_flexible_subset <- function(metadata, target_n = 10) {
+    valid_draw <- FALSE
+    attempts <- 0
+    while (!valid_draw) {
+      attempts <- attempts + 1
+      if (attempts > 500) stop("Could not find a balanced subset.")
+      sub_meta <- metadata %>%
+        group_by(!!sym(balance_col)) %>%
+        sample_n(target_n) %>%
+        ungroup()
+      has_diversity <- length(unique(sub_meta[[balance_col]])) > 1
+      if (has_diversity) valid_draw <- TRUE
+    }
+    sub_meta
+  }
+
+  set.seed(seed)
+
+  df_global_runs <- tibble(iteration = 1:n_iterations) %>%
+    mutate(
+      sampled_metadata = map(iteration, ~ draw_flexible_subset(meta_df, cohort_n)),
+      limma_results = map(sampled_metadata, ~ {
+        sub_meta <- .x
+        sub_expr <- expr_matrix[, sub_meta$sample_id]
+
+        design_sub <- model.matrix(design_formula, data = sub_meta)
+        colnames(design_sub) <- make.names(colnames(design_sub))
+
+        aw_sub <- arrayWeights(sub_expr, design_sub,
+                                var.group = if (!is.null(var_group_col)) sub_meta[[var_group_col]] else NULL)
+
+        if (!is.null(block_col)) {
+          corfit_sub <- duplicateCorrelation(sub_expr, design = design_sub,
+                                              block = sub_meta[[block_col]])
+          fit_sub <- lmFit(sub_expr, design = design_sub, weights = aw_sub,
+                           block = sub_meta[[block_col]],
+                           correlation = corfit_sub$consensus)
+        } else {
+          fit_sub <- lmFit(sub_expr, design = design_sub, weights = aw_sub)
+        }
+
+        cont.matrix <- makeContrasts(contrasts = contrasts_list, levels = design_sub)
+        fit2_sub <- contrasts.fit(fit_sub, cont.matrix)
+        fit2_sub <- eBayes(fit2_sub, robust = TRUE, trend = TRUE)
+
+        res_list <- lapply(1:ncol(fit2_sub), function(i) {
+          df_res <- topTreat(fit2_sub, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE)
+          df_res$symbol <- rownames(df_res)
+          df_res$comparison <- colnames(fit2_sub)[i]
+          rownames(df_res) <- NULL
+          df_res
+        })
+        do.call(rbind, res_list)
+      })
+    )
+
+  subsampled_degs <- df_global_runs %>%
+    select(iteration, limma_results) %>%
+    unnest(limma_results) %>%
+    clean_names() %>%
+    mutate(
+      se_iteration = abs(log_fc / t),
+      sd_iteration = se_iteration / sqrt(0.4)) %>%
+    group_by(comparison, symbol) %>%
+    summarise(
+      p_value = median(p_value),
+      adj_p_val = median(adj_p_val),
+      mean_l2fc = median(log_fc),
+      sd_sampling_stability = sd(log_fc),
+      se = median(se_iteration),
+      sd = median(sd_iteration),
+      ci_lower = median(ci_l),
+      ci_upper = median(ci_r),
+      t = median(t),
+      b = median(b),
+      ave_expr = median(ave_expr),
+      pct_iterations_significant = mean(adj_p_val <= 0.05) * 100,
+      .groups = "drop") %>%
+    mutate(organism = "Human") %>%
+    rename(human_symbol = symbol)
+
+  subsampled_degs %>% saveRDS(here("tables", paste0(output_prefix, "_dge_subsampled_degs.rds")))
+
+  list(degs = subsampled_degs, runs = df_global_runs)
+}
+
+
+# ──────────────────────────────────────────────
+# K. DEMOGRAPHICS PLOT (SUBSAMPLING)
+# ──────────────────────────────────────────────
+
+plot_demographics_subsampling <- function(df_global_runs, original_metadata) {
+  demographics_summary <- df_global_runs %>%
+    select(iteration, sampled_metadata) %>%
+    unnest(sampled_metadata) %>%
+    select(iteration, participant_id, age, sex) %>%
+    distinct() %>%
+    group_by(iteration) %>%
+    summarise(mean_age = mean(age, na.rm = TRUE),
+              prop_male = mean(sex == "male", na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(iteration = factor(iteration, levels = 1:max(iteration)))
+
+  subsample_race_distribution <- df_global_runs %>%
+    select(iteration, sampled_metadata) %>%
+    unnest(sampled_metadata) %>%
+    select(iteration, participant_id, race) %>%
+    distinct() %>%
+    count(iteration, race) %>%
+    group_by(iteration) %>%
+    mutate(Proportion = n / sum(n)) %>%
+    ungroup() %>%
+    mutate(iteration = factor(iteration, levels = 1:max(as.numeric(iteration))))
+
+  plot_age <- ggplot(demographics_summary, aes(x = "Mean Age", y = iteration)) +
+    geom_tile(aes(fill = mean_age), color = "white", linewidth = 0.6) +
+    geom_text(aes(label = sprintf("%.1f", mean_age)),
+              color = "white", fontface = "bold", size = 3.5) +
+    scale_fill_viridis_c(option = "mako", name = "Mean Age\n(Years)", direction = -1) +
+    scale_x_discrete(position = "top", expand = c(0.01, 0.01)) +
+    scale_y_discrete(expand = c(0.01, 0.01)) +
+    theme_vaxgo() +
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_text(face = "bold"),
+          panel.grid = element_blank(),
+          legend.position = "left") +
+    labs(y = "Subsampling Iterations")
+
+  plot_sex <- demographics_summary %>%
+    select(iteration, Male = prop_male) %>%
+    mutate(Female = 1 - Male) %>%
+    pivot_longer(cols = c(Male, Female), names_to = "Sex", values_to = "Proportion") %>%
+    ggplot(aes(x = Proportion, y = iteration, fill = Sex)) +
+    geom_col(width = 0.75, position = "stack") +
+    scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+    scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+    scale_y_discrete(expand = c(0.01, 0.01)) +
+    theme_vaxgo() +
+    theme(axis.title.y = element_blank(), axis.text.y = element_blank(),
+          panel.grid.minor = element_blank(), panel.grid.major.y = element_blank()) +
+    labs(x = "Sex Distribution")
+
+  plot_race <- subsample_race_distribution %>%
+    mutate(race = str_replace(race, "black or african american", "black"),
+           race = str_to_title(race)) %>%
+    ggplot(aes(x = Proportion, y = iteration, fill = race)) +
+    geom_col(width = 0.75, position = "stack") +
+    scale_fill_manual(name = "Race", values = colors$race) +
+    scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+    scale_y_discrete(expand = c(0.01, 0.01)) +
+    theme_vaxgo() +
+    theme(axis.title.y = element_blank(), axis.text.y = element_blank(),
+          panel.grid.minor = element_blank(), panel.grid.major.y = element_blank()) +
+    labs(x = "Race Distribution")
+
+  top_panel <- plot_age + plot_sex + plot_race + plot_layout(widths = c(1, 1, 1))
+
+  original_demographics <- original_metadata %>%
+    filter(organism == "Human") %>%
+    mutate(age = str_remove(age, "y") %>% as.numeric()) %>%
+    select(participant_id, age, sex, race) %>%
+    distinct()
+
+  base_age <- ggplot(original_demographics, aes(x = age)) +
+    geom_density(fill = "#3182bd", alpha = 0.4, color = "black", linewidth = 0.8) +
+    geom_vline(xintercept = mean(original_demographics$age, na.rm = TRUE),
+               color = "black", linetype = "dashed", linewidth = 0.8) +
+    facet_wrap(~"Age") +
+    scale_x_continuous(expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    theme_vaxgo() +
+    theme(panel.grid.minor = element_blank(),
+          axis.title.y = element_text(face = "bold", size = 9),
+          axis.title.x = element_text(face = "bold", size = 9)) +
+    labs(x = "Age (Years)", y = "Density")
+
+  base_sex <- original_demographics %>%
+    count(sex) %>%
+    mutate(Proportion = n / sum(n)) %>%
+    ggplot(aes(x = Proportion, y = "Original\nCohort", fill = sex)) +
+    facet_wrap(~"Original\nCohort") +
+    geom_col(width = 0.6, position = "stack", show.legend = FALSE) +
+    scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+    scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+    scale_y_discrete(expand = c(0, 0)) +
+    theme_vaxgo() +
+    theme(axis.title = element_blank(), axis.text.y = element_blank(),
+          panel.grid = element_blank(), axis.ticks.y = element_blank())
+
+  base_race <- original_demographics %>%
+    mutate(race = str_replace(race, "black or african american", "black"),
+           race = str_to_title(race)) %>%
+    count(race) %>%
+    mutate(Proportion = n / sum(n)) %>%
+    ggplot(aes(x = Proportion, y = "Original\nCohort", fill = race)) +
+    facet_wrap(~"Race") +
+    geom_col(width = 0.6, position = "stack", show.legend = TRUE) +
+    scale_fill_manual(name = "Race", values = colors$race) +
+    scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+    scale_y_discrete(expand = c(0, 0)) +
+    theme_vaxgo() +
+    theme(axis.title = element_blank(), axis.text.y = element_blank(),
+          panel.grid = element_blank(), axis.ticks.y = element_blank())
+
+  bottom_panel <- base_age + base_sex + base_race + plot_layout(widths = c(1, 1, 1))
+
+  top_panel / bottom_panel + plot_layout(heights = c(3, 1))
+}
+
+
+# ──────────────────────────────────────────────
+# L. JOIN HUMAN + MOUSE MATRIX (cross-species)
+# ──────────────────────────────────────────────
+
+unite_human_mouse_exprs <- function(human_exprs, mouse_exprs, metadata,
+                                     human_col = "symbol", mouse_col = "symbol",
+                                     output_prefix) {
+  joint_matrix <- human_exprs %>%
+    rownames_to_column(human_col) %>%
+    inner_join(mouse_exprs %>% rownames_to_column(mouse_col),
+               by = human_col) %>%
+    column_to_rownames(human_col) %>%
+    select(metadata %>% pull(sample_id)) %>%
+    as.matrix() %>%
+    normalizeBetweenArrays(method = "quantile")
+
+  eset <- ExpressionSet(
+    assayData = joint_matrix,
+    phenoData = AnnotatedDataFrame(
+      metadata %>%
+        filter(sample_id %in% colnames(joint_matrix)) %>%
+        column_to_rownames("sample_id")))
+
+  eset %>% saveRDS(here("tables", paste0(output_prefix, "_human_mouse_eset.rds")))
+  eset
+}
+
+
+# ──────────────────────────────────────────────
+# M. RUN FIT PREDICTION
+# ──────────────────────────────────────────────
+
+run_fit_prediction <- function(degs_mouse, exprs_hgnc, output_prefix,
+                                entrez_col = "mouse_entrez",
+                                symbol_col = "human_symbol",
+                                effect_col = "mean",
+                                condition_col = "condition") {
+  fit_input <- degs_mouse %>%
+    select(symbol = !!sym(symbol_col), EffectSize = !!sym(effect_col),
+           !!sym(condition_col)) %>%
+    inner_join(exprs_hgnc %>%
+                 select(!!sym(symbol_col), MM.Entrez = !!sym(entrez_col)),
+               by = "symbol") %>%
+    mutate(row = MM.Entrez)
+
+  all_conditions <- unique(fit_input[[condition_col]])
+  walk(all_conditions, function(cond) {
+    delete_dupes <- fit_input %>%
+      filter(!!sym(condition_col) == cond) %>%
+      get_dupes(row) %>%
+      pull(row)
+    fit_input %>%
+      filter(!!sym(condition_col) == cond, !row %in% delete_dupes) %>%
+      select(-!!sym(condition_col)) %>%
+      column_to_rownames("row") %>%
+      select(MM.Entrez, EffectSize) %>%
+      write_csv(here("tables", paste0(cond, "_FIT_mouse.csv")))
+  })
+
+  fit_results <- map2_dfr(all_conditions, all_conditions, function(cond, cond_name) {
+    FIT.mouse2man::FIT(
+      MouseFile = here("tables", paste0(cond, "_FIT_mouse.csv")),
+      DataType = "rnaseq") %>%
+      as_tibble() %>%
+      mutate(condition = cond_name)
+  })
+
+  beep()
+  fit_results %>% saveRDS(here("tables", paste0(output_prefix, "_fit_prediction_alltimes.rds")))
+  fit_results
+}
+
+```
+
