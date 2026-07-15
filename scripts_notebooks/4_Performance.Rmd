@@ -16,65 +16,60 @@ source(here("scripts_notebooks", "required.R"))
 
 ## Classification: Genes
 
-
-
-
+OLD
 ```{r}
 #Import ============
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
-#Metadata 
-all_human_mouse_metadata = readRDS(here("tables", "all_human_mouse_metadata.rds")) 
-
+#Metadata
+all_human_mouse_metadata = readRDS(here("tables", "all_human_mouse_metadata.rds"))
 #DEGs table
-all_degs_human_mouse = readRDS(file = here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
-  mutate(pathogen = case_when(pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              pathogen == "Hepatitis B" ~ "HepB",
-                              T ~ pathogen))
-#Biological negative control
-biological_null_degs = readRDS(file = here("tables", "duchenne_mouse_dge_limma_degs.rds")) %>% 
-  filter(timepoint == "Day 28")
+all_degs_human_mouse =
+  readRDS(file = here("tables", "all_human_mouse_dge_limma_degs_matched.rds")) %>%
+  mutate(timepoint = if_else(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours"), "Early hours", timepoint))
 
-#Filter selected comparisons
-conditions_filtered =
-  readRDS(file = here("tables", "all_human_mouse_correlation_filtered_inter_weighted_filtered.rds")) %>% 
-  select(treatment_human, treatment_mouse, pathogen_human, pathogen_mouse,
-         pathogen_comparison, timepoint_comparison,
-         timepoint_human, timepoint_mouse) %>% 
-  distinct() %>% 
-  pivot_longer(
-    cols = contains("_human") | contains("_mouse"), # Seleciona todas as colunas com esses sufixos
-    names_to = c(".value", "organism"),              # .value indica que o prefixo será a nova coluna
-    names_sep = "_",                                 # Onde cortar o nome da coluna
-    values_drop_na = TRUE
-  ) %>% 
-  mutate(organism = str_to_title(organism)) %>% 
-  mutate(timepoint = str_replace_all(timepoint, "\n", " "))
+#Duplicate infection timepoints in human to match the mouse
+all_human_mouse_metadata_matched =
+  bind_rows(
+    all_human_mouse_metadata %>%
+      filter(!(pathogen %in% c("Staphylococcus aureus", "Escherichia coli") & organism == "Human")) %>%
+      select(pathogen, organism, timepoint),
 
+  #Duplicate Human infection timepoints with mouse
+  all_human_mouse_metadata %>%
+  filter((pathogen %in% c("Staphylococcus aureus", "Escherichia coli") & organism == "Human")) %>%
+  select(pathogen, organism) %>%
+  inner_join(all_human_mouse_metadata %>%
+               filter(organism == "Mouse",
+                      pathogen %in% c("Staphylococcus aureus", "Escherichia coli")) %>%
+               select(pathogen, timepoint) %>%
+               distinct(),
+             by = "pathogen")
+  ) %>%
+  group_by(pathogen, organism, timepoint) %>%
+  summarise(n = n())
 
-#Filter conditions
-all_degs_human_mouse_matched = all_degs_human_mouse %>% 
-  select(organism:human_symbol, mean_l2fc:sd) %>% 
-  inner_join(conditions_filtered,
-             by = join_by(organism, pathogen, treatment, timepoint))
+#Join tables
+all_degs_human_mouse_matched = all_degs_human_mouse %>%
+       inner_join(all_human_mouse_metadata_matched,
+               by = join_by("pathogen", "organism", "timepoint"))
 
-#Bind negative control
-dge_long_genes = all_degs_human_mouse_matched %>% 
-  bind_rows(biological_null_degs) %>% 
-  select(pathogen, treatment, organism, human_symbol, timepoint, mean_l2fc, adj_p_val, everything(),
-         -comparison)
-
-dge_long_genes %>% dplyr::count(pathogen, organism,  treatment, timepoint)
+#Print
+all_degs_human_mouse_matched
 
 
-##### Input
+#Input ======================
+dge_long_genes = all_degs_human_mouse_matched %>%
+  select(pathogen, treatment, organism, human_symbol, timepoint, mean_l2fc, adj_p_val, everything())
+
+dge_long_genes %>% dplyr::count(pathogen,organism,  timepoint)
+
 #All genes
 genes_roc_allgenes = dge_long_genes
 #Filter immune genes
-genes_roc_allgenes_immunegenes = dge_long_genes %>% 
-  filter(human_symbol %in% c(btm_annotation_genes %>% 
-                         filter(module_category == "immune") %>% 
-                         pull(symbol) %>% 
+genes_roc_allgenes_immunegenes = dge_long_genes %>%
+  filter(human_symbol %in% c(btm_annotation_genes %>%
+                         filter(module_category == "immune") %>%
+                         pull(symbol) %>%
                          unique()))
 
 #Only DEGs
@@ -84,143 +79,28 @@ degs_genes_human = dge_long_genes %>%
   select(human_symbol, pathogen, organism, timepoint)
 
 #Only immune DEGs
-genes_roc_DEGs_all = 
-  #Bind rows
-  bind_rows(
-    
-  dge_long_genes %>%
-  #By condition
-  inner_join(degs_genes_human %>% 
+genes_roc_DEGs_all = dge_long_genes %>%
+  inner_join(degs_genes_human %>%
                select(-organism),
-             by = join_by("human_symbol", "pathogen", "timepoint"),
-              
-  #Add control,
-  dge_long_genes %>%
-  filter(pathogen == "DMD") %>% 
-  inner_join(degs_genes_human %>% 
-               select(-organism),
-             by = join_by("human_symbol"))
-  
-  )
+             by = join_by("human_symbol", "pathogen", "timepoint"))
 
 #Only immune DEGs
 genes_roc_DEGs_immune = dge_long_genes %>%
-  inner_join(degs_genes_human %>% 
+  inner_join(degs_genes_human %>%
                select(-organism),
              by = join_by("human_symbol", "pathogen", "timepoint")) %>%
   #Filter immune genes only
   filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
 
-#Check
-dge_long_genes %>% 
-  filter(pathogen == "DMD")
-degs_genes_human %>% 
+
+degs_genes_human %>%
   dplyr::count(pathogen, organism, timepoint)
 
-genes_roc_DEGs_all %>% 
+genes_roc_DEGs_all %>%
   dplyr::count(pathogen, organism, timepoint)
 
-genes_roc_DEGs_immune %>% 
+genes_roc_DEGs_immune %>%
   dplyr::count(pathogen, timepoint)
-
-```
-
-
-
-
-
-
-
-
-
-OLD
-```{r}
-# #Import ============
-# btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
-# #Metadata 
-# all_human_mouse_metadata = readRDS(here("tables", "all_human_mouse_metadata.rds")) 
-# #DEGs table
-# all_degs_human_mouse = 
-#   readRDS(file = here("tables", "all_human_mouse_dge_limma_degs_matched.rds")) %>% 
-#   mutate(timepoint = if_else(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours"), "Early hours", timepoint))
-# 
-# #Duplicate infection timepoints in human to match the mouse
-# all_human_mouse_metadata_matched =     
-#   bind_rows(
-#     all_human_mouse_metadata %>% 
-#       filter(!(pathogen %in% c("Staphylococcus aureus", "Escherichia coli") & organism == "Human")) %>% 
-#       select(pathogen, organism, timepoint),
-#     
-#   #Duplicate Human infection timepoints with mouse
-#   all_human_mouse_metadata %>% 
-#   filter((pathogen %in% c("Staphylococcus aureus", "Escherichia coli") & organism == "Human")) %>% 
-#   select(pathogen, organism) %>% 
-#   inner_join(all_human_mouse_metadata %>% 
-#                filter(organism == "Mouse",
-#                       pathogen %in% c("Staphylococcus aureus", "Escherichia coli")) %>%
-#                select(pathogen, timepoint) %>% 
-#                distinct(),
-#              by = "pathogen")
-#   ) %>% 
-#   group_by(pathogen, organism, timepoint) %>%
-#   summarise(n = n())
-# 
-# #Join tables
-# all_degs_human_mouse_matched = all_degs_human_mouse %>% 
-#        inner_join(all_human_mouse_metadata_matched,
-#                by = join_by("pathogen", "organism", "timepoint")) 
-# 
-# #Print
-# all_degs_human_mouse_matched 
-
-#DEGs
-
-
-
-# #Input ======================
-# dge_long_genes = all_degs_human_mouse_matched %>% 
-#   select(pathogen, treatment, organism, human_symbol, timepoint, mean_l2fc, adj_p_val, everything())
-# 
-# dge_long_genes %>% dplyr::count(pathogen,organism,  timepoint)
-# 
-# #All genes
-# genes_roc_allgenes = dge_long_genes
-# #Filter immune genes
-# genes_roc_allgenes_immunegenes = dge_long_genes %>% 
-#   filter(human_symbol %in% c(btm_annotation_genes %>% 
-#                          filter(module_category == "immune") %>% 
-#                          pull(symbol) %>% 
-#                          unique()))
-# 
-# #Only DEGs
-# degs_genes_human = dge_long_genes %>%
-#   filter(adj_p_val <= 0.05,
-#          organism == "Human") %>%
-#   select(human_symbol, pathogen, organism, timepoint)
-# 
-# #Only immune DEGs
-# genes_roc_DEGs_all = dge_long_genes %>%
-#   inner_join(degs_genes_human %>% 
-#                select(-organism),
-#              by = join_by("human_symbol", "pathogen", "timepoint"))
-# 
-# #Only immune DEGs
-# genes_roc_DEGs_immune = dge_long_genes %>%
-#   inner_join(degs_genes_human %>% 
-#                select(-organism),
-#              by = join_by("human_symbol", "pathogen", "timepoint")) %>%
-#   #Filter immune genes only
-#   filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
-# 
-# 
-# degs_genes_human %>% 
-#   dplyr::count(pathogen, organism, timepoint)
-# 
-# genes_roc_DEGs_all %>% 
-#   dplyr::count(pathogen, organism, timepoint)
-# 
-# genes_roc_DEGs_immune %>% 
-#   dplyr::count(pathogen, timepoint)
 
 ```
 
@@ -498,10 +378,7 @@ pr_curve_down_notdown %>%
 pr_curve_down_notdown_DEGs %>% 
   dplyr::count(pathogen, model, timepoint)
 
-```
 
-
-```{r fig.height=6, fig.width=10}
 #=====================================================
 #Compute AUC 
 #=====================================================
@@ -692,8 +569,6 @@ pr_curve_auc_df_DEGs %>%
   filter(model == "Immune") %>% 
               distinct()
 
-
-
 ```
 
 ### Plot ROC curve
@@ -797,10 +672,10 @@ roc_curve_plot = roc_curve_auc_df %>%
 roc_curve_plot
 
 
-# roc_curve_plot %>%
-#   ggsave(filename = here("Figures", paste0(filename, "_performance_roc_", gene_set_filename, ".png")),
-#          width = 8,
-#          height = 5)
+roc_curve_plot %>%
+  ggsave(filename = here("Figures", paste0(filename, "_performance_roc_", gene_set_filename, ".png")),
+         width = 8,
+         height = 5)
 ```
 
 
@@ -915,7 +790,7 @@ auc_lineplot = auc_lineplot_df %>%
 
 auc_lineplot
 auc_lineplot %>%
-  ggsave(filename = here("Figures", "all_human_mouse_performance_roc_auc_lineplot_All_OnlyImmune.png"),
+  ggsave(filename = here("Figures", paste0("all_human_mouse_performance_roc_auc_lineplot_All_OnlyImmune.png")),
          width = 3,
          height = 12)
 
@@ -943,10 +818,7 @@ classified_df_probs_up %>%
   dplyr::count(pathogen, model, timepoint, pred)
 classified_df_probs_up_DEGs %>% 
   dplyr::count(pathogen, model, timepoint, pred)
-```
 
-
-```{r fig.height=12, fig.width=3}
 # Visualize AUC
 auc_lineplot_df_DEGs <- bind_rows(auc_results_up_DEGs,
                       auc_results_down_DEGs) %>%
@@ -1148,10 +1020,10 @@ pr_curve_plot = pr_curve_auc_df %>%
 pr_curve_plot
 
 
-# pr_curve_plot %>%
-#   ggsave(filename = here("Figures", paste0(filename, "_performance_pr_", gene_set_filename, ".png")),
-#          width = 8,
-#          height = 5)
+pr_curve_plot %>%
+  ggsave(filename = here("Figures",  "all_human_mouse_performance_pr_All_OnlyImmune.png"),
+         width = 8,
+         height = 5)
 ```
 
 
@@ -1177,7 +1049,7 @@ ngenes = bind_rows(
 
 
 # Visualize AUC
-pr_pr_auc_lineplot_df <- bind_rows(pr_auc_results_up,
+pr_auc_lineplot_df <- bind_rows(pr_auc_results_up,
                       pr_auc_results_down) %>%
   inner_join(ngenes, by = join_by(comparison, pathogen, timepoint, model)) %>% 
   mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
@@ -1196,7 +1068,7 @@ pr_pr_auc_lineplot_df <- bind_rows(pr_auc_results_up,
          treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
          ) 
 
-pr_auc_lineplot = pr_pr_auc_lineplot_df %>% 
+pr_auc_lineplot = pr_auc_lineplot_df %>% 
   ggplot() +
    aes(x = timepoint,
       y = pr_auc,
@@ -1264,10 +1136,10 @@ pr_auc_lineplot = pr_pr_auc_lineplot_df %>%
          fill = guide_legend(nrow = 2, by.row = T))
 
 pr_auc_lineplot
-# pr_auc_lineplot %>%
-#   ggsave(filename = here("Figures", "all_human_mouse_performance_pr_pr_auc_lineplot_All_OnlyImmune.png"),
-#          width = 3,
-#          height = 12)
+pr_auc_lineplot %>%
+  ggsave(filename = here("Figures", "all_human_mouse_performance_pr_auc_lineplot_All_OnlyImmune.png"),
+         width = 3,
+         height = 12)
 
 ```
 
@@ -1293,12 +1165,9 @@ classified_df_probs_up %>%
   dplyr::count(pathogen, model, timepoint, pred)
 classified_df_probs_up_DEGs %>% 
   dplyr::count(pathogen, model, timepoint, pred)
-```
 
-
-```{r fig.height=12, fig.width=3}
 # Visualize AUC
-pr_pr_pr_auc_lineplot_df_DEGs <- bind_rows(pr_pr_auc_results_up_DEGs,
+pr_auc_lineplot_df_DEGs <- bind_rows(pr_pr_auc_results_up_DEGs,
                       pr_pr_auc_results_down_DEGs) %>%
   inner_join(ngenes_DEGs, by = join_by(comparison, pathogen, timepoint, model)) %>% 
   mutate(model = factor(model, levels = c("Human", "Mouse", "Immune", "Permutation")),
@@ -1317,7 +1186,7 @@ pr_pr_pr_auc_lineplot_df_DEGs <- bind_rows(pr_pr_auc_results_up_DEGs,
          treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
          ) 
 
-pr_pr_auc_lineplot_DEGs = pr_pr_pr_auc_lineplot_df_DEGs %>% 
+pr_auc_lineplot_DEGs = pr_auc_lineplot_df_DEGs %>% 
   ggplot() +
    aes(x = timepoint,
       y = pr_auc,
@@ -1385,11 +1254,11 @@ pr_pr_auc_lineplot_DEGs = pr_pr_pr_auc_lineplot_df_DEGs %>%
          linetype = "none",
          fill = guide_legend(nrow = 2, by.row = T))
 
-pr_pr_auc_lineplot_DEGs
-# pr_pr_auc_lineplot_DEGs %>%
-#   ggsave(filename = here("Figures", "all_human_mouse_performance_pr_pr_pr_auc_lineplot_DEGs_OnlyImmune.png"),
-#          width = 3,
-#          height = 12)
+pr_auc_lineplot_DEGs
+pr_auc_lineplot_DEGs %>%
+  ggsave(filename = here("Figures", "all_human_mouse_performance_pr_auc_lineplot_DEGs_OnlyImmune.png"),
+         width = 3,
+         height = 12)
 
 ```
 
