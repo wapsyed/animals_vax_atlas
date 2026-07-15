@@ -4,7 +4,7 @@ output: html_document
 ---
 #Required
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 # install.packages("here") if needed
 library(here)
 source(here("scripts_notebooks", "required.R"))
@@ -253,7 +253,7 @@ Compute probabilities
 
 dge_long_genes_up = genes_df_input %>% 
   mutate(
-    df = 5 - 1,
+    df = n - 1,
     pval_one_sided = pt(t, df, lower.tail = FALSE),
     pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
     direction = if_else(pval_one_sided_adj <= 0.05 & t > 0, "up", "not_up"),
@@ -264,7 +264,7 @@ dge_long_genes_up = genes_df_input %>%
 
 dge_long_genes_down = genes_df_input %>% 
   mutate(
-    df = 5 - 1,
+    df = n - 1,
     pval_one_sided = pt(t, df, lower.tail = TRUE),
     pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
     direction = if_else(pval_one_sided_adj <= 0.05 & t < 0, "down", "not_down"),
@@ -278,8 +278,7 @@ dge_long_genes_down = genes_df_input %>%
 #=====================================================
 truth_human_up = dge_long_genes_up %>% 
   select(human_symbol, pathogen, organism, timepoint, adj_p_val, direction) %>% 
-  filter(organism == "Human",
-         pathogen != "DMD") %>% 
+  filter(organism == "Human") %>% 
   distinct() %>% 
   pivot_wider(names_from = organism, values_from = direction) %>% 
   rename(truth = Human) %>% 
@@ -288,8 +287,7 @@ truth_human_up = dge_long_genes_up %>%
 
 truth_human_down = dge_long_genes_down %>% 
   select(human_symbol, pathogen, organism, timepoint, adj_p_val, direction) %>% 
-  filter(organism == "Human",
-         pathogen != "DMD") %>% 
+  filter(organism == "Human") %>% 
   distinct() %>% 
   pivot_wider(names_from = organism, values_from = direction) %>% 
   rename(truth = Human) %>% 
@@ -303,46 +301,22 @@ perfect_prediction_up = truth_human_up %>%
          model = "Human") %>%
   rename(pred = truth)
 
+permutation_prediction_up = perfect_prediction_up %>%
+  group_by(pathogen, timepoint) %>% 
+  mutate(prob = runif(n()), organism = "Permutation",
+         model = "Permutation")
+
 perfect_prediction_down = truth_human_down %>%
   mutate(prob = if_else(truth == "down", 1, 0),
           model = "Human") %>%
   rename(pred = truth)
 
+permutation_prediction_down = perfect_prediction_down %>%
+  group_by(pathogen, timepoint) %>% 
+  mutate(prob = runif(n()), 
+         organism = "Permutation",
+         model = "Permutation")
 
-bionull_up = dge_long_genes_up %>% 
-  filter(pathogen == "DMD") %>%
-  select(!c(pathogen, treatment, timepoint, condition)) %>% 
-  inner_join(dge_long_genes_up %>%
-               filter(pathogen != "DMD") %>% 
-               select(pathogen, timepoint, treatment, organism, human_symbol),
-             by = join_by(human_symbol, organism)) %>% 
-  mutate(organism = "DMD",
-         model = "DMD")
-
-bionull_down = dge_long_genes_down %>% 
-  filter(pathogen == "DMD") %>%
-  select(!c(pathogen, treatment, timepoint, condition)) %>% 
-  inner_join(dge_long_genes_up %>% 
-               filter(pathogen != "DMD") %>% 
-               select(pathogen, treatment, timepoint, organism, human_symbol),
-             by = join_by(human_symbol, organism)) %>% 
-  mutate(organism = "DMD",
-         model = "DMD")
-
-# permutation_prediction_up = perfect_prediction_up %>%
-#   group_by(pathogen, timepoint) %>% 
-#   mutate(prob = runif(n()), organism = "Permutation",
-#          model = "Permutation")
-# 
-# permutation_prediction_down = perfect_prediction_down %>%
-#   group_by(pathogen, timepoint) %>% 
-#   mutate(prob = runif(n()), 
-#          organism = "Permutation",
-#          model = "Permutation")
-```
-
-
-```{r fig.height=6, fig.width=10}
 #=====================================================
 # Combine models (Mouse + Immune + Permutation + Perfect)
 #=====================================================
@@ -351,15 +325,13 @@ models_up = dge_long_genes_up %>%
   mutate(pred = direction,
          organism,
          model = if_else(model_type == "Immune", "Immune", organism)) %>%
-  bind_rows(perfect_prediction_up, 
-            bionull_up) %>% 
-  arrange(human_symbol)
+  bind_rows(perfect_prediction_up, permutation_prediction_up)
 
 models_down = dge_long_genes_down %>% 
   filter(organism != "Human") %>% 
   mutate(pred = direction,
          model = if_else(model_type == "Immune", "Immune", organism)) %>%
-  bind_rows(perfect_prediction_down, bionull_down)
+  bind_rows(perfect_prediction_down, permutation_prediction_down)
 
 #=====================================================
 # Classify probabilities 
@@ -372,8 +344,7 @@ classified_df_probs_up = truth_human_up %>%
   mutate(
     truth = factor(truth, levels = c("up", "not_up"))
   ) %>% 
-  distinct() %>% 
-  arrange(human_symbol)
+  distinct()
 
 classified_df_probs_down = truth_human_down %>% 
   select(human_symbol, pathogen, timepoint, truth) %>%
@@ -397,8 +368,7 @@ classified_df_probs_up_DEGs = truth_human_up %>%
   distinct() %>% 
     inner_join(degs_genes_human %>% 
                select(-organism), 
-             by = join_by(human_symbol, pathogen, timepoint)) %>% 
-  arrange(human_symbol)
+             by = join_by(human_symbol, pathogen, timepoint))
 
 
 
@@ -415,8 +385,10 @@ classified_df_probs_down_DEGs = truth_human_down %>%
                select(-organism), 
              by = join_by(human_symbol, pathogen, timepoint))
 
-classified_df_probs_up %>% 
-  dplyr::count(pathogen, model, timepoint)
+classified_df_probs_up %>%
+  group_by(pathogen, model, timepoint) %>%
+  summarise(has_up = "up" %in% truth) %>%
+  filter(!has_up)
 classified_df_probs_up_DEGs %>% 
   dplyr::count(pathogen, model, timepoint)
 
@@ -434,14 +406,18 @@ classified_df_probs_down_DEGs %>%
 #=====================================================
 
 roc_curve_up_notup = classified_df_probs_up %>% 
-  filter(model %in% c("Mouse", "Immune", "DMD", "Human", "FIT")) %>%
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint) %>%
+  # FILTRO DE SEGURANÇA: verifica se ambos os níveis ("up" e "notup") existem
+  filter(n_distinct(truth) > 1) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Up")
 
 roc_curve_up_notup_DEGs = classified_df_probs_up_DEGs %>% 
   filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint) %>%
+    # FILTRO DE SEGURANÇA: verifica se ambos os níveis ("up" e "notup") existem
+  filter(n_distinct(truth) > 1) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Up")
 
@@ -454,12 +430,16 @@ roc_curve_up_notup_DEGs %>%
 roc_curve_down_notdown = classified_df_probs_down %>% 
   filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint) %>%
+    # FILTRO DE SEGURANÇA: verifica se ambos os níveis ("up" e "notup") existem
+  filter(n_distinct(truth) > 1) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Down")
 
 roc_curve_down_notdown_DEGs = classified_df_probs_down_DEGs %>% 
   filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint) %>%
+    # FILTRO DE SEGURANÇA: verifica se ambos os níveis ("up" e "notup") existem
+  filter(n_distinct(truth) > 1) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Down")
 
@@ -477,12 +457,16 @@ roc_curve_down_notdown_DEGs %>%
 pr_curve_up_notup = classified_df_probs_up %>% 
   filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint) %>%
+    # FILTRO DE SEGURANÇA: verifica se ambos os níveis ("up" e "notup") existem
+  filter(n_distinct(truth) > 1) %>%
   pr_curve(truth, prob) %>%
   mutate(comparison = "Up")
 
 pr_curve_up_notup_DEGs = classified_df_probs_up_DEGs %>% 
   filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint) %>%
+    # FILTRO DE SEGURANÇA: verifica se ambos os níveis ("up" e "notup") existem
+  filter(n_distinct(truth) > 1) %>%
   pr_curve(truth, prob) %>%
   mutate(comparison = "Up")
 
@@ -495,12 +479,16 @@ pr_curve_up_notup_DEGs %>%
 pr_curve_down_notdown = classified_df_probs_down %>% 
   filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint) %>%
+    # FILTRO DE SEGURANÇA: verifica se ambos os níveis ("up" e "notup") existem
+  filter(n_distinct(truth) > 1) %>%
   pr_curve(truth, prob) %>%
   mutate(comparison = "Down")
 
 pr_curve_down_notdown_DEGs = classified_df_probs_down_DEGs %>% 
   filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint) %>%
+    # FILTRO DE SEGURANÇA: verifica se ambos os níveis ("up" e "notup") existem
+  filter(n_distinct(truth) > 1) %>%
   pr_curve(truth, prob) %>%
   mutate(comparison = "Down")
 
@@ -521,6 +509,8 @@ auc_results_up = classified_df_probs_up %>%
   mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
   filter(model %in% c("Mouse", "Immune", "Permutation", "Human")) %>%
   group_by(pathogen, model, timepoint) %>%
+    # FILTRO DE SEGURANÇA: verifica se ambos os níveis ("up" e "notup") existem
+  filter(n_distinct(truth) > 1) %>%
   roc_auc(truth, prob) %>%
   rename(auc = .estimate) %>%
   mutate(comparison = "Up") %>% 
@@ -531,6 +521,8 @@ auc_results_up_DEGs = classified_df_probs_up_DEGs %>%
   mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
   filter(model %in% c("Mouse", "Immune", "Permutation", "Human")) %>%
   group_by(pathogen, model, timepoint) %>%
+    # FILTRO DE SEGURANÇA: verifica se ambos os níveis ("up" e "notup") existem
+  filter(n_distinct(truth) > 1) %>%
   roc_auc(truth, prob) %>%
   rename(auc = .estimate) %>%
   mutate(comparison = "Up") %>% 
@@ -541,6 +533,8 @@ auc_results_down = classified_df_probs_down %>%
   mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
   filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint) %>%
+    # FILTRO DE SEGURANÇA: verifica se ambos os níveis ("up" e "notup") existem
+  filter(n_distinct(truth) > 1) %>%
   roc_auc(truth, prob) %>%
   rename(auc = .estimate) %>%
   mutate(comparison = "Down") %>% 
@@ -551,6 +545,8 @@ auc_results_down_DEGs = classified_df_probs_down_DEGs %>%
   mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
   filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint) %>%
+    # FILTRO DE SEGURANÇA: verifica se ambos os níveis ("up" e "notup") existem
+  filter(n_distinct(truth) > 1) %>%
   roc_auc(truth, prob) %>%
   rename(auc = .estimate) %>%
   mutate(comparison = "Down") %>% 
@@ -576,6 +572,7 @@ roc_curve_auc_df = bind_rows(auc_results_up,
                               T ~ pathogen),
          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
   mutate(auc = round(auc, 2) %>% as.character())
+
 
 roc_curve_auc_df_DEGs = bind_rows(auc_results_up_DEGs,auc_results_down_DEGs) %>% 
   inner_join(
@@ -800,10 +797,10 @@ roc_curve_plot = roc_curve_auc_df %>%
 roc_curve_plot
 
 
-roc_curve_plot %>%
-  ggsave(filename = here("Figures", paste0(filename, "_performance_roc_", gene_set_filename, ".png")),
-         width = 8,
-         height = 5)
+# roc_curve_plot %>%
+#   ggsave(filename = here("Figures", paste0(filename, "_performance_roc_", gene_set_filename, ".png")),
+#          width = 8,
+#          height = 5)
 ```
 
 
