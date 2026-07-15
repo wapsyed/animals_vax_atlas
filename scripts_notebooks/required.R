@@ -56,6 +56,227 @@ for (pkg in all_packages) {
 # Capture this clean, functional state to lock it down permanently
 # renv::snapshot()
 
+
+
+#Colors --------
+
+
+
+colors_vaccines = c("Agrippal" = "#669bbc",
+                    "Fluad" = "#219ebc",
+                    "Quadri 2019-2020" = "#4DBBD5FF",
+                    "Quadri 19-20" = "#4DBBD5FF",
+                    "Engerix" = "#4361ee")
+
+
+
+colors = list(organism = c("FIT" = "#4361ee",
+                           "Mouse" = "gray50",
+                           "Immune" = "#f72585",
+                           "Human" = "black",
+                           "DMD" = "#00A087FF",
+                           "Permutation" = "gray80"),
+              #Fill
+              comparison = c("Mouse only" = "gray50",
+                             "Mouse\nonly" = "gray50",
+                             "Human only" = "black",
+                             "Human\nonly" = "black",
+                             "Shared" = "#4DBBD5FF",
+                             "Not-shared" = "gray50",
+                             "Not core" = "gray90",
+                             "Not\ncore" = "gray90",
+                             "BTMs" = "#4361ee",
+                             "Immune BTMs" = "#4361ee",
+                             "Immune\nBTMs" = "#4361ee",
+                             "Non-Immune BTMs" = "#3a86ff",
+                             "Non-Immune\nBTMs" = "#3a86ff",
+                             "All" = "gray90"),
+              #Color
+              comparison_color = c("Mouse only" = "black",
+                                   "Mouse\nonly" = "black",
+                                   "Human only" = "white",
+                                   "Human\nonly" = "white",
+                                   "Not-shared" = "white",
+                                   "Shared" = "black",
+                                   "BTMs" = "black",
+                                   "Immune BTMs" = "black",
+                                   "Immune\nBTMs" = "black",
+                                   "Non-Immune BTMs" = "black",
+                                   "Non-Immune\nBTMs" = "black"),
+              comparison_versus = c("Human vs. Mouse" = "#4DBBD5FF",
+                                    "Mouse vs. Mouse" = "gray50",
+                                    "Human vs. Human" = "black"),
+              shared = c("All genes" = "black",
+                         "All DEGs" = "#3dccc7",
+                         "Shared DEGs" = "purple",
+                         "Immune" ="#f72585"),
+              direction = c("Up-Up" = "#4DBBD5FF", 
+                            "Up-Down" = "#4DBBD5FF", 
+                            "Down-Down" = "#4361ee", 
+                            "Down-Up" = "#4361ee"),
+              treatment = c("Vaccination" = "#006494",
+                            "Infection" = "#3dccc7",
+                            "Injury" = "#deaaff"),
+              timepoint = c("0h" = "gray50",
+                            "Day 0" = "gray50",
+                            "Early hours" = "#D0D8FB",
+                            "2h" = "#D0D8FB", 
+                            "4h" = "#A1B0F7",
+                            "6h" = "#4361ee",
+                            "12h" = "#3a86ff",
+                            "24h" = "purple",
+                            "Day 1" = "#caf0f8",
+                            "Day 2" = "#ade8f4",
+                            "Day 3" = "#90e0ef",
+                            "Day 4" = "#6CD5EA",
+                            "Day 6" = "#00b4d8",
+                            "Day 7" = "#0096c7",
+                            "Day 12" = "#03045e",
+                            "Day 24" = "#184e77"),
+              sex = c("Male" = "#4DBBD5FF",
+                      "Female" = "#4361ee"),
+              race = c("White" = "gray80",
+                       "Other" = "#4DBBD5FF",
+                       "Black" = "#4361ee", 
+                       "Asian" = "#df65b0", 
+                       "CB6F1" = "#90A4AEFF"),
+              colors_vaccines = c("Agrippal" = "#669bbc",
+                                  "Fluad" = "#219ebc",
+                                  "Quadri 2019-2020" = "#4DBBD5FF",
+                                  "Quadri 19-20" = "#4DBBD5FF",
+                                  "Engerix" = "#4361ee"),
+              type = c("VLP" = "#7E6148FF",
+                       "LA" =  "#EFC000FF",
+                       "CONJ" = "#F39B7FFF", 
+                       'IN'= "#00A087FF", 
+                       'Inactivated'= "#00A087FF", 
+                       'VV' = "#3C5488FF", #3rd Gen vaccines
+                       'RNA' = "#4DBBD5FF",
+                       'SU' = "#8491B4FF",
+                       "IN/SU" = "#8491B4FF",
+                       "PS" = "#F39B7FFF",
+                       'I'= "#DC0000FF",
+                       "H" = "grey95",
+                       "V-I" = "#ffadc7"),
+              pathogen = c("Influenza" = "#4cc9f0",
+                           "Hepatitis B" = "#a2d2ff",
+                           "Saureus" = "#669bbc",
+                           "Ecoli" = "#669bbc",
+                           "Trauma" = "#3C5488FF",
+                           "Burn" = "#184e77"))
+
+
+#Define colors
+
+btm_immune_groups = list(group = c("SIGNAL TRANSDUCTION" = "#708d81",
+                                   "CELL CYCLE" = "#06d6a0",
+                                   "ECM AND MIGRATION" = "#52b788",
+                                   "ENERGY METABOLISM" = "#95d5b2", 
+                                   "INNATE RESPONSE" = "#184e77",
+                                   "INFLAMMATORY/TLR/CHEMOKINES"  = "#3a86ff",
+                                   "INTERFERON/ANTIVIRAL SENSING" = "#669bbc",
+                                   "NEUTROPHILS" = "#219ebc",
+                                   "NK CELLS" = "#a2d2ff",
+                                   "IFN"= "#4361ee",
+                                   "MONOCYTES" = "#4cc9f0",
+                                   "DC ACTIVATION" = "#9f86c0",
+                                   "PLATELETS" = "#7209b7",
+                                   "B CELLS" = "#e5383b",
+                                   "T CELLS" = "#f72585",
+                                   "PLASMA CELLS" = "#ffafcc"),
+                         subgroup = c("SIGNAL TRANSDUCTION" = "#708d81",
+                                      "CELL CYCLE" = "#06d6a0",
+                                      "ECM AND MIGRATION" = "#52b788",
+                                      "ENERGY METABOLISM" = "#95d5b2", 
+                                      "INNATE RESPONSE" = "#184e77",
+                                      "INFLAMMATORY/TLR/CHEMOKINES"  = "#3a86ff",
+                                      "INTERFERON/ANTIVIRAL SENSING" = "#669bbc",
+                                      "NEUTROPHILS" = "#219ebc",
+                                      "NK CELLS" = "#a2d2ff",
+                                      "IFN"= "#4361ee",
+                                      "MONOCYTES" = "#4cc9f0",
+                                      "ANTIGEN PRESENTATION"= "#7209b7", 
+                                      "DC ACTIVATION" = "#9f86c0",
+                                      "PLATELETS" = "#7209b7",
+                                      "B CELLS" = "#e5383b",
+                                      "T CELLS" = "#f72585",
+                                      "PLASMA CELLS" = "#ffafcc"))
+
+
+immune_colors = c("SIGNAL TRANSDUCTION" = "#CA6702",
+                  "CELL CYCLE" = "#9B2226",
+                  "ECM AND MIGRATION" = "#d08c60",
+                  "ENERGY METABOLISM" = "#ffc300", 
+                  "PLATELETS" = "#a4b75c",
+                  "INNATE RESPONSE" = "#3D405B",
+                  "NEUTROPHILS" = "#90A4AEFF",
+                  "NK CELLS" = "#001219",
+                  "IFN"= "gray80",
+                  "MONOCYTES" = "#8491B4FF",
+                  "B CELLS" = "#4cc9f0",
+                  "T CELLS" = "#4361ee")
+
+immune_order = c("SIGNAL TRANSDUCTION",
+                 "CELL CYCLE",
+                 "ECM AND MIGRATION",
+                 "ENERGY METABOLISM", 
+                 "INNATE RESPONSE",
+                 "NEUTROPHILS",
+                 "NK CELLS",
+                 "IFN",
+                 "MONOCYTES",
+                 "PLATELETS",
+                 "B CELLS",
+                 "T CELLS")
+
+
+hallmarks_colors = c("Immune Response" = "#4cc9f0",
+                     "Apoptosis and Hormonal Response" = "#06d6a0",
+                     "Differentiation and Cell Structure" = "gray80",
+                     "Metabolism"  = "#4361ee", 
+                     "Proliferation and Repair" = "#001219",
+                     "Signaling and Stress Response"   = "#0A9396")
+
+colors_all <- c(
+  "#4361ee",
+  "#4DBBD5FF",
+  "#90A4AEFF",
+  "#06d6a0",
+  "#46eec6",
+  "#175289",
+  "#caf0f8",
+  "#4cc9f0",
+  "#669bbc",
+  "purple",
+  "#7014cc",
+  "#cd61a1",
+  "gray80",
+  #Neutral harmony bliss
+  "#F4F1DE",
+  "#E07A5F",
+  "#3D405B",
+  "#81B29A",
+  "#F2CC8F",
+  
+  #Ocean sunset
+  "#001219",
+  "#005F73",
+  "#0A9396",
+  "#94D2BD",
+  "#CA6702",
+  "#AE2012",
+  "#9B2226"
+)
+
+
+
+
+
+
+
+
+
+
 # Aesthetics -----
 #Custom theme
 theme_vaxgo = function(){
@@ -375,213 +596,6 @@ get_sequences <- function(genes, mart, symbol_attr) {
 }
 
 
-#Colors --------
 
-
-
-colors_vaccines = c("Agrippal" = "#669bbc",
-                    "Fluad" = "#219ebc",
-                    "Quadri 2019-2020" = "#4DBBD5FF",
-                    "Quadri 19-20" = "#4DBBD5FF",
-                    "Engerix" = "#4361ee")
-
-
-
-colors = list(organism = c("FIT" = "#4361ee",
-                           "Mouse" = "gray50",
-                           "Immune" = "#f72585",
-                           "Human" = "black",
-                           "Permutation" = "gray80"),
-              #Fill
-              comparison = c("Mouse only" = "gray50",
-                             "Mouse\nonly" = "gray50",
-                             "Human only" = "black",
-                             "Human\nonly" = "black",
-                             "Shared" = "#4DBBD5FF",
-                             "Not-shared" = "gray50",
-                             "Not core" = "gray90",
-                             "Not\ncore" = "gray90",
-                             "BTMs" = "#4361ee",
-                             "Immune BTMs" = "#4361ee",
-                             "Immune\nBTMs" = "#4361ee",
-                             "Non-Immune BTMs" = "#3a86ff",
-                             "Non-Immune\nBTMs" = "#3a86ff",
-                             "All" = "gray90"),
-              #Color
-              comparison_color = c("Mouse only" = "black",
-                                   "Mouse\nonly" = "black",
-                                   "Human only" = "white",
-                                   "Human\nonly" = "white",
-                                   "Not-shared" = "white",
-                                   "Shared" = "black",
-                                   "BTMs" = "black",
-                                   "Immune BTMs" = "black",
-                                   "Immune\nBTMs" = "black",
-                                   "Non-Immune BTMs" = "black",
-                                   "Non-Immune\nBTMs" = "black"),
-              comparison_versus = c("Human vs. Mouse" = "#4DBBD5FF",
-                                    "Mouse vs. Mouse" = "gray50",
-                                    "Human vs. Human" = "black"),
-              shared = c("All genes" = "black",
-                        "All DEGs" = "#3dccc7",
-                        "Shared DEGs" = "purple",
-                        "Immune" ="#f72585"),
-              direction = c("Up-Up" = "#4DBBD5FF", 
-                            "Up-Down" = "#4DBBD5FF", 
-                            "Down-Down" = "#4361ee", 
-                            "Down-Up" = "#4361ee"),
-              treatment = c("Vaccination" = "#006494",
-                            "Infection" = "#3dccc7",
-                            "Injury" = "#deaaff"),
-                     timepoint = c("0h" = "gray50",
-                                   "Day 0" = "gray50",
-                                   "Early hours" = "#D0D8FB",
-                                   "2h" = "#D0D8FB", 
-                                   "4h" = "#A1B0F7",
-                                   "6h" = "#4361ee",
-                                   "12h" = "#3a86ff",
-                                   "24h" = "purple",
-                                   "Day 1" = "#caf0f8",
-                                   "Day 2" = "#ade8f4",
-                                   "Day 3" = "#90e0ef",
-                                   "Day 4" = "#6CD5EA",
-                                   "Day 6" = "#00b4d8",
-                                   "Day 7" = "#0096c7",
-                                   "Day 12" = "#03045e",
-                                   "Day 24" = "#184e77"),
-                     sex = c("Male" = "#4DBBD5FF",
-                             "Female" = "#4361ee"),
-                     race = c("White" = "gray80",
-                              "Other" = "#4DBBD5FF",
-                              "Black" = "#4361ee", 
-                              "Asian" = "#df65b0", 
-                              "CB6F1" = "#90A4AEFF"),
-                     colors_vaccines = c("Agrippal" = "#669bbc",
-                                         "Fluad" = "#219ebc",
-                                         "Quadri 2019-2020" = "#4DBBD5FF",
-                                         "Quadri 19-20" = "#4DBBD5FF",
-                                         "Engerix" = "#4361ee"),
-                     type = c("VLP" = "#7E6148FF",
-                              "LA" =  "#EFC000FF",
-                              "CONJ" = "#F39B7FFF", 
-                              'IN'= "#00A087FF", 
-                              'Inactivated'= "#00A087FF", 
-                              'VV' = "#3C5488FF", #3rd Gen vaccines
-                              'RNA' = "#4DBBD5FF",
-                              'SU' = "#8491B4FF",
-                              "IN/SU" = "#8491B4FF",
-                              "PS" = "#F39B7FFF",
-                              'I'= "#DC0000FF",
-                              "H" = "grey95",
-                              "V-I" = "#ffadc7"),
-              pathogen = c("Influenza" = "#4cc9f0",
-                           "Hepatitis B" = "#a2d2ff",
-                           "Saureus" = "#669bbc",
-                           "Ecoli" = "#669bbc",
-                           "Trauma" = "#3C5488FF",
-                           "Burn" = "#184e77"))
-
-
-#Define colors
-
-btm_immune_groups = list(group = c("SIGNAL TRANSDUCTION" = "#708d81",
-                                   "CELL CYCLE" = "#06d6a0",
-                                   "ECM AND MIGRATION" = "#52b788",
-                                   "ENERGY METABOLISM" = "#95d5b2", 
-                                   "INNATE RESPONSE" = "#184e77",
-                                   "INFLAMMATORY/TLR/CHEMOKINES"  = "#3a86ff",
-                                   "INTERFERON/ANTIVIRAL SENSING" = "#669bbc",
-                                   "NEUTROPHILS" = "#219ebc",
-                                   "NK CELLS" = "#a2d2ff",
-                                   "IFN"= "#4361ee",
-                                   "MONOCYTES" = "#4cc9f0",
-                                   "DC ACTIVATION" = "#9f86c0",
-                                   "PLATELETS" = "#7209b7",
-                                   "B CELLS" = "#e5383b",
-                                   "T CELLS" = "#f72585",
-                                   "PLASMA CELLS" = "#ffafcc"),
-                         subgroup = c("SIGNAL TRANSDUCTION" = "#708d81",
-                                      "CELL CYCLE" = "#06d6a0",
-                                      "ECM AND MIGRATION" = "#52b788",
-                                      "ENERGY METABOLISM" = "#95d5b2", 
-                                      "INNATE RESPONSE" = "#184e77",
-                                      "INFLAMMATORY/TLR/CHEMOKINES"  = "#3a86ff",
-                                      "INTERFERON/ANTIVIRAL SENSING" = "#669bbc",
-                                      "NEUTROPHILS" = "#219ebc",
-                                      "NK CELLS" = "#a2d2ff",
-                                      "IFN"= "#4361ee",
-                                      "MONOCYTES" = "#4cc9f0",
-                                      "ANTIGEN PRESENTATION"= "#7209b7", 
-                                      "DC ACTIVATION" = "#9f86c0",
-                                      "PLATELETS" = "#7209b7",
-                                      "B CELLS" = "#e5383b",
-                                      "T CELLS" = "#f72585",
-                                      "PLASMA CELLS" = "#ffafcc"))
-
-
-immune_colors = c("SIGNAL TRANSDUCTION" = "#CA6702",
-                  "CELL CYCLE" = "#9B2226",
-                  "ECM AND MIGRATION" = "#d08c60",
-                  "ENERGY METABOLISM" = "#ffc300", 
-                  "PLATELETS" = "#a4b75c",
-                  "INNATE RESPONSE" = "#3D405B",
-                  "NEUTROPHILS" = "#90A4AEFF",
-                  "NK CELLS" = "#001219",
-                  "IFN"= "gray80",
-                  "MONOCYTES" = "#8491B4FF",
-                  "B CELLS" = "#4cc9f0",
-                  "T CELLS" = "#4361ee")
-
-immune_order = c("SIGNAL TRANSDUCTION",
-                 "CELL CYCLE",
-                 "ECM AND MIGRATION",
-                 "ENERGY METABOLISM", 
-                 "INNATE RESPONSE",
-                 "NEUTROPHILS",
-                 "NK CELLS",
-                 "IFN",
-                 "MONOCYTES",
-                 "PLATELETS",
-                 "B CELLS",
-                 "T CELLS")
-
-
-hallmarks_colors = c("Immune Response" = "#4cc9f0",
-                     "Apoptosis and Hormonal Response" = "#06d6a0",
-                     "Differentiation and Cell Structure" = "gray80",
-                     "Metabolism"  = "#4361ee", 
-                     "Proliferation and Repair" = "#001219",
-                     "Signaling and Stress Response"   = "#0A9396")
-
-colors_all <- c(
-  "#4361ee",
-  "#4DBBD5FF",
-  "#90A4AEFF",
-  "#06d6a0",
-  "#46eec6",
-  "#175289",
-  "#caf0f8",
-  "#4cc9f0",
-  "#669bbc",
-  "purple",
-  "#7014cc",
-  "#cd61a1",
-  "gray80",
-  #Neutral harmony bliss
-  "#F4F1DE",
-  "#E07A5F",
-  "#3D405B",
-  "#81B29A",
-  "#F2CC8F",
-  
-  #Ocean sunset
-  "#001219",
-  "#005F73",
-  "#0A9396",
-  "#94D2BD",
-  "#CA6702",
-  "#AE2012",
-  "#9B2226"
-)
 
 
