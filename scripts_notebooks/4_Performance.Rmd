@@ -20,70 +20,54 @@ source(here("scripts_notebooks", "required.R"))
 
 
 ```{r}
-
-#Import DGE table with biological null comparison
-human_mouse_log2fc_avg_wide_labels = 
-  readRDS(file = here("tables", "all_human_mouse_log2fc_avg_wide_labels.rds"))
-```
-
-
-
-
-
-
-
-
-
-
-```{r}
 #Import ============
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
 #Metadata 
 all_human_mouse_metadata = readRDS(here("tables", "all_human_mouse_metadata.rds")) 
+
 #DEGs table
-all_degs_human_mouse = 
-  readRDS(file = here("tables", "all_human_mouse_dge_limma_degs_matched.rds")) %>% 
-  mutate(timepoint = if_else(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours"), "Early hours", timepoint))
+all_degs_human_mouse = readRDS(file = here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = case_when(pathogen == "Staphylococcus aureus" ~ "S. aureus",
+                              pathogen == "Escherichia coli" ~ "E. coli",
+                              pathogen == "Hepatitis B" ~ "HepB",
+                              T ~ pathogen))
+#Biological negative control
+biological_null_degs = readRDS(file = here("tables", "duchenne_mouse_dge_limma_degs.rds")) %>% 
+  filter(timepoint == "Day 28")
 
-#Duplicate infection timepoints in human to match the mouse
-all_human_mouse_metadata_matched =     
-  bind_rows(
-    all_human_mouse_metadata %>% 
-      filter(!(pathogen %in% c("Staphylococcus aureus", "Escherichia coli") & organism == "Human")) %>% 
-      select(pathogen, organism, timepoint),
-    
-  #Duplicate Human infection timepoints with mouse
-  all_human_mouse_metadata %>% 
-  filter((pathogen %in% c("Staphylococcus aureus", "Escherichia coli") & organism == "Human")) %>% 
-  select(pathogen, organism) %>% 
-  inner_join(all_human_mouse_metadata %>% 
-               filter(organism == "Mouse",
-                      pathogen %in% c("Staphylococcus aureus", "Escherichia coli")) %>%
-               select(pathogen, timepoint) %>% 
-               distinct(),
-             by = "pathogen")
+#Filter selected comparisons
+conditions_filtered =
+  readRDS(file = here("tables", "all_human_mouse_correlation_filtered_inter_weighted_filtered.rds")) %>% 
+  select(treatment_human, treatment_mouse, pathogen_human, pathogen_mouse,
+         pathogen_comparison, timepoint_comparison,
+         timepoint_human, timepoint_mouse) %>% 
+  distinct() %>% 
+  pivot_longer(
+    cols = contains("_human") | contains("_mouse"), # Seleciona todas as colunas com esses sufixos
+    names_to = c(".value", "organism"),              # .value indica que o prefixo será a nova coluna
+    names_sep = "_",                                 # Onde cortar o nome da coluna
+    values_drop_na = TRUE
   ) %>% 
-  group_by(pathogen, organism, timepoint) %>%
-  summarise(n = n())
+  mutate(organism = str_to_title(organism)) %>% 
+  mutate(timepoint = str_replace_all(timepoint, "\n", " "))
 
-#Join tables
+
+#Filter conditions
 all_degs_human_mouse_matched = all_degs_human_mouse %>% 
-       inner_join(all_human_mouse_metadata_matched,
-               by = join_by("pathogen", "organism", "timepoint")) 
+  select(organism:human_symbol, mean_l2fc:sd) %>% 
+  inner_join(conditions_filtered,
+             by = join_by(organism, pathogen, treatment, timepoint))
 
-#Print
-all_degs_human_mouse_matched 
-
-#DEGs
-
-
-
-#Input ======================
+#Bind negative control
 dge_long_genes = all_degs_human_mouse_matched %>% 
-  select(pathogen, treatment, organism, human_symbol, timepoint, mean_l2fc, adj_p_val, everything())
+  bind_rows(biological_null_degs) %>% 
+  select(pathogen, treatment, organism, human_symbol, timepoint, mean_l2fc, adj_p_val, everything(),
+         -comparison)
 
-dge_long_genes %>% dplyr::count(pathogen,organism,  timepoint)
+dge_long_genes %>% dplyr::count(pathogen, organism,  treatment, timepoint)
 
+
+##### Input
 #All genes
 genes_roc_allgenes = dge_long_genes
 #Filter immune genes
@@ -100,10 +84,24 @@ degs_genes_human = dge_long_genes %>%
   select(human_symbol, pathogen, organism, timepoint)
 
 #Only immune DEGs
-genes_roc_DEGs_all = dge_long_genes %>%
+genes_roc_DEGs_all = 
+  #Bind rows
+  bind_rows(
+    
+  dge_long_genes %>%
+  #By condition
   inner_join(degs_genes_human %>% 
                select(-organism),
-             by = join_by("human_symbol", "pathogen", "timepoint"))
+             by = join_by("human_symbol", "pathogen", "timepoint"),
+              
+  #Add control,
+  dge_long_genes %>%
+  filter(pathogen == "DMD") %>% 
+  inner_join(degs_genes_human %>% 
+               select(-organism),
+             by = join_by("human_symbol"))
+  
+  )
 
 #Only immune DEGs
 genes_roc_DEGs_immune = dge_long_genes %>%
@@ -113,7 +111,9 @@ genes_roc_DEGs_immune = dge_long_genes %>%
   #Filter immune genes only
   filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
 
-
+#Check
+dge_long_genes %>% 
+  filter(pathogen == "DMD")
 degs_genes_human %>% 
   dplyr::count(pathogen, organism, timepoint)
 
@@ -122,6 +122,105 @@ genes_roc_DEGs_all %>%
 
 genes_roc_DEGs_immune %>% 
   dplyr::count(pathogen, timepoint)
+
+```
+
+
+
+
+
+
+
+
+
+OLD
+```{r}
+# #Import ============
+# btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+# #Metadata 
+# all_human_mouse_metadata = readRDS(here("tables", "all_human_mouse_metadata.rds")) 
+# #DEGs table
+# all_degs_human_mouse = 
+#   readRDS(file = here("tables", "all_human_mouse_dge_limma_degs_matched.rds")) %>% 
+#   mutate(timepoint = if_else(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours"), "Early hours", timepoint))
+# 
+# #Duplicate infection timepoints in human to match the mouse
+# all_human_mouse_metadata_matched =     
+#   bind_rows(
+#     all_human_mouse_metadata %>% 
+#       filter(!(pathogen %in% c("Staphylococcus aureus", "Escherichia coli") & organism == "Human")) %>% 
+#       select(pathogen, organism, timepoint),
+#     
+#   #Duplicate Human infection timepoints with mouse
+#   all_human_mouse_metadata %>% 
+#   filter((pathogen %in% c("Staphylococcus aureus", "Escherichia coli") & organism == "Human")) %>% 
+#   select(pathogen, organism) %>% 
+#   inner_join(all_human_mouse_metadata %>% 
+#                filter(organism == "Mouse",
+#                       pathogen %in% c("Staphylococcus aureus", "Escherichia coli")) %>%
+#                select(pathogen, timepoint) %>% 
+#                distinct(),
+#              by = "pathogen")
+#   ) %>% 
+#   group_by(pathogen, organism, timepoint) %>%
+#   summarise(n = n())
+# 
+# #Join tables
+# all_degs_human_mouse_matched = all_degs_human_mouse %>% 
+#        inner_join(all_human_mouse_metadata_matched,
+#                by = join_by("pathogen", "organism", "timepoint")) 
+# 
+# #Print
+# all_degs_human_mouse_matched 
+
+#DEGs
+
+
+
+# #Input ======================
+# dge_long_genes = all_degs_human_mouse_matched %>% 
+#   select(pathogen, treatment, organism, human_symbol, timepoint, mean_l2fc, adj_p_val, everything())
+# 
+# dge_long_genes %>% dplyr::count(pathogen,organism,  timepoint)
+# 
+# #All genes
+# genes_roc_allgenes = dge_long_genes
+# #Filter immune genes
+# genes_roc_allgenes_immunegenes = dge_long_genes %>% 
+#   filter(human_symbol %in% c(btm_annotation_genes %>% 
+#                          filter(module_category == "immune") %>% 
+#                          pull(symbol) %>% 
+#                          unique()))
+# 
+# #Only DEGs
+# degs_genes_human = dge_long_genes %>%
+#   filter(adj_p_val <= 0.05,
+#          organism == "Human") %>%
+#   select(human_symbol, pathogen, organism, timepoint)
+# 
+# #Only immune DEGs
+# genes_roc_DEGs_all = dge_long_genes %>%
+#   inner_join(degs_genes_human %>% 
+#                select(-organism),
+#              by = join_by("human_symbol", "pathogen", "timepoint"))
+# 
+# #Only immune DEGs
+# genes_roc_DEGs_immune = dge_long_genes %>%
+#   inner_join(degs_genes_human %>% 
+#                select(-organism),
+#              by = join_by("human_symbol", "pathogen", "timepoint")) %>%
+#   #Filter immune genes only
+#   filter(human_symbol %in% c(btm_annotation_genes$symbol %>% unique()))
+# 
+# 
+# degs_genes_human %>% 
+#   dplyr::count(pathogen, organism, timepoint)
+# 
+# genes_roc_DEGs_all %>% 
+#   dplyr::count(pathogen, organism, timepoint)
+# 
+# genes_roc_DEGs_immune %>% 
+#   dplyr::count(pathogen, timepoint)
 
 ```
 
@@ -154,7 +253,7 @@ Compute probabilities
 
 dge_long_genes_up = genes_df_input %>% 
   mutate(
-    df = n - 1,
+    df = 5 - 1,
     pval_one_sided = pt(t, df, lower.tail = FALSE),
     pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
     direction = if_else(pval_one_sided_adj <= 0.05 & t > 0, "up", "not_up"),
@@ -165,7 +264,7 @@ dge_long_genes_up = genes_df_input %>%
 
 dge_long_genes_down = genes_df_input %>% 
   mutate(
-    df = n - 1,
+    df = 5 - 1,
     pval_one_sided = pt(t, df, lower.tail = TRUE),
     pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
     direction = if_else(pval_one_sided_adj <= 0.05 & t < 0, "down", "not_down"),
@@ -179,7 +278,8 @@ dge_long_genes_down = genes_df_input %>%
 #=====================================================
 truth_human_up = dge_long_genes_up %>% 
   select(human_symbol, pathogen, organism, timepoint, adj_p_val, direction) %>% 
-  filter(organism == "Human") %>% 
+  filter(organism == "Human",
+         pathogen != "DMD") %>% 
   distinct() %>% 
   pivot_wider(names_from = organism, values_from = direction) %>% 
   rename(truth = Human) %>% 
@@ -188,7 +288,8 @@ truth_human_up = dge_long_genes_up %>%
 
 truth_human_down = dge_long_genes_down %>% 
   select(human_symbol, pathogen, organism, timepoint, adj_p_val, direction) %>% 
-  filter(organism == "Human") %>% 
+  filter(organism == "Human",
+         pathogen != "DMD") %>% 
   distinct() %>% 
   pivot_wider(names_from = organism, values_from = direction) %>% 
   rename(truth = Human) %>% 
@@ -202,22 +303,46 @@ perfect_prediction_up = truth_human_up %>%
          model = "Human") %>%
   rename(pred = truth)
 
-permutation_prediction_up = perfect_prediction_up %>%
-  group_by(pathogen, timepoint) %>% 
-  mutate(prob = runif(n()), organism = "Permutation",
-         model = "Permutation")
-
 perfect_prediction_down = truth_human_down %>%
   mutate(prob = if_else(truth == "down", 1, 0),
           model = "Human") %>%
   rename(pred = truth)
 
-permutation_prediction_down = perfect_prediction_down %>%
-  group_by(pathogen, timepoint) %>% 
-  mutate(prob = runif(n()), 
-         organism = "Permutation",
-         model = "Permutation")
 
+bionull_up = dge_long_genes_up %>% 
+  filter(pathogen == "DMD") %>%
+  select(!c(pathogen, treatment, timepoint, condition)) %>% 
+  inner_join(dge_long_genes_up %>%
+               filter(pathogen != "DMD") %>% 
+               select(pathogen, timepoint, treatment, organism, human_symbol),
+             by = join_by(human_symbol, organism)) %>% 
+  mutate(organism = "DMD",
+         model = "DMD")
+
+bionull_down = dge_long_genes_down %>% 
+  filter(pathogen == "DMD") %>%
+  select(!c(pathogen, treatment, timepoint, condition)) %>% 
+  inner_join(dge_long_genes_up %>% 
+               filter(pathogen != "DMD") %>% 
+               select(pathogen, treatment, timepoint, organism, human_symbol),
+             by = join_by(human_symbol, organism)) %>% 
+  mutate(organism = "DMD",
+         model = "DMD")
+
+# permutation_prediction_up = perfect_prediction_up %>%
+#   group_by(pathogen, timepoint) %>% 
+#   mutate(prob = runif(n()), organism = "Permutation",
+#          model = "Permutation")
+# 
+# permutation_prediction_down = perfect_prediction_down %>%
+#   group_by(pathogen, timepoint) %>% 
+#   mutate(prob = runif(n()), 
+#          organism = "Permutation",
+#          model = "Permutation")
+```
+
+
+```{r fig.height=6, fig.width=10}
 #=====================================================
 # Combine models (Mouse + Immune + Permutation + Perfect)
 #=====================================================
@@ -226,13 +351,15 @@ models_up = dge_long_genes_up %>%
   mutate(pred = direction,
          organism,
          model = if_else(model_type == "Immune", "Immune", organism)) %>%
-  bind_rows(perfect_prediction_up, permutation_prediction_up)
+  bind_rows(perfect_prediction_up, 
+            bionull_up) %>% 
+  arrange(human_symbol)
 
 models_down = dge_long_genes_down %>% 
   filter(organism != "Human") %>% 
   mutate(pred = direction,
          model = if_else(model_type == "Immune", "Immune", organism)) %>%
-  bind_rows(perfect_prediction_down, permutation_prediction_down)
+  bind_rows(perfect_prediction_down, bionull_down)
 
 #=====================================================
 # Classify probabilities 
@@ -245,7 +372,8 @@ classified_df_probs_up = truth_human_up %>%
   mutate(
     truth = factor(truth, levels = c("up", "not_up"))
   ) %>% 
-  distinct()
+  distinct() %>% 
+  arrange(human_symbol)
 
 classified_df_probs_down = truth_human_down %>% 
   select(human_symbol, pathogen, timepoint, truth) %>%
@@ -269,7 +397,8 @@ classified_df_probs_up_DEGs = truth_human_up %>%
   distinct() %>% 
     inner_join(degs_genes_human %>% 
                select(-organism), 
-             by = join_by(human_symbol, pathogen, timepoint))
+             by = join_by(human_symbol, pathogen, timepoint)) %>% 
+  arrange(human_symbol)
 
 
 
@@ -305,7 +434,7 @@ classified_df_probs_down_DEGs %>%
 #=====================================================
 
 roc_curve_up_notup = classified_df_probs_up %>% 
-  filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT")) %>%
+  filter(model %in% c("Mouse", "Immune", "DMD", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Up")
