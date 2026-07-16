@@ -12,18 +12,22 @@ source(here("scripts_notebooks", "required.R"))
 
 # Performance tests 
 
-# 1. All conditions
-
 ## Classification: Genes
-
-
-
 
 ```{r}
 #Import ============
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
 #Metadata 
-all_human_mouse_metadata = readRDS(here("tables", "all_human_mouse_metadata.rds")) 
+all_human_mouse_metadata = readRDS(here("tables", "all_human_mouse_metadata.rds")) %>% 
+  rownames_to_column("~del") %>% 
+  mutate(pathogen = case_when(pathogen == "Staphylococcus aureus" ~ "S. aureus",
+                              pathogen == "Escherichia coli" ~ "E. coli",
+                              pathogen == "Hepatitis B" ~ "HepB",
+                              T ~ pathogen),
+         timepoint = if_else(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours"), "Early hours", timepoint)) %>% 
+  group_by(pathogen, organism, timepoint) %>% 
+  summarise(n = n()) %>% 
+  ungroup()
 
 #DEGs table 
 all_degs_human_mouse_unmatched =
@@ -113,16 +117,28 @@ all_degs_human_mouse_matched_filtered_bionull =
   crossing(all_degs_human_mouse_matched_filtered %>% 
                select(pathogen, timepoint_comparison, treatment) %>% 
                distinct())
-  )
+  )  %>% 
   
-
+  #Add n participants
+  left_join(all_human_mouse_metadata,
+               by = join_by("pathogen", "organism", "timepoint")) %>% 
+  #Add n participants for control
+  mutate(n = if_else(organism == "DMD", 5, n)) 
+  
+#Check
 all_degs_human_mouse_matched_filtered_bionull %>% 
   dplyr::count(treatment, pathogen, organism, timepoint_comparison)
 
+
+```
+
+
+```{r}
 #Input ======================
 genes_roc_allgenes = all_degs_human_mouse_matched_filtered_bionull %>%
   select(pathogen, treatment, organism, human_symbol, timepoint_comparison, mean_l2fc, adj_p_val, everything())
 
+genes_roc_allgenes %>% select(pathogen, organism, timepoint, n) %>% distinct()
 genes_roc_allgenes %>% dplyr::count(pathogen, organism,  timepoint_comparison)
 
 #All genes
@@ -175,19 +191,11 @@ Double check the code
 ```{r fig.height=4, fig.width=10}
 set.seed(123)
 ######## Input -----
-filename = "all_human_mouse_alternative"
-gene_set_filename = "All_OnlyImmune"
+filename = "all_human_mouse_alternative_unicaudal"
 genes_df_input = bind_rows(
   genes_roc_allgenes %>% mutate(model_type = "Mouse"),
   genes_roc_allgenes_immunegenes %>% mutate(model_type = "Immune")
 )
-
-# filename = "all_human_mouse_downsampled"
-# gene_set_filename = "HumanDEGs_OnlyImmune"
-# genes_df_input = bind_rows(
-#   genes_roc_DEGs_all %>% mutate(model_type = "Mouse"),
-#   genes_roc_DEGs_immune %>% mutate(model_type = "Immune")
-# )
 
 ```
 
@@ -201,54 +209,54 @@ Compute probabilities
 #=====================================================
 # OLD
 # Up
-# dge_long_genes_up <- 
-#   genes_df_input %>% 
-#   mutate(
-#     df = 5 - 1,
-#     pval_one_sided = pt(t, df, lower.tail = FALSE),
-#     pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-#     direction = if_else(pval_one_sided_adj <= 0.05 & t > 0, "up", "not_up"),
-#     prob = 1 - pval_one_sided_adj
-#   ) %>%
-#   select(-adj_p_val) %>%
-#   rename(adj_p_val = pval_one_sided_adj)
-# 
+dge_long_genes_up <-
+  genes_df_input %>%
+  mutate(
+    df = n - 1,
+    pval_one_sided = pt(t, df, lower.tail = FALSE),
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    direction = if_else(pval_one_sided_adj <= 0.05 & t > 0, "up", "not_up"),
+    prob = 1 - pval_one_sided_adj
+  ) %>%
+  select(-adj_p_val) %>%
+  rename(adj_p_val = pval_one_sided_adj)
+
 # Down
-# dge_long_genes_down = genes_df_input %>%
-#   mutate(
-#     df = 5 - 1,
-#     pval_one_sided = pt(t, df, lower.tail = TRUE),
-#     pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
-#     direction = if_else(pval_one_sided_adj <= 0.05 & t < 0, "down", "not_down"),
-#     prob = 1 - pval_one_sided_adj
-#   ) %>%
-#   select(-adj_p_val) %>%
-#   rename(adj_p_val = pval_one_sided_adj)
-
-# New
-# Up
-dge_long_genes_up = genes_df_input %>%
-mutate(
-  # Classify genes based on statistical significance (FDR) and direction of change
-  direction = case_when(
-    adj_p_val <= 0.05 & mean_l2fc > 0 ~ "up",
-    TRUE                              ~ "not_up"
-  ),
-  # Assign a probability score based on confidence (1 - FDR)
-  prob = 1 - adj_p_val
-)
-
-#Down
 dge_long_genes_down = genes_df_input %>%
   mutate(
-    # Classify genes based on statistical significance (FDR) and direction of change
-    direction = case_when(
-      adj_p_val <= 0.05 & mean_l2fc < 0 ~ "down",
-      TRUE                              ~ "not_down"
-    ),
-    # Assign a probability score based on confidence (1 - FDR)
-    prob = 1 - adj_p_val
-  )
+    df = n - 1,
+    pval_one_sided = pt(t, df, lower.tail = TRUE),
+    pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+    direction = if_else(pval_one_sided_adj <= 0.05 & t < 0, "down", "not_down"),
+    prob = 1 - pval_one_sided_adj
+  ) %>%
+  select(-adj_p_val) %>%
+  rename(adj_p_val = pval_one_sided_adj)
+
+# # New
+# # Up
+# dge_long_genes_up = genes_df_input %>%
+# mutate(
+#   # Classify genes based on statistical significance (FDR) and direction of change
+#   direction = case_when(
+#     adj_p_val <= 0.05 & mean_l2fc > 0 ~ "up",
+#     TRUE                              ~ "not_up"
+#   ),
+#   # Assign a probability score based on confidence (1 - FDR)
+#   prob = 1 - adj_p_val
+# )
+# 
+# #Down
+# dge_long_genes_down = genes_df_input %>%
+#   mutate(
+#     # Classify genes based on statistical significance (FDR) and direction of change
+#     direction = case_when(
+#       adj_p_val <= 0.05 & mean_l2fc < 0 ~ "down",
+#       TRUE                              ~ "not_down"
+#     ),
+#     # Assign a probability score based on confidence (1 - FDR)
+#     prob = 1 - adj_p_val
+#   )
 
 
 #Check
@@ -1768,80 +1776,80 @@ pr_auc_DEGs_heatmap %>%
 ####All genes: Lineplots
 PR-AUC as lineplots
 ```{r fig.height=12, fig.width=3}
-pr_auc_lineplot = pr_auc_df %>% 
-  ggplot() +
-   aes(x = timepoint_comparison,
-      y = pr_auc,
-      fill = model,
-      color = model,
-      group = model) + 
-  
-  facet_nested_wrap(~treatment+pathogen+comparison,
-                    scales = "free",
-                    ncol = 2,
-                    strip = strip_nested(size = "variable")
-                    ) +
-  
-  geom_line(width = 1,
-            aes(linetype = model)) +
-  
-  geom_point(size = 2,
-             pch = 21,
-             color = "black",
-             stroke = 0.5) + 
-  geom_text_repel(aes(label = n_genes), size = 2) +
-  # Add a reference line for random prediction (AUC = 0.5)
-    # geom_text_repel(aes(label = auc), 
-  #                 size = 2.5, 
-  #                 # direction = "y", 
-  #                 segment.alpha = 1) +
-
-  scale_x_discrete(expand = c(0.05, 0.05)) +
-  # scale_y_continuous(expand = c(0.01, 0.01)) +
-  theme_vaxgo() +
-  scale_linetype_manual(values = c(
-    "Mouse" = 1,
-    "Immune" = 1,
-    "Human" = 1,
-    "Permutation" = 2
-    )) +
-  scale_fill_manual(values = colors$organism) +
-  scale_color_manual(values = colors$organism) +
-  labs(
-    x = "Time",
-    y = "PR-AUC",
-    fill = "Model",
-    shape = "Model",
-  ) +
-    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 8),
-          axis.text.y = element_text(size = 8, hjust = 1),
-          axis.title.x = element_text(size = 8),
-          axis.title.y = element_text(size = 8),
-          strip.text = element_text(size = 8, margin = margin(1, 0, 1, 0)),
-          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 8),
-          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 8),
-          panel.spacing = unit(0, "lines"),
-          plot.margin = margin(0, 0.5, 0, 0, unit = "cm"),
-          legend.position = "top",
-          legend.direction = "horizontal",
-          legend.margin=margin(0,0,0,0),
-          legend.box.margin=margin(0,0,-10,0),
-          legend.text = element_text(size = 8, hjust = 0),
-          legend.title = element_text(size = 8),
-          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1, size = 0.5)
-    ) +
-  guides(color = "none",
-         shape = "none",
-         linetype = "none",
-         fill = guide_legend(nrow = 2, by.row = T))
-
-pr_auc_lineplot
-
-pr_auc_lineplot %>%
-  ggsave(filename = here("Figures",
-                         paste0(filename, "_performance_pr_auc_lineplot_All_OnlyImmune.png")),
-         width = 3,
-         height = 12)
+# pr_auc_lineplot = pr_auc_df %>% 
+#   ggplot() +
+#    aes(x = timepoint_comparison,
+#       y = pr_auc,
+#       fill = model,
+#       color = model,
+#       group = model) + 
+#   
+#   facet_nested_wrap(~treatment+pathogen+comparison,
+#                     scales = "free",
+#                     ncol = 2,
+#                     strip = strip_nested(size = "variable")
+#                     ) +
+#   
+#   geom_line(width = 1,
+#             aes(linetype = model)) +
+#   
+#   geom_point(size = 2,
+#              pch = 21,
+#              color = "black",
+#              stroke = 0.5) + 
+#   geom_text_repel(aes(label = n_genes), size = 2) +
+#   # Add a reference line for random prediction (AUC = 0.5)
+#     # geom_text_repel(aes(label = auc), 
+#   #                 size = 2.5, 
+#   #                 # direction = "y", 
+#   #                 segment.alpha = 1) +
+# 
+#   scale_x_discrete(expand = c(0.05, 0.05)) +
+#   # scale_y_continuous(expand = c(0.01, 0.01)) +
+#   theme_vaxgo() +
+#   scale_linetype_manual(values = c(
+#     "Mouse" = 1,
+#     "Immune" = 1,
+#     "Human" = 1,
+#     "Permutation" = 2
+#     )) +
+#   scale_fill_manual(values = colors$organism) +
+#   scale_color_manual(values = colors$organism) +
+#   labs(
+#     x = "Time",
+#     y = "PR-AUC",
+#     fill = "Model",
+#     shape = "Model",
+#   ) +
+#     theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 8),
+#           axis.text.y = element_text(size = 8, hjust = 1),
+#           axis.title.x = element_text(size = 8),
+#           axis.title.y = element_text(size = 8),
+#           strip.text = element_text(size = 8, margin = margin(1, 0, 1, 0)),
+#           strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 8),
+#           strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 8),
+#           panel.spacing = unit(0, "lines"),
+#           plot.margin = margin(0, 0.5, 0, 0, unit = "cm"),
+#           legend.position = "top",
+#           legend.direction = "horizontal",
+#           legend.margin=margin(0,0,0,0),
+#           legend.box.margin=margin(0,0,-10,0),
+#           legend.text = element_text(size = 8, hjust = 0),
+#           legend.title = element_text(size = 8),
+#           ggh4x.facet.nestline = element_line(colour = "black", linetype = 1, size = 0.5)
+#     ) +
+#   guides(color = "none",
+#          shape = "none",
+#          linetype = "none",
+#          fill = guide_legend(nrow = 2, by.row = T))
+# 
+# pr_auc_lineplot
+# 
+# pr_auc_lineplot %>%
+#   ggsave(filename = here("Figures",
+#                          paste0(filename, "_performance_pr_auc_lineplot_All_OnlyImmune.png")),
+#          width = 3,
+#          height = 12)
 
 ```
 
@@ -1854,80 +1862,80 @@ PR-AUC as lineplots
 ```{r fig.height=12, fig.width=3}
 
 
-pr_auc_lineplot = pr_auc_df %>% 
-  ggplot() +
-   aes(x = timepoint_comparison,
-      y = pr_auc,
-      fill = model,
-      color = model,
-      group = model) + 
-  
-  facet_nested_wrap(~treatment+pathogen+comparison,
-                    scales = "free",
-                    ncol = 2,
-                    strip = strip_nested(size = "variable")
-                    ) +
-  
-  geom_line(width = 1,
-            aes(linetype = model)) +
-  
-  geom_point(size = 2,
-             pch = 21,
-             color = "black",
-             stroke = 0.5) + 
-  geom_text_repel(aes(label = n_genes), size = 2) +
-  # Add a reference line for random prediction (AUC = 0.5)
-    # geom_text_repel(aes(label = auc), 
-  #                 size = 2.5, 
-  #                 # direction = "y", 
-  #                 segment.alpha = 1) +
-
-  scale_x_discrete(expand = c(0.05, 0.05)) +
-  # scale_y_continuous(expand = c(0.01, 0.01)) +
-  theme_vaxgo() +
-  scale_linetype_manual(values = c(
-    "Mouse" = 1,
-    "Immune" = 1,
-    "Human" = 1,
-    "Permutation" = 2
-    )) +
-  scale_fill_manual(values = colors$organism) +
-  scale_color_manual(values = colors$organism) +
-  labs(
-    x = "Time",
-    y = "PR-AUC",
-    fill = "Model",
-    shape = "Model",
-  ) +
-    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 8),
-          axis.text.y = element_text(size = 8, hjust = 1),
-          axis.title.x = element_text(size = 8),
-          axis.title.y = element_text(size = 8),
-          strip.text = element_text(size = 8, margin = margin(1, 0, 1, 0)),
-          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 8),
-          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 8),
-          panel.spacing = unit(0, "lines"),
-          plot.margin = margin(0, 0.5, 0, 0, unit = "cm"),
-          legend.position = "top",
-          legend.direction = "horizontal",
-          legend.margin=margin(0,0,0,0),
-          legend.box.margin=margin(0,0,-10,0),
-          legend.text = element_text(size = 8, hjust = 0),
-          legend.title = element_text(size = 8),
-          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1, size = 0.5)
-    ) +
-  guides(color = "none",
-         shape = "none",
-         linetype = "none",
-         fill = guide_legend(nrow = 2, by.row = T))
-
-pr_auc_lineplot
-
-pr_auc_lineplot %>%
-  ggsave(filename = here("Figures",
-                         paste0(filename, "_performance_pr_auc_lineplot_DEGs_OnlyImmune.png")),
-         width = 3,
-         height = 12)
+# pr_auc_lineplot = pr_auc_df %>% 
+#   ggplot() +
+#    aes(x = timepoint_comparison,
+#       y = pr_auc,
+#       fill = model,
+#       color = model,
+#       group = model) + 
+#   
+#   facet_nested_wrap(~treatment+pathogen+comparison,
+#                     scales = "free",
+#                     ncol = 2,
+#                     strip = strip_nested(size = "variable")
+#                     ) +
+#   
+#   geom_line(width = 1,
+#             aes(linetype = model)) +
+#   
+#   geom_point(size = 2,
+#              pch = 21,
+#              color = "black",
+#              stroke = 0.5) + 
+#   geom_text_repel(aes(label = n_genes), size = 2) +
+#   # Add a reference line for random prediction (AUC = 0.5)
+#     # geom_text_repel(aes(label = auc), 
+#   #                 size = 2.5, 
+#   #                 # direction = "y", 
+#   #                 segment.alpha = 1) +
+# 
+#   scale_x_discrete(expand = c(0.05, 0.05)) +
+#   # scale_y_continuous(expand = c(0.01, 0.01)) +
+#   theme_vaxgo() +
+#   scale_linetype_manual(values = c(
+#     "Mouse" = 1,
+#     "Immune" = 1,
+#     "Human" = 1,
+#     "Permutation" = 2
+#     )) +
+#   scale_fill_manual(values = colors$organism) +
+#   scale_color_manual(values = colors$organism) +
+#   labs(
+#     x = "Time",
+#     y = "PR-AUC",
+#     fill = "Model",
+#     shape = "Model",
+#   ) +
+#     theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 8),
+#           axis.text.y = element_text(size = 8, hjust = 1),
+#           axis.title.x = element_text(size = 8),
+#           axis.title.y = element_text(size = 8),
+#           strip.text = element_text(size = 8, margin = margin(1, 0, 1, 0)),
+#           strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 8),
+#           strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 8),
+#           panel.spacing = unit(0, "lines"),
+#           plot.margin = margin(0, 0.5, 0, 0, unit = "cm"),
+#           legend.position = "top",
+#           legend.direction = "horizontal",
+#           legend.margin=margin(0,0,0,0),
+#           legend.box.margin=margin(0,0,-10,0),
+#           legend.text = element_text(size = 8, hjust = 0),
+#           legend.title = element_text(size = 8),
+#           ggh4x.facet.nestline = element_line(colour = "black", linetype = 1, size = 0.5)
+#     ) +
+#   guides(color = "none",
+#          shape = "none",
+#          linetype = "none",
+#          fill = guide_legend(nrow = 2, by.row = T))
+# 
+# pr_auc_lineplot
+# 
+# pr_auc_lineplot %>%
+#   ggsave(filename = here("Figures",
+#                          paste0(filename, "_performance_pr_auc_lineplot_DEGs_OnlyImmune.png")),
+#          width = 3,
+#          height = 12)
 
 ```
 
