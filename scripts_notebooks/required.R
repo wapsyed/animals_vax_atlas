@@ -596,6 +596,782 @@ get_sequences <- function(genes, mart, symbol_attr) {
 }
 
 
+############################
+# CLASSIFICATION PERFORMANCE
+############################
+# Compute classification performance for GENES and DEGs ==============
+classification_performance_compute_genes_degs = function(df = genes_df_input,
+                                              pval_filter = 0.05) {
+  
+  #Compute probabilities
+  dge_long_genes_up =
+    genes_df_input %>%
+    mutate(
+      df = n - 1,
+      pval_one_sided = pt(t, df, lower.tail = FALSE),
+      pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+      direction = if_else(pval_one_sided_adj <= pval_filter & t > 0, "up", "not_up"),
+      prob = 1 - pval_one_sided_adj
+    ) %>%
+    select(-adj_p_val) %>%
+    rename(adj_p_val = pval_one_sided_adj)
+  
+  # Down
+  dge_long_genes_down = genes_df_input %>%
+    mutate(
+      df = n - 1,
+      pval_one_sided = pt(t, df, lower.tail = TRUE),
+      pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+      direction = if_else(pval_one_sided_adj <= pval_filter & t < 0, "down", "not_down"),
+      prob = 1 - pval_one_sided_adj
+    ) %>%
+    select(-adj_p_val) %>%
+    rename(adj_p_val = pval_one_sided_adj)
+  
+  #Check
+  dge_long_genes_up %>% 
+    dplyr::count(pathogen, timepoint_comparison, organism, direction)
+  #Check
+  dge_long_genes_down %>% 
+    dplyr::count(pathogen, timepoint_comparison, organism, direction)
+  
+  #=====================================================
+  # Assign human truth
+  #=====================================================
+  truth_human_up = dge_long_genes_up %>% 
+    select(human_symbol, pathogen, organism, timepoint_comparison, adj_p_val, direction) %>% 
+    filter(organism == "Human") %>% 
+    distinct() %>% 
+    pivot_wider(names_from = organism, values_from = direction) %>% 
+    rename(truth = Human) %>% 
+    mutate(organism = "Human")
+  
+  
+  truth_human_down = dge_long_genes_down %>% 
+    select(human_symbol, pathogen, organism, timepoint_comparison, adj_p_val, direction) %>% 
+    filter(organism == "Human") %>% 
+    distinct() %>% 
+    pivot_wider(names_from = organism, values_from = direction) %>% 
+    rename(truth = Human) %>% 
+    mutate(organism = "Human")
+  
+  #=====================================================
+  #Generate reference distributions
+  #=====================================================
+  perfect_prediction_up = truth_human_up %>%
+    mutate(prob = if_else(truth == "up", 1, 0),
+           model = "Human") %>%
+    rename(pred = truth)
+  
+  perfect_prediction_down = truth_human_down %>%
+    mutate(prob = if_else(truth == "down", 1, 0),
+           model = "Human") %>%
+    rename(pred = truth)
+  
+  #=====================================================
+  # Combine models (Mouse + Immune + Permutation + Perfect)
+  #=====================================================
+  models_up = dge_long_genes_up %>% 
+    filter(organism != "Human") %>% 
+    mutate(pred = direction,
+           organism,
+           model = organism) %>%
+    bind_rows(perfect_prediction_up)
+  
+  models_down = dge_long_genes_down %>% 
+    filter(organism != "Human") %>% 
+    mutate(pred = direction,
+           model = organism) %>%
+    bind_rows(perfect_prediction_down)
+  
+  
+  #=====================================================
+  # Classify probabilities 
+  #=====================================================
+  #Up
+  classified_df_probs_up = truth_human_up %>% 
+    select(human_symbol, pathogen, timepoint_comparison, truth) %>%
+    inner_join(models_up %>% 
+                 select(human_symbol, organism, pathogen, timepoint_comparison, pred, prob, model),
+               by = join_by(human_symbol, timepoint_comparison, pathogen)) %>% 
+    mutate(
+      truth = factor(truth, levels = c("up", "not_up"))
+    ) %>% 
+    distinct()
+  
+  #Down
+  classified_df_probs_down = truth_human_down %>% 
+    select(human_symbol, pathogen, timepoint_comparison, truth) %>%
+    inner_join(models_down %>% 
+                 select(human_symbol, organism, pathogen, timepoint_comparison, pred, prob, model),
+               by = join_by(human_symbol, timepoint_comparison, pathogen)) %>% 
+    mutate(
+      truth = factor(truth, levels = c("down", "not_down"))
+    ) %>% 
+    distinct() 
+  
+  #Up DEGs
+  classified_df_probs_up_DEGs = truth_human_up %>% 
+    select(human_symbol, pathogen, timepoint_comparison, truth) %>%
+    inner_join(models_up %>% 
+                 select(human_symbol, organism, pathogen, timepoint_comparison, pred, prob, model),
+               by = join_by(human_symbol, timepoint_comparison, pathogen)) %>% 
+    mutate(
+      truth = factor(truth, levels = c("up", "not_up"))
+    ) %>% 
+    distinct() %>% 
+    inner_join(degs_genes_human %>% 
+                 select(-organism), 
+               by = join_by(human_symbol, pathogen, timepoint_comparison))
+  
+  #Down DEGs
+  classified_df_probs_down_DEGs = truth_human_down %>% 
+    select(human_symbol, pathogen, timepoint_comparison, truth) %>%
+    inner_join(models_down %>% 
+                 select(human_symbol, organism, pathogen, timepoint_comparison, pred, prob, model),
+               by = join_by(human_symbol, timepoint_comparison, pathogen)) %>% 
+    mutate(
+      truth = factor(truth, levels = c("down", "not_down"))
+    ) %>% 
+    distinct()  %>% 
+    inner_join(degs_genes_human %>% 
+                 select(-organism), 
+               by = join_by(human_symbol, pathogen, timepoint_comparison))
+  
+  #Check
+  classified_df_probs_up  %>% 
+    dplyr::count(pathogen, model, timepoint_comparison, pred, truth)
+  
+  classified_df_probs_up_DEGs %>% 
+    dplyr::count(pathogen, model, timepoint_comparison, pred, truth)
+  
+  classified_df_probs_down %>% 
+    dplyr::count(pathogen, model, timepoint_comparison, pred, truth)
+  
+  classified_df_probs_down_DEGs %>% 
+    dplyr::count(pathogen, model, timepoint_comparison, pred, truth)
+  
+  #=====================================================
+  #Compute ROC 
+  #=====================================================
+  
+  #UP-notUP
+  roc_curve_up_notup = classified_df_probs_up %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    roc_curve(truth, prob) %>%
+    mutate(comparison = "Up")
+  
+  roc_curve_up_notup_DEGs = classified_df_probs_up_DEGs %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    roc_curve(truth, prob) %>%
+    mutate(comparison = "Up")
+  
+  roc_curve_up_notup %>% 
+    dplyr::count(pathogen, model, timepoint_comparison)
+  
+  roc_curve_up_notup_DEGs %>% 
+    dplyr::count(pathogen, model, timepoint_comparison)
+  
+  #DOWN-notDOWN
+  roc_curve_down_notdown = classified_df_probs_down %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation",  "Control", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    roc_curve(truth, prob) %>%
+    mutate(comparison = "Down")
+  
+  roc_curve_down_notdown_DEGs = classified_df_probs_down_DEGs %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    roc_curve(truth, prob) %>%
+    mutate(comparison = "Down")
+  
+  roc_curve_down_notdown %>% 
+    dplyr::count(pathogen, model, timepoint_comparison)
+  
+  roc_curve_down_notdown_DEGs %>% 
+    dplyr::count(pathogen, model, timepoint_comparison)
+  
+  
+  
+  #=====================================================
+  #Compute AUC 
+  #=====================================================
+  auc_results_up = classified_df_probs_up %>% 
+    mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+    filter(model %in% c("Mouse", "Immune", "Control", "Permutation", "Human")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    roc_auc(truth, prob) %>%
+    rename(auc = .estimate) %>%
+    mutate(comparison = "Up") %>% 
+    ungroup() %>% 
+    select(pathogen, model, timepoint_comparison, auc, comparison)
+  
+  auc_results_up_DEGs = classified_df_probs_up_DEGs %>% 
+    mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+    filter(model %in% c("Mouse", "Immune", "Control", "Permutation", "Human")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    roc_auc(truth, prob) %>%
+    rename(auc = .estimate) %>%
+    mutate(comparison = "Up") %>% 
+    ungroup() %>% 
+    select(pathogen, model, timepoint_comparison, auc, comparison)
+  
+  auc_results_down = classified_df_probs_down %>% 
+    mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+    filter(model %in% c("Mouse", "Immune", "Control", "Permutation", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    roc_auc(truth, prob) %>%
+    rename(auc = .estimate) %>%
+    mutate(comparison = "Down") %>% 
+    ungroup() %>% 
+    select(pathogen, model, timepoint_comparison, auc, comparison)
+  
+  auc_results_down_DEGs = classified_df_probs_down_DEGs %>% 
+    mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+    filter(model %in% c("Mouse", "Immune", "Control", "Permutation", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    roc_auc(truth, prob) %>%
+    rename(auc = .estimate) %>%
+    mutate(comparison = "Down") %>% 
+    ungroup() %>% 
+    select(pathogen, model, timepoint_comparison, auc, comparison)
+  
+  
+  ##### Unite all results
+  roc_curve_auc_df = bind_rows(auc_results_up,
+                               auc_results_down) %>% 
+    inner_join(
+      roc_curve_up_notup %>% 
+        bind_rows(roc_curve_down_notdown %>% 
+                    filter(model != "Human")),
+      by = join_by(pathogen, model, timepoint_comparison, comparison)) 
+  
+  
+  roc_curve_auc_df_DEGs = bind_rows(auc_results_up_DEGs,
+                                    auc_results_down_DEGs) %>% 
+    inner_join(
+      roc_curve_up_notup_DEGs %>% 
+        bind_rows(roc_curve_down_notdown_DEGs %>% 
+                    filter(model != "Human")),
+      by = join_by(pathogen, model, timepoint_comparison, comparison)) 
+  #Check
+  roc_curve_auc_df %>% 
+    dplyr::count(pathogen, model, comparison, timepoint_comparison, auc)
+  
+  roc_curve_auc_df_DEGs %>% 
+    dplyr::count(pathogen, model, comparison, timepoint_comparison, auc)
+  
+  #Get n genes
+  ngenes = bind_rows(
+    classified_df_probs_up %>%
+      filter(pred == "up") %>% 
+      group_by(pathogen, timepoint_comparison, model) %>% 
+      summarise(n_genes = n(),
+                comparison = "Up") %>% 
+      ungroup(),
+    classified_df_probs_down %>%
+      filter(pred == "down") %>% 
+      group_by(pathogen, timepoint_comparison, model) %>% 
+      summarise(n_genes = n(),
+                comparison = "Down") %>% 
+      ungroup(),
+  )
+  
+  
+  # Visualize AUC
+  roc_auc_df <- bind_rows(auc_results_up,
+                          auc_results_down) %>%
+    inner_join(ngenes, by = join_by(comparison, pathogen, timepoint_comparison, model)) 
+  
+  #Get n genes
+  ngenes_DEGs = bind_rows(
+    classified_df_probs_up_DEGs %>%
+      filter(pred == "up") %>% 
+      group_by(pathogen, timepoint_comparison, model) %>% 
+      summarise(n_genes = n(),
+                comparison = "Up") %>% 
+      ungroup(),
+    classified_df_probs_down_DEGs %>%
+      filter(pred == "down") %>% 
+      group_by(pathogen, timepoint_comparison, model) %>% 
+      summarise(n_genes = n(),
+                comparison = "Down") %>% 
+      ungroup(),
+  )
+  
+  # Visualize AUC
+  roc_auc_df_DEGs <- bind_rows(auc_results_up_DEGs,
+                               auc_results_down_DEGs) %>%
+    inner_join(ngenes_DEGs, by = join_by(comparison, pathogen, timepoint_comparison, model)) 
+  
+  #=====================================================
+  #Compute PR 
+  #=====================================================
+  
+  pr_curve_up_notup = classified_df_probs_up %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    pr_curve(truth, prob) %>%
+    mutate(comparison = "Up")
+  
+  pr_curve_up_notup_DEGs = classified_df_probs_up_DEGs %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    pr_curve(truth, prob) %>%
+    mutate(comparison = "Up")
+  
+  pr_curve_up_notup %>% 
+    dplyr::count(pathogen, model, timepoint_comparison)
+  
+  pr_curve_up_notup_DEGs %>% 
+    dplyr::count(pathogen, model, timepoint_comparison)
+  
+  pr_curve_down_notdown = classified_df_probs_down %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    pr_curve(truth, prob) %>%
+    mutate(comparison = "Down")
+  
+  pr_curve_down_notdown_DEGs = classified_df_probs_down_DEGs %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    pr_curve(truth, prob) %>%
+    mutate(comparison = "Down")
+  
+  pr_curve_down_notdown %>% 
+    dplyr::count(pathogen, model, timepoint_comparison)
+  
+  pr_curve_down_notdown_DEGs %>% 
+    dplyr::count(pathogen, model, timepoint_comparison)
+  
+  #=====================================================
+  #Compute PR-AUC 
+  #=====================================================
+  pr_auc_results_up = classified_df_probs_up %>% 
+    mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "Control")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    pr_auc(truth, prob) %>%
+    rename(pr_auc = .estimate) %>%
+    mutate(comparison = "Up") %>% 
+    ungroup() %>% 
+    select(pathogen, model, timepoint_comparison, pr_auc, comparison)
+  
+  pr_auc_results_up_DEGs = classified_df_probs_up_DEGs %>% 
+    mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "Control")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    pr_auc(truth, prob) %>%
+    rename(pr_auc = .estimate) %>%
+    mutate(comparison = "Up") %>% 
+    ungroup() %>% 
+    select(pathogen, model, timepoint_comparison, pr_auc,  comparison)
+  
+  pr_auc_results_down = classified_df_probs_down %>% 
+    mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "Control")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    pr_auc(truth, prob) %>%
+    rename(pr_auc = .estimate) %>%
+    mutate(comparison = "Down") %>% 
+    ungroup() %>% 
+    select(pathogen, model, timepoint_comparison, pr_auc,  comparison)
+  
+  pr_auc_results_down_DEGs = classified_df_probs_down_DEGs %>% 
+    mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "Control")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    pr_auc(truth, prob) %>%
+    rename(pr_auc = .estimate) %>%
+    mutate(comparison = "Down") %>% 
+    ungroup() %>% 
+    select(pathogen, model, timepoint_comparison, pr_auc,  comparison)
+  
+  
+  ##### Unite all results
+  pr_curve_auc_df = bind_rows(pr_auc_results_up,
+                              pr_auc_results_down) %>% 
+    inner_join(
+      pr_curve_up_notup %>% 
+        bind_rows(pr_curve_down_notdown %>% 
+                    filter(model != "Human")),
+      by = join_by(pathogen, model, timepoint_comparison, comparison)) 
+  
+  
+  
+  pr_curve_auc_df_DEGs = bind_rows(pr_auc_results_up_DEGs,
+                                   pr_auc_results_down_DEGs) %>% 
+    inner_join(
+      pr_curve_up_notup_DEGs %>% 
+        bind_rows(pr_curve_down_notdown_DEGs %>% 
+                    filter(model != "Human")),
+      by = join_by(pathogen, model, timepoint_comparison, comparison))
+  
+  #Check
+  pr_curve_auc_df %>% 
+    dplyr::count(pathogen, model, comparison, timepoint_comparison, pr_auc)
+  
+  pr_curve_auc_df_DEGs %>% 
+    dplyr::count(pathogen, model, comparison, timepoint_comparison, pr_auc)
+  
+  #Get n genes
+  ngenes = bind_rows(
+    classified_df_probs_up %>%
+      filter(pred == "up") %>% 
+      group_by(pathogen, timepoint_comparison, model) %>% 
+      summarise(n_genes = n(),
+                comparison = "Up") %>% 
+      ungroup(),
+    classified_df_probs_down %>%
+      filter(pred == "down") %>% 
+      group_by(pathogen, timepoint_comparison, model) %>% 
+      summarise(n_genes = n(),
+                comparison = "Down") %>% 
+      ungroup(),
+  )
+  
+  
+  # Visualize AUC
+  pr_auc_df <- bind_rows(pr_auc_results_up,
+                         pr_auc_results_down) %>%
+    inner_join(ngenes, by = join_by(comparison, pathogen, timepoint_comparison, model)) 
+  
+  
+  #Get n genes
+  ngenes_DEGs = bind_rows(
+    classified_df_probs_up_DEGs %>%
+      filter(pred == "up") %>% 
+      group_by(pathogen, timepoint_comparison, model) %>% 
+      summarise(n_genes = n(),
+                comparison = "Up") %>% 
+      ungroup(),
+    classified_df_probs_down_DEGs %>%
+      filter(pred == "down") %>% 
+      group_by(pathogen, timepoint_comparison, model) %>% 
+      summarise(n_genes = n(),
+                comparison = "Down") %>% 
+      ungroup(),
+  )
+  
+  
+  # Combine and add N genes AUC
+  pr_auc_DEGs_df <- bind_rows(pr_auc_results_up_DEGs,
+                              pr_auc_results_down_DEGs) %>%
+    inner_join(ngenes_DEGs, by = join_by(comparison, pathogen, timepoint_comparison, model)) 
+  
+  
+  
+  # RETURN all computed tables --------
+  return(list(
+    roc_auc_df = roc_auc_df,
+    roc_auc_df_DEGs = roc_auc_df_DEGs,
+    roc_curve_auc_df = roc_curve_auc_df,
+    roc_curve_auc_df_DEGs = roc_curve_auc_df_DEGs,
+    pr_curve_auc_df = pr_curve_auc_df,
+    pr_curve_auc_df_DEGs = pr_curve_auc_df_DEGs,
+    pr_auc_df = pr_auc_df,
+    pr_auc_DEGs_df = pr_auc_DEGs_df
+  ))
+}
+
+
+# Compute classification performance MODULES ==============
+classification_performance_compute_genes_modules = function(df = btms_df_input) {
+  
+  #Compute probabilities
+  dge_long_genes_up =
+    btms_df_input %>%
+    mutate(
+      df = n_genes - 1,
+      t = mean_log2fc/(sd_log2fc/sqrt(n_genes)), 
+      pval_one_sided = pt(t, df, lower.tail = FALSE),
+      pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+      direction = if_else(pval_one_sided_adj <= 0.05 & t > 0, "up", "not_up"),
+      prob = 1 - pval_one_sided_adj
+    ) %>%
+    rename(adj_p_val = pval_one_sided_adj)
+  
+  # Down
+  dge_long_genes_down = btms_df_input %>% 
+    mutate(
+      df = n_genes - 1,
+      t = mean_log2fc/(sd_log2fc/sqrt(n_genes)), 
+      pval_one_sided = pt(t, df, lower.tail = TRUE),
+      pval_one_sided_adj = p.adjust(pval_one_sided, method = "BH"),
+      direction = if_else(pval_one_sided_adj <= 0.05 & t < 0, "down", "not_down"),
+      prob = 1 - pval_one_sided_adj
+    ) %>%
+    rename(adj_p_val = pval_one_sided_adj) %>% 
+    drop_na(adj_p_val)
+  
+  #Check
+  dge_long_genes_up %>% 
+    dplyr::count(pathogen, timepoint_comparison, organism, direction)
+  #Check
+  dge_long_genes_down %>% 
+    dplyr::count(pathogen, timepoint_comparison, organism, direction)
+  
+  #=====================================================
+  # Assign human truth
+  #=====================================================
+  truth_human_up = dge_long_genes_up %>% 
+    select(pathogen, symbol, organism, timepoint, adj_p_val, direction) %>% 
+    filter(organism == "Human") %>% 
+    distinct() %>% 
+    pivot_wider(names_from = organism, values_from = direction) %>% 
+    rename(truth = Human) %>% 
+    mutate(organism = "Human") 
+  
+  truth_human_down = dge_long_genes_down %>% 
+    select(pathogen, symbol, organism, timepoint, adj_p_val, direction) %>% 
+    filter(organism == "Human") %>% 
+    distinct() %>% 
+    pivot_wider(names_from = organism, values_from = direction) %>% 
+    rename(truth = Human) %>% 
+    mutate(organism = "Human")
+  
+  #=====================================================
+  #Generate reference distributions
+  #=====================================================
+  perfect_prediction_up = truth_human_up %>%
+    mutate(prob = if_else(truth == "up", 1, 0),
+           model = "Human") %>%
+    rename(pred = truth)
+  
+  perfect_prediction_down = truth_human_down %>%
+    mutate(prob = if_else(truth == "down", 1, 0),
+           model = "Human") %>%
+    rename(pred = truth)
+  
+  #=====================================================
+  # Combine models (Mouse + Immune + Permutation + Perfect)
+  #=====================================================
+  models_up = dge_long_genes_up %>% 
+    filter(organism != "Human") %>% 
+    mutate(pred = direction,
+           organism,
+           model = organism) %>%
+    bind_rows(perfect_prediction_up)
+  
+  models_down = dge_long_genes_down %>% 
+    filter(organism != "Human") %>% 
+    mutate(pred = direction,
+           model = organism) %>%
+    bind_rows(perfect_prediction_down)
+  
+  
+  #=====================================================
+  # Classify probabilities 
+  #=====================================================
+  #Up
+  classified_df_probs_up = truth_human_up %>% 
+    select(human_symbol, pathogen, timepoint_comparison, truth) %>%
+    inner_join(models_up %>% 
+                 select(human_symbol, organism, pathogen, timepoint_comparison, pred, prob, model),
+               by = join_by(human_symbol, timepoint_comparison, pathogen)) %>% 
+    mutate(
+      truth = factor(truth, levels = c("up", "not_up"))
+    ) %>% 
+    distinct()
+  
+  #Down
+  classified_df_probs_down = truth_human_down %>% 
+    select(human_symbol, pathogen, timepoint_comparison, truth) %>%
+    inner_join(models_down %>% 
+                 select(human_symbol, organism, pathogen, timepoint_comparison, pred, prob, model),
+               by = join_by(human_symbol, timepoint_comparison, pathogen)) %>% 
+    mutate(
+      truth = factor(truth, levels = c("down", "not_down"))
+    ) %>% 
+    distinct() 
+  
+  
+  #Check
+  classified_df_probs_up  %>% 
+    dplyr::count(pathogen, model, timepoint_comparison, pred, truth)
+  
+  classified_df_probs_down %>% 
+    dplyr::count(pathogen, model, timepoint_comparison, pred, truth)
+  
+  #=====================================================
+  #Compute ROC 
+  #=====================================================
+  
+  #UP-notUP
+  roc_curve_up_notup = classified_df_probs_up %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    roc_curve(truth, prob) %>%
+    mutate(comparison = "Up")
+  
+  roc_curve_up_notup %>% 
+    dplyr::count(pathogen, model, timepoint_comparison)
+  
+  #DOWN-notDOWN
+  roc_curve_down_notdown = classified_df_probs_down %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation",  "Control", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    roc_curve(truth, prob) %>%
+    mutate(comparison = "Down")
+  
+  roc_curve_down_notdown %>% 
+    dplyr::count(pathogen, model, timepoint_comparison)
+  
+
+  #=====================================================
+  #Compute AUC 
+  #=====================================================
+  auc_results_up = classified_df_probs_up %>% 
+    mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+    filter(model %in% c("Mouse", "Immune", "Control", "Permutation", "Human")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    roc_auc(truth, prob) %>%
+    rename(auc = .estimate) %>%
+    mutate(comparison = "Up") %>% 
+    ungroup() %>% 
+    select(pathogen, model, timepoint_comparison, auc, comparison)
+  
+  auc_results_down = classified_df_probs_down %>% 
+    mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+    filter(model %in% c("Mouse", "Immune", "Control", "Permutation", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    roc_auc(truth, prob) %>%
+    rename(auc = .estimate) %>%
+    mutate(comparison = "Down") %>% 
+    ungroup() %>% 
+    select(pathogen, model, timepoint_comparison, auc, comparison)
+  
+  
+  ##### Unite all results
+  roc_curve_auc_df = bind_rows(auc_results_up,
+                               auc_results_down) %>% 
+    inner_join(
+      roc_curve_up_notup %>% 
+        bind_rows(roc_curve_down_notdown %>% 
+                    filter(model != "Human")),
+      by = join_by(pathogen, model, timepoint_comparison, comparison)) 
+
+  #Check
+  roc_curve_auc_df %>% 
+    dplyr::count(pathogen, model, comparison, timepoint_comparison, auc)
+ 
+  #Get n genes
+  ngenes = bind_rows(
+    classified_df_probs_up %>%
+      filter(pred == "up") %>% 
+      group_by(pathogen, timepoint_comparison, model) %>% 
+      summarise(n_genes = n(),
+                comparison = "Up") %>% 
+      ungroup(),
+    classified_df_probs_down %>%
+      filter(pred == "down") %>% 
+      group_by(pathogen, timepoint_comparison, model) %>% 
+      summarise(n_genes = n(),
+                comparison = "Down") %>% 
+      ungroup(),
+  )
+  
+  # Unite 
+  roc_auc_df <- bind_rows(auc_results_up,
+                          auc_results_down) %>%
+    inner_join(ngenes, by = join_by(comparison, pathogen, timepoint_comparison, model)) 
+  
+  #=====================================================
+  #Compute PR 
+  #=====================================================
+  
+  pr_curve_up_notup = classified_df_probs_up %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    pr_curve(truth, prob) %>%
+    mutate(comparison = "Up")
+  
+  pr_curve_up_notup %>% 
+    dplyr::count(pathogen, model, timepoint_comparison)
+  
+  pr_curve_down_notdown = classified_df_probs_down %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    pr_curve(truth, prob) %>%
+    mutate(comparison = "Down")
+  
+  pr_curve_down_notdown %>% 
+    dplyr::count(pathogen, model, timepoint_comparison)
+  
+  #=====================================================
+  #Compute PR-AUC 
+  #=====================================================
+  pr_auc_results_up = classified_df_probs_up %>% 
+    mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "Control")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    pr_auc(truth, prob) %>%
+    rename(pr_auc = .estimate) %>%
+    mutate(comparison = "Up") %>% 
+    ungroup() %>% 
+    select(pathogen, model, timepoint_comparison, pr_auc, comparison)
+  
+  pr_auc_results_down = classified_df_probs_down %>% 
+    mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+    filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "Control")) %>%
+    group_by(pathogen, model, timepoint_comparison) %>%
+    pr_auc(truth, prob) %>%
+    rename(pr_auc = .estimate) %>%
+    mutate(comparison = "Down") %>% 
+    ungroup() %>% 
+    select(pathogen, model, timepoint_comparison, pr_auc,  comparison)
+  
+  ##### Unite all results
+  pr_curve_auc_df = bind_rows(pr_auc_results_up,
+                              pr_auc_results_down) %>% 
+    inner_join(
+      pr_curve_up_notup %>% 
+        bind_rows(pr_curve_down_notdown %>% 
+                    filter(model != "Human")),
+      by = join_by(pathogen, model, timepoint_comparison, comparison)) 
+  
+  #Check
+  pr_curve_auc_df %>% 
+    dplyr::count(pathogen, model, comparison, timepoint_comparison, pr_auc)
+  
+  #Get n genes
+  ngenes = bind_rows(
+    classified_df_probs_up %>%
+      filter(pred == "up") %>% 
+      group_by(pathogen, timepoint_comparison, model) %>% 
+      summarise(n_genes = n(),
+                comparison = "Up") %>% 
+      ungroup(),
+    classified_df_probs_down %>%
+      filter(pred == "down") %>% 
+      group_by(pathogen, timepoint_comparison, model) %>% 
+      summarise(n_genes = n(),
+                comparison = "Down") %>% 
+      ungroup(),
+  )
+  
+  
+  # Unite results
+  pr_auc_df <- bind_rows(pr_auc_results_up,
+                         pr_auc_results_down) %>%
+    inner_join(ngenes, by = join_by(comparison, pathogen, timepoint_comparison, model)) 
+  
+  
+  
+  # RETURN all computed tables --------
+  return(list(
+    roc_auc_df = roc_auc_df,
+    roc_curve_auc_df = roc_curve_auc_df,
+    pr_curve_auc_df = pr_curve_auc_df,
+    pr_auc_df = pr_auc_df
+  ))
+}
+
+
+
+
 
 
 
