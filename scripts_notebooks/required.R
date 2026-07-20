@@ -596,9 +596,7 @@ get_sequences <- function(genes, mart, symbol_attr) {
 }
 
 
-############################
 # CLASSIFICATION PERFORMANCE
-############################
 # Compute classification performance for GENES and DEGs ==============
 classification_performance_compute_genes_degs = function(df = genes_df_input,
                                               pval_filter = 0.05) {
@@ -1059,11 +1057,20 @@ classification_performance_compute_genes_degs = function(df = genes_df_input,
 }
 
 
+
+
+
+
+
+
+
+
 # Compute classification performance MODULES ==============
+
 classification_performance_compute_modules = function(df = btms_df_input,
                                                             effect_var = mean_log2fc) {
   
-  #Compute probabilities
+  #Compute probabilities  ===============
   dge_long_genes_up =
     btms_df_input %>%
     mutate(
@@ -1096,9 +1103,7 @@ classification_performance_compute_modules = function(df = btms_df_input,
   dge_long_genes_down %>% 
     dplyr::count(pathogen, timepoint_comparison, organism, direction)
   
-  #=====================================================
-  # Assign human truth
-  #=====================================================
+  # Assign human truth ===============
   truth_human_up = dge_long_genes_up %>% 
     select(pathogen, human_symbol, organism, timepoint_comparison, adj_p_val, direction) %>% 
     filter(organism == "Human") %>% 
@@ -1115,9 +1120,7 @@ classification_performance_compute_modules = function(df = btms_df_input,
     rename(truth = Human) %>% 
     mutate(organism = "Human")
   
-  #=====================================================
-  #Generate reference distributions
-  #=====================================================
+  #Generate reference distributions ===============
   perfect_prediction_up = truth_human_up %>%
     mutate(prob = if_else(truth == "up", 1, 0),
            model = "Human") %>%
@@ -1128,9 +1131,7 @@ classification_performance_compute_modules = function(df = btms_df_input,
            model = "Human") %>%
     rename(pred = truth)
   
-  #=====================================================
-  # Combine models (Mouse + Immune + Permutation + Perfect)
-  #=====================================================
+  # Combine models   ===============
   models_up = dge_long_genes_up %>% 
     filter(organism != "Human") %>% 
     mutate(pred = direction,
@@ -1145,9 +1146,7 @@ classification_performance_compute_modules = function(df = btms_df_input,
     bind_rows(perfect_prediction_down)
   
   
-  #=====================================================
-  # Classify probabilities 
-  #=====================================================
+  # Classify probabilities  ===============
   #Up
   classified_df_probs_up = truth_human_up %>% 
     select(human_symbol, pathogen, timepoint_comparison, truth) %>%
@@ -1178,10 +1177,8 @@ classification_performance_compute_modules = function(df = btms_df_input,
   classified_df_probs_down %>% 
     dplyr::count(pathogen, model, timepoint_comparison, pred, truth)
   
-  #=====================================================
-  #Compute ROC 
-  #=====================================================
-  
+  #Compute ROC  ===============
+
   #UP-notUP
   roc_curve_up_notup = classified_df_probs_up %>% 
     filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
@@ -1202,10 +1199,7 @@ classification_performance_compute_modules = function(df = btms_df_input,
   roc_curve_down_notdown %>% 
     dplyr::count(pathogen, model, timepoint_comparison)
   
-
-  #=====================================================
-  #Compute AUC 
-  #=====================================================
+  #Compute AUC  ===============
   auc_results_up = classified_df_probs_up %>% 
     mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
     filter(model %in% c("Mouse", "Immune", "Control", "Permutation", "Human")) %>%
@@ -1261,10 +1255,7 @@ classification_performance_compute_modules = function(df = btms_df_input,
                           auc_results_down) %>%
     inner_join(ngenes, by = join_by(comparison, pathogen, timepoint_comparison, model)) 
   
-  #=====================================================
-  #Compute PR 
-  #=====================================================
-  
+  #Compute PR  ===============
   pr_curve_up_notup = classified_df_probs_up %>% 
     filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
     group_by(pathogen, model, timepoint_comparison) %>%
@@ -1283,9 +1274,7 @@ classification_performance_compute_modules = function(df = btms_df_input,
   pr_curve_down_notdown %>% 
     dplyr::count(pathogen, model, timepoint_comparison)
   
-  #=====================================================
-  #Compute PR-AUC 
-  #=====================================================
+  #Compute PR-AUC  ===============
   pr_auc_results_up = classified_df_probs_up %>% 
     mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
     filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "Control")) %>%

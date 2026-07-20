@@ -31,22 +31,6 @@ file, then each analysis (BTM means, BTM GSEA, Hallmarks means,
 Hallmarks GSEA) runs once on the combined data and produces a single
 output file.
 
-Condition configuration
-
-```{r}
-# Define all 6 conditions with display labels and file prefixes --------
-# hallmarks_plot controls whether a dedicated Hallmarks figure is generated for this condition
-conditions <- tribble(
-  ~name,        ~label,        ~hallmarks_plot, ~filename_prefix,
-  "Fluad",      "Influenza",   FALSE,           "influenza_fluad_human_mouse",
-  "Engerix B",  "Hepatitis B", TRUE,            "hepatitisb_engerixb_human_mouse",
-  "S. aureus",  "Saureus",     FALSE,           "saureus_infection_human_mouse",
-  "E. coli",    "Ecoli",       FALSE,           "ecoli_infection_human_mouse",
-  "Burn",       "Burn",        FALSE,           "burn_human_mouse",
-  "Trauma",     "Trauma",      FALSE,           "trauma_human_mouse"
-)
-```
-
 ## Import all conditions
 
 Load the pre-merged DGE file that already contains all 6 conditions with
@@ -103,31 +87,20 @@ BTMs correlation, intra- and inter-species Compare means and NES
 Prepare the wide-format table of BTM mean log2FC and NES values for human vs mouse comparison, then compute Pearson correlations between organisms under three significance filters: all modules, modules significant in mouse only, and modules significant in both. Assemble a combined data frame with facet-ready labels for downstream plotting.
 
 ```{r fig.height=5, fig.width=7}
-# Pivot GSEA results wide: one row per (pathogen, timepoint, process) with separate columns for human and mouse metrics --------
-dge_btm_gsea_mean_wide <- gsea_btm_results_all_matched %>%
-  # Select the core columns needed for cross-species comparison --------
-  select(pathogen, organism, timepoint, process, group, nes, mean_log2fc, p_adjust, p_adjust_mean) %>%
-  # Group by all non-organism columns to spread organism into columns --------
-  group_by(pathogen, timepoint, process, group) %>%
-  pivot_wider(names_from = organism,
-              values_from = c(mean_log2fc, nes, p_adjust, p_adjust_mean),
-              names_sep = "_") %>%
-  ungroup() %>%
-  # Keep only modules with a non-missing mean log2FC in mouse (core requirement for comparison) --------
-  drop_na(mean_log2fc_Mouse)
+
 
 # Inspect the number of modules per (pathogen, timepoint) after pivoting --------
 dge_btm_gsea_mean_wide %>%
-  dplyr::count(pathogen, timepoint)
+  dplyr::count(pathogen, timepoint_comparison)
 
 # Pivot the gene-level BTM table wide: one row per (timepoint, process) with separate human and mouse columns --------
 dge_btm_process_genes_wide <- dge_btm_process_genes %>%
   ungroup() %>%
   # Keep essential columns for per-gene cross-species comparison --------
-  select(symbol, mean_l2fc, adj_p_val, organism, timepoint, process, group) %>%
+  select(symbol, mean_l2fc, adj_p_val, organism, timepoint_comparison, process, group) %>%
   distinct() %>%
   # Spread organism into separate columns for mean log2FC and adjusted p-value --------
-  group_by(organism, timepoint, process) %>%
+  group_by(organism, timepoint_comparison, process) %>%
   pivot_wider(names_from = organism,
               values_from = c(mean_l2fc, adj_p_val), values_fn = median) %>%
   ungroup() %>%
@@ -135,7 +108,7 @@ dge_btm_process_genes_wide <- dge_btm_process_genes %>%
   mutate(group = fct_relevel(group, c(immune_order))) %>%
   # Keep only genes with non-missing human log2FC --------
   drop_na(mean_l2fc_Human) %>%
-  mutate(timepoint = as.numeric(timepoint))
+  mutate(timepoint_comparison = as.numeric(timepoint_comparison))
 
 # Define a safe correlation function that handles edge cases (too few points, zero variance, NAs) --------
 safe_cor_test <- function(x, y, method) {
@@ -160,11 +133,11 @@ safe_cor_test <- function(x, y, method) {
 # Compute Pearson correlation between human and mouse mean log2FC across all modules (no filtering) --------
 cor_labels <- dge_btm_gsea_mean_wide %>%
   # Select the columns needed for correlation: rename organism-specific columns for clarity --------
-  select(pathogen, process, timepoint, group,
+  select(pathogen, process, timepoint_comparison, group,
          Mouse = mean_log2fc_Mouse,
          Human = mean_log2fc_Human) %>%
   # Compute one correlation per (pathogen, timepoint) group --------
-  group_by(pathogen, timepoint) %>%
+  group_by(pathogen, timepoint_comparison) %>%
   summarise(
     test_result = list(safe_cor_test(Human, Mouse, method = "pearson")),
     n = n(),
@@ -196,10 +169,10 @@ cor_labels <- dge_btm_gsea_mean_wide %>%
 # Compute correlation restricted to modules significant in mouse (p_adjust <= 0.25) --------
 cor_labels_filter_Mouse <- dge_btm_gsea_mean_wide %>%
   filter(p_adjust_mean_Mouse <= 0.25) %>%
-  select(pathogen, process, timepoint, group,
+  select(pathogen, process, timepoint_comparison, group,
          Mouse = mean_log2fc_Mouse,
          Human = mean_log2fc_Human) %>%
-  group_by(pathogen, timepoint) %>%
+  group_by(pathogen, timepoint_comparison) %>%
   summarise(
     test_result = list(safe_cor_test(Human, Mouse, method = "pearson")),
     n = n(),
@@ -228,11 +201,11 @@ cor_labels_filter_Mouse <- dge_btm_gsea_mean_wide %>%
 # Compute correlation restricted to modules significant in both human and mouse --------
 cor_labels_filter_Mouse_Human <- dge_btm_gsea_mean_wide %>%
   filter(p_adjust_mean_Mouse <= 0.25, p_adjust_mean_Human <= 0.25) %>%
-  select(pathogen, process, timepoint, group,
+  select(pathogen, process, timepoint_comparison, group,
          Mouse = mean_log2fc_Mouse,
          Human = mean_log2fc_Human) %>%
-  group_by(pathogen, timepoint) %>%
-  summarise(
+  group_by(pathogen, timepoint_comparison) %>%
+  summarise(timepoint_comparison, 
     test_result = list(safe_cor_test(Human, Mouse, method = "pearson")),
     n = n(),
     .groups = "drop"
@@ -265,21 +238,21 @@ dge_btm_mean_group_correlation_df <- dge_btm_gsea_mean_wide %>%
          process = str_wrap(process, width = 15)) %>%
   drop_na(mean_log2fc_Mouse) %>%
   # Attach the three sets of correlation labels by (pathogen, timepoint) --------
-  inner_join(cor_labels, by = join_by(pathogen, timepoint)) %>%
-  inner_join(cor_labels_filter_Mouse, by = join_by(pathogen, timepoint)) %>%
-  inner_join(cor_labels_filter_Mouse_Human, by = join_by(pathogen, timepoint)) %>%
+  inner_join(cor_labels, by = join_by(pathogen, timepoint_comparison)) %>%
+  inner_join(cor_labels_filter_Mouse, by = join_by(pathogen, timepoint_comparison)) %>%
+  inner_join(cor_labels_filter_Mouse_Human, by = join_by(pathogen, timepoint_comparison)) %>%
   # Combine the three correlation labels into a single facet annotation --------
   mutate(cor_labels_all_filtered = paste0("All: ", cor_label, ",\nM: ", cor_label_mouse, ",\nM&H: ", cor_label_mouse_human)) %>%
   # Standardise timepoint labels across pathogens for consistent x-axis ordering --------
-  mutate(timepoint = case_when(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "2", "Early hours") ~ "Early hours",
+  mutate(timepotimepoint_comparisonint = case_when(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "2", "Early hours") ~ "Early hours",
                                pathogen %in% c("Influenza", "Hepatitis B") ~ paste0("Day ", timepoint),
                                pathogen %in% c("Ecoli", "Saureus") ~ paste0(timepoint, "h"),
-                               TRUE ~ timepoint),
-         timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+                               TRUE ~ timetimepoint_comparisonpoint),
+         timepoitimepoint_comparisonnt = fct_relevel(timtimepoint_comparisonepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
          # For infection conditions, pair each timepoint with the 24h mouse timepoint; for others, self-pair --------
          timepoint_comparison = if_else(pathogen %in% c("Escherichia coli", "Staphylococcus aureus"),
-                                        paste0(timepoint, "-", "24h"),
-                                        paste0(timepoint, "-", timepoint)) %>%
+                                        paste0(timepotimepoint_comparisonint, "-", "24h"),
+                                        paste0(timepoitimepoint_comparisonnt, "-", timepointimepoint_comparisont)) %>%
                                 str_replace(., "Early hours-Early hours", "2h-Early"),
          # Create the facet label combining timepoint comparison and correlation summary --------
          facet_name = paste0(timepoint_comparison, "\n", cor_labels_all_filtered)) %>%
