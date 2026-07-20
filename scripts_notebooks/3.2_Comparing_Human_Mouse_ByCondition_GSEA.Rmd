@@ -51,19 +51,27 @@ btm_annotation_genes <- read_csv(here("tables", "btm_annotation_genes.csv"))
 msigdbr_grouped <- read_csv(here("tables", "msigdb_hallmarks_grouped_genes.csv"))
 
 #Import DEGs table
-all_degs <- readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds"))
+#Save
+all_human_mouse_dge_limma_degs_matched_control = readRDS(file = here("tables", "all_human_mouse_dge_limma_degs_matched_control.rds"))
 
-#Biological negative control
-biological_null_degs = readRDS(file = here("tables", "duchenne_mouse_dge_limma_degs.rds")) %>% 
-  filter(timepoint == "Day 28")
-
-#Bind with biological negative control
-all_degs = all_degs %>% 
-  bind_rows(biological_null_degs)
+#Filter out matched Control (DMD) and add only one timepoint
+all_degs = all_human_mouse_dge_limma_degs_matched_control %>% 
+  filter(organism != "DMD") %>%
+  bind_rows(all_human_mouse_dge_limma_degs_matched_control %>%
+              filter(organism == "DMD",
+                     pathogen == "Burn",
+                     timepoint == "Day 1") %>%
+              mutate(timepoint = "Day 28",
+                     pathogen = "DMD",
+                     organism = "Mouse",
+                     treatment = "Control",
+                     condition = "DMD_Day 28")) %>%
+  select(organism:human_symbol, mean_l2fc:sd, n) %>% 
+  distinct()
 
 # Extract unique condition labels for downstream filtering --------
 annotation_conditions <- all_degs %>%
-  select(condition, timepoint, model = organism) %>%
+  select(condition, timepoint,  organism) %>%
   distinct()
 ```
 
@@ -83,7 +91,7 @@ dge_btm_process_genes <- all_degs %>%
   rename(symbol = human_symbol) %>%
   ungroup() %>%
   inner_join(btm_annotation_genes, by = "symbol") %>%
-  filter(organism %in% c("Human", "Mouse"))
+  filter(organism %in% c("Human", "Mouse", "DMD"))
 
 # Collapse gene-level log2FC to BTM-level means per organism, pathogen, and timepoint --------
 # Group by organism, pathogen, timepoint, and BTM process: each group is a set of genes in that module
@@ -109,10 +117,9 @@ pvals_vs_zero <- dge_btm_process_genes %>%
   adjust_pvalue(method = "BH") %>%
   add_significance()
 
-# Diagnostic: print modules with fewer than 2 genes (excluded from t-test) --------
+# Check
 dge_btm_process_genes %>%
-  dplyr::count(organism, pathogen, timepoint, process) %>%
-  filter(n < 2)
+  dplyr::count(organism, pathogen, timepoint)
 
 # Join module-level means with their t-test p-values --------
 dge_btm_mean_process <- dge_btm_mean_process %>%
@@ -122,6 +129,11 @@ dge_btm_mean_process <- dge_btm_mean_process %>%
     by = c("organism", "pathogen", "timepoint", "process")
   ) %>%
   clean_names()
+
+
+dge_btm_mean_process %>% 
+  dplyr::count(organism, pathogen, timepoint) %>% 
+  arrange(pathogen, timepoint)
 
 #Save
 saveRDS(dge_btm_mean_process, here("tables", "all_human_mouse_dge_btm_mean_process.rds"))
@@ -180,39 +192,66 @@ Mouse timepoints differ) so cross-species comparisons align. Pivot GSEA
 and means to wide format (one column per organism).
 
 ```{r}
-# Duplicate Human rows at Mouse timepoints for infections with mismatched timepoints --------
-# S. aureus and E. coli have Human at 2/4/6/12/24h but Mouse only at 24h;
-# this creates Human entries at 24h for every Mouse timepoint
-gsea_btm_results_all_matched <- gsea_results %>%
-  select(pathogen, organism, process, group, timepoint, nes,
-         p_adjust, p_adjust_mean, mean_log2fc, core_enrichment, set_size) %>%
-  bind_rows(
-    gsea_results %>%
-      filter(organism == "Human",
-             pathogen %in% c("Staphylococcus aureus", "Escherichia coli")) %>%
-      select(pathogen, organism, process, group, nes,
-             p_adjust, p_adjust_mean, mean_log2fc, core_enrichment, set_size) %>%
-      inner_join(gsea_results %>%
-                   filter(organism == "Mouse",
-                          pathogen %in% c("Staphylococcus aureus", "Escherichia coli")) %>%
-                   select(pathogen, timepoint) %>%
-                   distinct(),
-                 by = "pathogen")
-  ) %>%
-  distinct()
+# Extract species-specific timepoints per pathogen to map them dynamically
+timepoint_map <- gsea_results %>% 
+  dplyr::filter(pathogen != "DMD") %>%
+  select(pathogen, organism, timepoint) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = organism, values_from = timepoint, values_fn = list)
 
-#Check
-gsea_btm_results_all_matched %>% 
-  dplyr::count(organism, pathogen, timepoint)
+
+# Generate matched timepoints for active organisms (Human and Mouse)
+active_matched_timepoints <- gsea_results %>% 
+  #Filter out control
+  dplyr::filter(!(pathogen == "DMD")) %>%
+  #Filter only Human and Mouse
+  dplyr::filter(organism %in% c("Human", "Mouse")) %>% 
+  dplyr::left_join(timepoint_map, by = "pathogen") %>% 
+  dplyr::mutate(opposite_timepoint = dplyr::if_else(organism == "Human", Mouse, Human)) %>% 
+  tidyr::unnest(opposite_timepoint) %>% 
+  dplyr::mutate(
+    timepoint_human = dplyr::if_else(organism == "Human", timepoint, opposite_timepoint),
+    timepoint_mouse = dplyr::if_else(organism == "Mouse", timepoint, opposite_timepoint),
+    timepoint_comparison = stringr::str_c(timepoint_human, "-", timepoint_mouse)
+  ) %>% 
+  dplyr::select(-Human, -Mouse, -opposite_timepoint)
+
+# Check
+ active_matched_timepoints %>%
+  dplyr::count(organism, pathogen, timepoint_comparison)
+
+
+# Match DMD control across all comparisons
+gsea_btm_results_all_matched <- dplyr::bind_rows(
+  
+  # 1. Retain the dynamically paired active experimental rows
+  active_matched_timepoints,
+  
+  # 2. Extract DMD, strip original identifiers, rename the organism, and map universally
+  gsea_results %>%
+    dplyr::filter(organism == "Mouse" & pathogen == "DMD") %>%
+    dplyr::mutate(organism = "DMD") %>%
+    # Remove original pathogen/treatment/timepoint so they don't conflict during crossing
+    dplyr::select(-pathogen,  -timepoint) %>% 
+    tidyr::crossing(
+      active_matched_timepoints %>%
+        dplyr::select(pathogen, timepoint_comparison) %>%
+        dplyr::distinct()
+    )
+)
 
 # Pivot to wide format: one row per module per timepoint with Human and Mouse side by side --------
 dge_btm_gsea_mean_wide <- gsea_btm_results_all_matched %>%
-  select(organism, pathogen, timepoint, process, group, set_size,
+  select(organism, pathogen, timepoint_comparison, process, group, set_size,
          nes, mean_log2fc, p_adjust, p_adjust_mean) %>%
   group_by(pathogen, process, group, set_size) %>%
   pivot_wider(names_from = organism,
               values_from = c(mean_log2fc, nes, p_adjust, p_adjust_mean, set_size),
-              names_sep = "_")
+              names_sep = "_") %>% 
+  ungroup()
+
+dge_btm_gsea_mean_wide %>% 
+  dplyr::count(pathogen, timepoint_comparison)
 
 #Save
 saveRDS(dge_btm_gsea_mean_wide, here("tables", "all_human_mouse_dge_btm_gsea_mean_wide.rds"))
@@ -393,19 +432,22 @@ dge_hallmarks_process_genes <- all_degs %>%
   ungroup() %>%
   inner_join(msigdbr_grouped, by = "symbol")
 
-# Collapse gene-level log2FC to Hallmark-level means per organism and timepoint --------
+# Collapse gene-level log2FC to BTM-level means per organism, pathogen, and timepoint --------
+# Group by organism, pathogen, timepoint, and BTM process: each group is a set of genes in that module
 dge_hallmarks_mean_process <- dge_hallmarks_process_genes %>%
-  group_by(organism, timepoint, process, pathogen) %>%
+  group_by(organism, pathogen, timepoint, process) %>%
   summarise(mean_log2fc = mean(mean_l2fc),
             median_log2fc = median(mean_l2fc),
             sd_log2fc = sd(mean_l2fc),
             var_log2fc = var(mean_l2fc),
-            n_genes = n()) %>%
+            n_genes = n(),
+            group = dplyr::first(group)) %>%
   distinct() %>%
   ungroup() %>%
   mutate(condition = paste0(organism, "_", pathogen, "_", timepoint))
 
-# One-sample t-test per Hallmark vs zero with BH correction --------
+# One-sample t-test per BTM vs zero with BH correction --------
+# Tests whether the mean log2FC of genes in this module differs from zero
 pvals_vs_zero <- dge_hallmarks_process_genes %>%
   group_by(organism, pathogen, timepoint, process) %>%
   filter(n() >= 2) %>%
@@ -413,12 +455,11 @@ pvals_vs_zero <- dge_hallmarks_process_genes %>%
   adjust_pvalue(method = "BH") %>%
   add_significance()
 
-# Diagnostic: print Hallmarks with fewer than 2 genes --------
+# Check
 dge_hallmarks_process_genes %>%
-  dplyr::count(organism, pathogen, timepoint, process) %>%
-  filter(n < 2)
+  dplyr::count(organism, pathogen, timepoint)
 
-# Join Hallmark-level means with their t-test p-values --------
+# Join module-level means with their t-test p-values --------
 dge_hallmarks_mean_process <- dge_hallmarks_mean_process %>%
   left_join(
     pvals_vs_zero %>%
@@ -427,21 +468,28 @@ dge_hallmarks_mean_process <- dge_hallmarks_mean_process %>%
   ) %>%
   clean_names()
 
+
+dge_hallmarks_mean_process %>% 
+  dplyr::count(organism, pathogen, timepoint) %>% 
+  arrange(pathogen, timepoint)
+
 #Save
 saveRDS(dge_hallmarks_mean_process, here("tables", "all_human_mouse_dge_hallmarks_mean_process.rds"))
 saveRDS(dge_hallmarks_process_genes, here("tables", "all_human_mouse_dge_hallmarks_process_genes.rds"))
 ```
 
-### Hallmarks GSEA
+###  GSEA
 
-Run GSEA against MSigDB Hallmarks across all conditions simultaneously.
+Rank genes with a composite metric (log2FC x -log(adj_p_val)) and run
+GSEA against the BTM gene sets across all conditions simultaneously.
 
-```{r}
-# Prepare Hallmark term-to-gene mapping for GSEA --------
+```{r message=FALSE, warning=FALSE}
+# Prepare BTM term-to-gene mapping for GSEA --------
 term2gene <- msigdbr_grouped %>%
   select(process, genes = symbol)
 
 # Build ranked gene list with composite metric --------
+# Metric: log2FC * -log(adj_p_val) — balances effect size and significance
 df_genes2GSEA <- all_degs %>%
   distinct() %>%
   select(organism, pathogen, timepoint,
@@ -449,85 +497,193 @@ df_genes2GSEA <- all_degs %>%
   filter(!is.na(genes), !is.na(log2fold_change)) %>%
   mutate(condition = paste0(organism, "_", pathogen, "_", timepoint),
          log2fold_change_logp = log2fold_change * -log(adj_p_val)) %>%
-  select(condition, genes, rank = log2fold_change_logp)
+  select(condition, genes, 
+         #Rank metric
+         rank = log2fold_change_logp)
 
-# Run GSEA against Hallmarks using autoGSEA --------
+# Run GSEA across all conditions using autoGSEA (iterates over conditions internally) --------
 gsea_output <- autoGSEA(df = df_genes2GSEA,
                          TERM2GENE = term2gene,
-                         geneset_name = "MSigDB Hallmarks")
+                         geneset_name = "Hallmarks")
 
-# Clean GSEA output and merge with Hallmark-level means --------
-gsea_results_hallmarks <- gsea_output$gsea %>%
+# Clean GSEA output and merge with module-level means --------
+gsea_results <- gsea_output$gsea %>%
   as.data.frame() %>%
   clean_names() %>%
   rename(process = id) %>%
   filter(!is.na(process)) %>%
-  full_join(dge_hallmarks_mean_process %>% rename(p_adjust_mean = p_adjust),
+  inner_join(dge_hallmarks_mean_process %>% 
+               rename(p_adjust_mean = p_adjust),
             by = join_by("condition", "process"))
 
+#Check
+gsea_results %>% dplyr::count(pathogen, organism, timepoint)
+
 #Save
-saveRDS(gsea_results_hallmarks, here("tables", "all_human_mouse_gsea_hallmarks_results.rds"))
+saveRDS(gsea_results, here("tables", "all_human_mouse_gsea_hallmarks_results.rds"))
 ```
 
-### Hallmarks distribution plots (per condition)
+BTM matching and wide pivot
 
-Gene-level distribution plot for conditions where
-`hallmarks_plot = TRUE` (currently Engerix B only). Shows individual
-gene points, module mean, and standard error bars, faceted by timepoint
-and Hallmark group.
+Duplicate Human timepoints for S. aureus and E. coli (where Human and
+Mouse timepoints differ) so cross-species comparisons align. Pivot GSEA
+and means to wide format (one column per organism).
+
+```{r}
+# Extract species-specific timepoints per pathogen to map them dynamically
+timepoint_map <- gsea_results %>% 
+  dplyr::filter(pathogen != "DMD") %>%
+  select(pathogen, organism, timepoint) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = organism, values_from = timepoint, values_fn = list)
+
+
+# Generate matched timepoints for active organisms (Human and Mouse)
+active_matched_timepoints <- gsea_results %>% 
+  #Filter out control
+  dplyr::filter(!(pathogen == "DMD")) %>%
+  #Filter only Human and Mouse
+  dplyr::filter(organism %in% c("Human", "Mouse")) %>% 
+  dplyr::left_join(timepoint_map, by = "pathogen") %>% 
+  dplyr::mutate(opposite_timepoint = dplyr::if_else(organism == "Human", Mouse, Human)) %>% 
+  tidyr::unnest(opposite_timepoint) %>% 
+  dplyr::mutate(
+    timepoint_human = dplyr::if_else(organism == "Human", timepoint, opposite_timepoint),
+    timepoint_mouse = dplyr::if_else(organism == "Mouse", timepoint, opposite_timepoint),
+    timepoint_comparison = stringr::str_c(timepoint_human, "-", timepoint_mouse)
+  ) %>% 
+  dplyr::select(-Human, -Mouse, -opposite_timepoint)
+
+# Check
+ active_matched_timepoints %>%
+  dplyr::count(organism, pathogen, timepoint_comparison)
+
+
+# Match DMD control across all comparisons
+gsea_hallmarks_results_all_matched <- dplyr::bind_rows(
+  
+  # 1. Retain the dynamically paired active experimental rows
+  active_matched_timepoints,
+  
+  # 2. Extract DMD, strip original identifiers, rename the organism, and map universally
+  gsea_results %>%
+    dplyr::filter(organism == "Mouse" & pathogen == "DMD") %>%
+    dplyr::mutate(organism = "DMD") %>%
+    # Remove original pathogen/treatment/timepoint so they don't conflict during crossing
+    dplyr::select(-pathogen,  -timepoint) %>% 
+    tidyr::crossing(
+      active_matched_timepoints %>%
+        dplyr::select(pathogen, timepoint_comparison) %>%
+        dplyr::distinct()
+    )
+)
+
+# Pivot to wide format: one row per module per timepoint with Human and Mouse side by side --------
+dge_hallmarks_gsea_mean_wide <- gsea_hallmarks_results_all_matched %>%
+  select(organism, pathogen, timepoint_comparison, process, group, set_size,
+         nes, mean_log2fc, p_adjust, p_adjust_mean) %>%
+  group_by(pathogen, process, group, set_size) %>%
+  pivot_wider(names_from = organism,
+              values_from = c(mean_log2fc, nes, p_adjust, p_adjust_mean, set_size),
+              names_sep = "_") %>% 
+  ungroup()
+
+dge_hallmarks_gsea_mean_wide %>% 
+  dplyr::count(pathogen, timepoint_comparison)
+
+#Save
+saveRDS(dge_hallmarks_gsea_mean_wide, here("tables", "all_human_mouse_dge_hallmarks_gsea_mean_wide.rds"))
+saveRDS(gsea_hallmarks_results_all_matched, here("tables", "all_human_mouse_gsea_hallmarks_results_all_matched.rds"))
+```
+
+### Distribution plots (one per condition)
+
+Gene-level distribution plot for each condition: individual gene log2FC
+values as points, module mean as a filled circle, standard error bars,
+faceted by immune group and timepoint. BTMs with adj.p \<= 0.10 in both
+species are highlighted in bold blue on the Y-axis.
 
 ```{r fig.height=12, fig.width=10}
 walk(seq_len(nrow(conditions)), \(i) {
   row <- conditions[i, ]
-  if (!row$hallmarks_plot) return()
 
   # Filter unified data to this condition --------
-  cond_hall_genes <- dge_hallmarks_process_genes %>%
+  cond_hallmarks_genes <- dge_hallmarks_process_genes %>%
     filter(pathogen == row$label)
 
-  cond_hall_mean <- dge_hallmarks_mean_process %>%
+  cond_hallmarks_mean <- dge_hallmarks_mean_process %>%
     filter(pathogen == row$label)
 
-  cond_gsea <- gsea_results_hallmarks %>%
-    semi_join(cond_hall_mean %>% distinct(condition), by = "condition")
+  cond_gsea <- gsea_results %>%
+    semi_join(cond_hallmarks_mean %>% distinct(condition), by = "condition")
 
-  # Pivot GSEA to wide format --------
+  # Parse organism from condition label (stored as "Human_Influenza_1") --------
+  cond_gsea <- cond_gsea %>%
+    mutate(organism = case_when(
+      str_detect(condition, "Mouse") ~ "Mouse",
+      str_detect(condition, "Human") ~ "Human",
+      TRUE ~ condition
+    ))
+
+  # Pivot GSEA results to wide format (Human and Mouse side by side) --------
   cond_gsea_wide <- cond_gsea %>%
-    select(organism, timepoint, process, set_size, nes, mean_log2fc, p_adjust, qvalue) %>%
-    group_by(timepoint, process, set_size) %>%
+    select(organism, timepoint, process, group, subgroup, set_size,
+           nes, mean_log2fc, p_adjust, qvalue) %>%
+    group_by(timepoint, process, subgroup, group, set_size) %>%
     pivot_wider(names_from = organism,
                 values_from = c(mean_log2fc, nes, p_adjust, qvalue, set_size),
                 names_sep = "_")
 
-  # Determine ordering timepoint --------
-  if (is.numeric(cond_hall_mean$timepoint)) {
-    order_tp <- max(cond_hall_mean$timepoint, na.rm = TRUE)
+  # Determine ordering timepoint: last timepoint for this condition --------
+  if (is.numeric(cond_hallmarks_mean$timepoint)) {
+    order_tp <- max(cond_hallmarks_mean$timepoint, na.rm = TRUE)
   } else {
     tp_levels <- c("2h", "4h", "6h", "12h", "24h", "Early hours")
-    available <- intersect(tp_levels, unique(cond_hall_mean$timepoint))
-    order_tp <- if (length(available) > 0) dplyr::last(available) else unique(cond_hall_mean$timepoint)[1]
+    available <- intersect(tp_levels, unique(cond_hallmarks_mean$timepoint))
+    order_tp <- if (length(available) > 0) dplyr::last(available) else unique(cond_hallmarks_mean$timepoint)[1]
   }
 
-  # Order Hallmarks by Human mean log2FC --------
-  process_order <- cond_hall_mean %>%
+  # Order BTMs by Human mean log2FC at the ordering timepoint, per immune group --------
+  process_order <- cond_hallmarks_mean %>%
     filter(timepoint == order_tp, organism == "Human") %>%
-    group_by(organism, timepoint) %>%
+    group_by(organism, timepoint, group) %>%
     arrange(-mean_log2fc) %>%
     pull(process) %>%
     unique()
 
+  # Create label styling: BTMs significant in both species get bold + blue --------
+  labels_process <- cond_gsea_wide %>%
+    ungroup() %>%
+    distinct(process, p_adjust_Human, p_adjust_Mouse) %>%
+    mutate(
+      label = ifelse(p_adjust_Human <= 0.10 & p_adjust_Mouse <= 0.10,
+                     "bold", "plain"),
+      label_color = ifelse(p_adjust_Human <= 0.10 & p_adjust_Mouse <= 0.10,
+                           "#4DBBD5FF", "gray50")
+    ) %>%
+    ungroup() %>%
+    distinct() %>%
+    mutate(process = fct_relevel(process, process_order)) %>%
+    filter(!is.na(p_adjust_Human))
+
+  # Factor releveling for display order --------
+  dge_hallmarks_process_ordered <- cond_hallmarks_mean %>%
+    ungroup() %>%
+    mutate(
+      group = fct_relevel(as.factor(group), immune_order),
+      process = fct_relevel(as.factor(process), process_order) %>% fct_rev()
+    )
+
   # Format timepoint labels for the plot --------
-  if (is.numeric(cond_hall_genes$timepoint)) {
-    dge_plot <- cond_hall_genes %>%
-      inner_join(msigdbr_grouped %>% select(process, group), by = "process") %>%
+  if (is.numeric(cond_hallmarks_genes$timepoint)) {
+    dge_plot <- cond_hallmarks_genes %>%
       mutate(
         timepoint_num = timepoint,
         timepoint = paste0("Day ", timepoint_num),
         timepoint = factor(timepoint, levels = unique(timepoint[order(timepoint_num)]))
       )
   } else {
-    dge_plot <- cond_hall_genes %>%
-      inner_join(msigdbr_grouped %>% select(process, group), by = "process") %>%
+    dge_plot <- cond_hallmarks_genes %>%
       mutate(
         timepoint = factor(timepoint, levels = unique(timepoint))
       )
@@ -537,9 +693,9 @@ walk(seq_len(nrow(conditions)), \(i) {
   p <- dge_plot %>%
     ggplot() +
     aes(y = process, x = mean_l2fc, color = organism) +
-    # Facetting: columns = timepoint, rows = Hallmark group --------
-    facet_grid(~timepoint ~ group, scales = "free", space = "free") +
-    # Geom layers --------
+    # Facetting: rows = immune group, columns = timepoint --------
+    facet_grid(~group ~ timepoint, scales = "free", space = "free") +
+    # Geom layers: reference line, individual gene points, module mean with SE --------
     geom_vline(xintercept = 0, color = "black") +
     geom_point(pch = "|", alpha = 1, show.legend = FALSE, size = 3) +
     stat_summary(
@@ -559,20 +715,24 @@ walk(seq_len(nrow(conditions)), \(i) {
       alpha = 1,
       show.legend = TRUE
     ) +
-    # Theme customization --------
+    # Theme customization: vaxgo theme with significance-styled axis text --------
     theme_vaxgo() +
     theme(
       strip.text.y = element_text(angle = 0, hjust = 0),
       axis.ticks.y = element_line(color = "gray", alpha = 0.5),
       legend.position = "top",
       axis.text.x = element_text(size = 8),
-      axis.text.y = element_text(size = 8),
+      axis.text.y = element_text(
+        size = 8,
+        face = c(labels_process$label),
+        color = c(labels_process$label_color)
+      ),
       axis.line.y = element_blank(),
       panel.spacing.y = unit(0.3, "lines"),
       panel.grid.major.y = element_line(alpha = 0.5),
       panel.grid.major.x = element_line(alpha = 0.5)
     ) +
-    # Colour scales --------
+    # Colour scales: project colours for Human and Mouse --------
     scale_fill_manual(values = c("Mouse" = "#4DBBD5FF", "Human" = "#90A4AEFF")) +
     scale_color_manual(values = c("Mouse" = "#4DBBD5FF", "Human" = "#90A4AEFF")) +
     # Labels --------
@@ -581,7 +741,7 @@ walk(seq_len(nrow(conditions)), \(i) {
       y = "",
       x = "Log2FC",
       fill = "Organism",
-      title = glue("Mouse vs Human, MSigDB genes, mean Log2FC — {row$name}")
+      title = glue("Mouse vs Human, BTMs genes, {row$name}")
     )
 
   print(p)
@@ -595,4 +755,3 @@ walk(seq_len(nrow(conditions)), \(i) {
     )
 })
 ```
-
