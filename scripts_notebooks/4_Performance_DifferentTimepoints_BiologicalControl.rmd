@@ -14,8 +14,91 @@ source(here("scripts_notebooks", "required.R"))
 
 ## Classification: Genes
 
+
 NEW
 ```{r}
+
+#=======================
+# Import datasets
+#=======================
+# Import BTM annotation genes
+btm_annotation_genes <- read_csv(file = here("tables", "btm_annotation_genes.csv"))
+
+# Import and clean Metadata (Get N participants per condition)
+all_human_mouse_metadata <- readRDS(here("tables", "all_human_mouse_metadata.rds")) %>% 
+  rownames_to_column("~del") %>% 
+  
+  group_by(pathogen, organism, timepoint) %>% 
+  summarise(n = n(), .groups = "drop")
+
+# Import and clean DEGs table
+all_degs_human_mouse_unmatched <- readRDS(file = here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(timepoint = if_else(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours"), "Early hours", timepoint)) 
+
+# Biological negative control
+all_degs_human_mouse_matched_bionull = 
+  readRDS(file = here("tables", "all_human_mouse_dge_limma_degs_matched_control.rds"))
+
+# Check original counts
+all_degs_human_mouse_matched_bionull %>% dplyr::count(pathogen, organism, timepoint)
+
+
+# ==============================================================================
+# FILTER COMPARISONS BY CORRELATION
+# ==============================================================================
+
+conditions_filtered <- readRDS(file = here("tables", "all_human_mouse_correlation_filtered_inter_weighted_filtered.rds")) %>% 
+  mutate(pathogen_human = case_when(pathogen_human == "Hepatitis B" ~ "HepB",
+                              pathogen_human == "Staphylococcus aureus" ~ "S. aureus",
+                              pathogen_human == "Escherichia coli" ~ "E. coli",
+                              T ~pathogen_human),
+          pathogen_human = fct_relevel(pathogen_human, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
+  select(treatment_human, treatment_mouse, pathogen_human, pathogen_mouse,
+         pathogen_comparison, timepoint_comparison,
+         timepoint_human, timepoint_mouse) %>% 
+  distinct() %>% 
+  pivot_longer(
+    cols = contains("_human") | contains("_mouse"), 
+    names_to = c(".value", "organism"),             
+    names_sep = "_",                                
+    values_drop_na = TRUE
+  ) %>% 
+  mutate(
+    organism = str_to_title(organism),
+    timepoint = str_replace_all(timepoint, "\n", " ")
+  )
+
+# Filter paired data
+all_degs_human_mouse_matched_filtered <- all_degs_human_mouse_matched_bionull %>% 
+  select(organism:human_symbol, mean_l2fc:sd, timepoint_comparison) %>% 
+  inner_join(conditions_filtered %>% 
+               select(-timepoint, -organism), by = c("pathogen", "treatment", "timepoint_comparison"))
+
+# Check filtered counts
+all_degs_human_mouse_matched_filtered %>% 
+  dplyr::count(treatment, pathogen, organism, timepoint_comparison)
+
+
+##If the control is only permuted values
+# permutation_prediction_up = perfect_prediction_up %>%
+#   group_by(pathogen, timepoint_comparison) %>% 
+#   mutate(prob = runif(n()), organism = "Permutation",
+#          model = "Permutation")
+
+# permutation_prediction_down = perfect_prediction_down %>%
+#   group_by(pathogen, timepoint_comparison) %>% 
+#   mutate(prob = runif(n()), 
+#          organism = "Permutation",
+#          model = "Permutation")
+```
+
+
+
+OLD NEW
+```{r}
+#=======================
+# Import datasets
+#=======================
 # Import BTM annotation genes
 btm_annotation_genes <- read_csv(file = here("tables", "btm_annotation_genes.csv"))
 
@@ -34,8 +117,7 @@ all_degs_human_mouse_unmatched <- readRDS(file = here("tables", "all_human_mouse
 biological_null_degs <- readRDS(file = here("tables", "duchenne_mouse_dge_limma_degs.rds")) %>% 
   filter(timepoint == "Day 28")
 
-# Check original counts
-all_degs_human_mouse_unmatched %>% dplyr::count(pathogen, organism, timepoint)
+
 
 
 # ==============================================================================
@@ -90,144 +172,170 @@ conditions_filtered <- readRDS(file = here("tables", "all_human_mouse_correlatio
   )
 
 # Filter paired data
-all_degs_human_mouse_matched_filtered <- all_degs_human_mouse_matched %>% 
+all_degs_human_mouse_matched_filtered <- all_degs_human_mouse_matched_bionull %>% 
   select(organism:human_symbol, mean_l2fc:sd, timepoint_comparison) %>% 
-  inner_join(conditions_filtered, by = c("organism", "pathogen", "treatment", "timepoint_comparison"))
+  inner_join(conditions_filtered %>% 
+               select(-timepoint), by = c("organism", "pathogen", "treatment", "timepoint_comparison"))
 
 # Check filtered counts
 all_degs_human_mouse_matched_filtered %>% 
   dplyr::count(treatment, pathogen, organism, timepoint_comparison)
 
-```
-
-
-
-
-
-
-
-
-OLD
-```{r}
-#Import ============
-btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
-
-#Metadata (Get N participants per condition)
-all_human_mouse_metadata = readRDS(here("tables", "all_human_mouse_metadata.rds")) %>% 
-  rownames_to_column("~del") %>% 
-  mutate(timepoint = if_else(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours"), "Early hours", timepoint)) %>% 
-  group_by(pathogen, organism, timepoint) %>% 
-  summarise(n = n()) %>% 
-  ungroup()
-
-#DEGs table 
-all_degs_human_mouse_unmatched =
-  readRDS(file = here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
-  mutate(pathogen = case_when(pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              pathogen == "Hepatitis B" ~ "HepB",
-                              T ~ pathogen)) %>%
-  mutate(timepoint = if_else(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours"), 
-                             "Early hours", 
-                             timepoint))
-
-#Biological negative control
-biological_null_degs = readRDS(file = here("tables", "duchenne_mouse_dge_limma_degs.rds")) %>% 
-  filter(timepoint == "Day 28")
-
-#Check
-all_degs_human_mouse_unmatched %>% dplyr::count(pathogen, organism, timepoint)
-
-
-#===========================================================
-# CREATE PAIRS WITH DIFFERENT DAYS, BY PATHOGEN AND ORGANISM
-#===========================================================
-#1. Create pairs (different days, by pathogen and organism)
-#Human timepoint vs Mouse different timepoints
-all_degs_human_mouse_matched = 
-  bind_rows(
-  #Match different Human timepoints with different Mouse timepoints
-  all_degs_human_mouse_unmatched %>% 
-  filter(organism == "Human") %>% 
-  inner_join(all_degs_human_mouse_unmatched %>% 
-               filter(organism == "Mouse") %>% 
-               select(pathogen, timepoint) %>% 
-               distinct(),
-             by = "pathogen", suffix = c("_human", "_mouse")) %>% 
-    mutate(timepoint_comparison = paste0(timepoint_human, "-", timepoint_mouse)) %>% 
-    mutate(timepoint = timepoint_human),
-  #Match different Mouse timepoints with different Human timepoints
-  all_degs_human_mouse_unmatched %>% 
-  filter(organism == "Mouse") %>% 
-  inner_join(all_degs_human_mouse_unmatched %>% 
-               filter(organism == "Human") %>% 
-               select(pathogen, timepoint) %>% 
-               distinct(),
-             by = "pathogen", suffix = c("_mouse", "_human")) %>% 
-    mutate(timepoint_comparison = paste0(timepoint_human, "-", timepoint_mouse)) %>% 
-    mutate(timepoint = timepoint_human)) 
-  
-all_degs_human_mouse_matched %>% 
-  dplyr::count(pathogen, organism, treatment, timepoint_comparison)
-
-#2. Filter comparisons based on correlation
-conditions_filtered =
-  readRDS(file = here("tables", "all_human_mouse_correlation_filtered_inter_weighted_filtered.rds")) %>% 
-  select(treatment_human, treatment_mouse, pathogen_human, pathogen_mouse,
-         pathogen_comparison, timepoint_comparison,
-         timepoint_human, timepoint_mouse) %>% 
-  distinct() %>% 
-  pivot_longer(
-    cols = contains("_human") | contains("_mouse"), 
-    names_to = c(".value", "organism"),             
-    names_sep = "_",                                
-    values_drop_na = TRUE
-  ) %>% 
-  mutate(organism = str_to_title(organism)) %>% 
-  mutate(timepoint = str_replace_all(timepoint, "\n", " "))
-
-#3. Filter timepoints 
-all_degs_human_mouse_matched_filtered = all_degs_human_mouse_matched %>% 
-  select(organism:human_symbol, mean_l2fc:sd, timepoint_comparison) %>% 
-  inner_join(conditions_filtered,
-             by = join_by(organism, pathogen,treatment,  timepoint_comparison))
-#Check
-all_degs_human_mouse_matched_filtered %>% 
-  dplyr::count(treatment, pathogen, organism, timepoint_comparison)
-
-
-
 ######################
 #Bind negative control
 ######################
-all_degs_human_mouse_matched_filtered_bionull = 
+all_degs_human_mouse_matched_filtered_bionull =
   bind_rows(
-  #Keep original 
+  #Keep original
   all_degs_human_mouse_matched_filtered,
-          
+
   #Match control with different pathogens and bind
-  biological_null_degs %>% 
-  mutate(organism = "DMD") %>% 
-  select(human_symbol:ave_expr, t:b, se, sd, organism) %>% 
-  crossing(all_degs_human_mouse_matched_filtered %>% 
-               select(pathogen, timepoint_comparison, treatment) %>% 
+  biological_null_degs %>%
+  mutate(organism = "Control") %>%
+  select(human_symbol:ave_expr, t:b, se, sd, organism) %>%
+  crossing(all_degs_human_mouse_matched_filtered %>%
+               select(pathogen, timepoint, treatment) %>%
                distinct())
-  )  %>% 
-  
+  )  %>%
+
   #Add n participants
   left_join(all_human_mouse_metadata,
-               by = join_by("pathogen", "organism", "timepoint")) %>% 
+               by = join_by("pathogen", "organism", "timepoint")) %>%
   #Add n participants for control
-  mutate(n = if_else(organism == "DMD", 5, n)) 
-  
+  mutate(n = if_else(organism == "Control", 5, n))  %>% 
+  group_by(treatment, pathogen) %>% 
+  #Copy timepoint comparison for control to match
+  fill(timepoint_comparison, .direction = "down") %>%
+  ungroup()
+
 #Check
-all_degs_human_mouse_matched_filtered_bionull %>% 
+all_degs_human_mouse_matched_filtered_bionull %>%
   dplyr::count(treatment, pathogen, organism, timepoint_comparison)
+
+```
+
+OLD
+```{r}
+# #Import ============
+# btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+# 
+# #Metadata (Get N participants per condition)
+# all_human_mouse_metadata = readRDS(here("tables", "all_human_mouse_metadata.rds")) %>% 
+#   rownames_to_column("~del") %>% 
+#   mutate(timepoint = if_else(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours"), "Early hours", timepoint)) %>% 
+#   group_by(pathogen, organism, timepoint) %>% 
+#   summarise(n = n()) %>% 
+#   ungroup()
+# 
+# #DEGs table 
+# all_degs_human_mouse_unmatched =
+#   readRDS(file = here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
+#   mutate(pathogen = case_when(pathogen == "Staphylococcus aureus" ~ "S. aureus",
+#                               pathogen == "Escherichia coli" ~ "E. coli",
+#                               pathogen == "Hepatitis B" ~ "HepB",
+#                               T ~ pathogen)) %>%
+#   mutate(timepoint = if_else(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours"), 
+#                              "Early hours", 
+#                              timepoint))
+# 
+# #Biological negative control
+# biological_null_degs = readRDS(file = here("tables", "duchenne_mouse_dge_limma_degs.rds")) %>% 
+#   filter(timepoint == "Day 28")
+# 
+# #Check
+# all_degs_human_mouse_unmatched %>% dplyr::count(pathogen, organism, timepoint)
+# 
+# 
+# #===========================================================
+# # CREATE PAIRS WITH DIFFERENT DAYS, BY PATHOGEN AND ORGANISM
+# #===========================================================
+# #1. Create pairs (different days, by pathogen and organism)
+# #Human timepoint vs Mouse different timepoints
+# all_degs_human_mouse_matched = 
+#   bind_rows(
+#   #Match different Human timepoints with different Mouse timepoints
+#   all_degs_human_mouse_unmatched %>% 
+#   filter(organism == "Human") %>% 
+#   inner_join(all_degs_human_mouse_unmatched %>% 
+#                filter(organism == "Mouse") %>% 
+#                select(pathogen, timepoint) %>% 
+#                distinct(),
+#              by = "pathogen", suffix = c("_human", "_mouse")) %>% 
+#     mutate(timepoint_comparison = paste0(timepoint_human, "-", timepoint_mouse)) %>% 
+#     mutate(timepoint = timepoint_human),
+#   #Match different Mouse timepoints with different Human timepoints
+#   all_degs_human_mouse_unmatched %>% 
+#   filter(organism == "Mouse") %>% 
+#   inner_join(all_degs_human_mouse_unmatched %>% 
+#                filter(organism == "Human") %>% 
+#                select(pathogen, timepoint) %>% 
+#                distinct(),
+#              by = "pathogen", suffix = c("_mouse", "_human")) %>% 
+#     mutate(timepoint_comparison = paste0(timepoint_human, "-", timepoint_mouse)) %>% 
+#     mutate(timepoint = timepoint_human)) 
+#   
+# all_degs_human_mouse_matched %>% 
+#   dplyr::count(pathogen, organism, treatment, timepoint_comparison)
+# 
+# #2. Filter comparisons based on correlation
+# conditions_filtered =
+#   readRDS(file = here("tables", "all_human_mouse_correlation_filtered_inter_weighted_filtered.rds")) %>% 
+#   select(treatment_human, treatment_mouse, pathogen_human, pathogen_mouse,
+#          pathogen_comparison, timepoint_comparison,
+#          timepoint_human, timepoint_mouse) %>% 
+#   distinct() %>% 
+#   pivot_longer(
+#     cols = contains("_human") | contains("_mouse"), 
+#     names_to = c(".value", "organism"),             
+#     names_sep = "_",                                
+#     values_drop_na = TRUE
+#   ) %>% 
+#   mutate(organism = str_to_title(organism)) %>% 
+#   mutate(timepoint = str_replace_all(timepoint, "\n", " "))
+# 
+# #3. Filter timepoints 
+# all_degs_human_mouse_matched_filtered = all_degs_human_mouse_matched %>% 
+#   select(organism:human_symbol, mean_l2fc:sd, timepoint_comparison) %>% 
+#   inner_join(conditions_filtered,
+#              by = join_by(organism, pathogen,treatment,  timepoint_comparison))
+# #Check
+# all_degs_human_mouse_matched_filtered %>% 
+#   dplyr::count(treatment, pathogen, organism, timepoint_comparison)
+# 
+# 
+# 
+# ######################
+# #Bind negative control
+# ######################
+# all_degs_human_mouse_matched_filtered_bionull =
+#   bind_rows(
+#   #Keep original
+#   all_degs_human_mouse_matched_filtered,
+# 
+#   #Match control with different pathogens and bind
+#   biological_null_degs %>%
+#   mutate(organism = "Control") %>%
+#   select(human_symbol:ave_expr, t:b, se, sd, organism) %>%
+#   crossing(all_degs_human_mouse_matched_filtered %>%
+#                select(pathogen, timepoint_comparison, treatment) %>%
+#                distinct())
+#   )  %>%
+# 
+#   #Add n participants
+#   left_join(all_human_mouse_metadata,
+#                by = join_by("pathogen", "organism", "timepoint")) %>%
+#   #Add n participants for control
+#   mutate(n = if_else(organism == "Control", 5, n))
+# 
+# #Check
+# all_degs_human_mouse_matched_filtered_bionull %>%
+#   dplyr::count(treatment, pathogen, organism, timepoint_comparison)
 
 
 ```
 
 
+INPUT
 ```{r}
 #Input ======================
 genes_roc_allgenes = all_degs_human_mouse_matched_filtered_bionull %>%
@@ -276,14 +384,9 @@ genes_roc_DEGs_all %>%
   dplyr::count(pathogen, organism, timepoint_comparison)
 
 genes_roc_DEGs_immune %>%
-  dplyr::count(pathogen, timepoint_comparison)
-
-```
+  dplyr::count(pathogen, organism, timepoint_comparison)
 
 
-Inputs
-Double check the code
-```{r fig.height=4, fig.width=10}
 set.seed(123)
 ######## Input -----
 filename = "all_human_mouse_alternative_unicaudal"
@@ -293,8 +396,6 @@ genes_df_input = bind_rows(
 )
 
 ```
-
-
 
 
 Compute probabilities
@@ -327,32 +428,6 @@ dge_long_genes_down = genes_df_input %>%
   ) %>%
   select(-adj_p_val) %>%
   rename(adj_p_val = pval_one_sided_adj)
-
-# # New
-# # Up
-# dge_long_genes_up = genes_df_input %>%
-# mutate(
-#   # Classify genes based on statistical significance (FDR) and direction of change
-#   direction = case_when(
-#     adj_p_val <= 0.05 & mean_l2fc > 0 ~ "up",
-#     TRUE                              ~ "not_up"
-#   ),
-#   # Assign a probability score based on confidence (1 - FDR)
-#   prob = 1 - adj_p_val
-# )
-# 
-# #Down
-# dge_long_genes_down = genes_df_input %>%
-#   mutate(
-#     # Classify genes based on statistical significance (FDR) and direction of change
-#     direction = case_when(
-#       adj_p_val <= 0.05 & mean_l2fc < 0 ~ "down",
-#       TRUE                              ~ "not_down"
-#     ),
-#     # Assign a probability score based on confidence (1 - FDR)
-#     prob = 1 - adj_p_val
-#   )
-
 
 #Check
 dge_long_genes_up %>% 
@@ -393,17 +468,6 @@ perfect_prediction_down = truth_human_down %>%
   mutate(prob = if_else(truth == "down", 1, 0),
           model = "Human") %>%
   rename(pred = truth)
-
-# permutation_prediction_up = perfect_prediction_up %>%
-#   group_by(pathogen, timepoint_comparison) %>% 
-#   mutate(prob = runif(n()), organism = "Permutation",
-#          model = "Permutation")
-
-# permutation_prediction_down = perfect_prediction_down %>%
-#   group_by(pathogen, timepoint_comparison) %>% 
-#   mutate(prob = runif(n()), 
-#          organism = "Permutation",
-#          model = "Permutation")
 
 #=====================================================
 # Combine models (Mouse + Immune + Permutation + Perfect)
@@ -492,13 +556,13 @@ classified_df_probs_down_DEGs %>%
 
 #UP-notUP
 roc_curve_up_notup = classified_df_probs_up %>% 
-  filter(model %in% c("Mouse", "Immune", "Permutation", "DMD", "Human", "FIT")) %>%
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint_comparison) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Up")
 
 roc_curve_up_notup_DEGs = classified_df_probs_up_DEGs %>% 
-  filter(model %in% c("Mouse", "Immune", "Permutation", "DMD", "Human", "FIT")) %>%
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint_comparison) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Up")
@@ -511,13 +575,13 @@ roc_curve_up_notup_DEGs %>%
 
 #DOWN-notDOWN
 roc_curve_down_notdown = classified_df_probs_down %>% 
-  filter(model %in% c("Mouse", "Immune", "Permutation",  "DMD", "Human", "FIT")) %>%
+  filter(model %in% c("Mouse", "Immune", "Permutation",  "Control", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint_comparison) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Down")
 
 roc_curve_down_notdown_DEGs = classified_df_probs_down_DEGs %>% 
-  filter(model %in% c("Mouse", "Immune", "Permutation", "DMD", "Human", "FIT")) %>%
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint_comparison) %>%
   roc_curve(truth, prob) %>%
   mutate(comparison = "Down")
@@ -528,12 +592,14 @@ roc_curve_down_notdown %>%
 roc_curve_down_notdown_DEGs %>% 
   dplyr::count(pathogen, model, timepoint_comparison)
 
+
+
 #=====================================================
 #Compute AUC 
 #=====================================================
 auc_results_up = classified_df_probs_up %>% 
   mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
-  filter(model %in% c("Mouse", "Immune", "DMD", "Permutation", "Human")) %>%
+  filter(model %in% c("Mouse", "Immune", "Control", "Permutation", "Human")) %>%
   group_by(pathogen, model, timepoint_comparison) %>%
   roc_auc(truth, prob) %>%
   rename(auc = .estimate) %>%
@@ -543,7 +609,7 @@ auc_results_up = classified_df_probs_up %>%
 
 auc_results_up_DEGs = classified_df_probs_up_DEGs %>% 
   mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
-  filter(model %in% c("Mouse", "Immune", "DMD", "Permutation", "Human")) %>%
+  filter(model %in% c("Mouse", "Immune", "Control", "Permutation", "Human")) %>%
   group_by(pathogen, model, timepoint_comparison) %>%
   roc_auc(truth, prob) %>%
   rename(auc = .estimate) %>%
@@ -553,7 +619,7 @@ auc_results_up_DEGs = classified_df_probs_up_DEGs %>%
 
 auc_results_down = classified_df_probs_down %>% 
   mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
-  filter(model %in% c("Mouse", "Immune", "DMD", "Permutation", "Human", "FIT")) %>%
+  filter(model %in% c("Mouse", "Immune", "Control", "Permutation", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint_comparison) %>%
   roc_auc(truth, prob) %>%
   rename(auc = .estimate) %>%
@@ -563,7 +629,7 @@ auc_results_down = classified_df_probs_down %>%
 
 auc_results_down_DEGs = classified_df_probs_down_DEGs %>% 
   mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
-  filter(model %in% c("Mouse", "Immune", "DMD", "Permutation", "Human", "FIT")) %>%
+  filter(model %in% c("Mouse", "Immune", "Control", "Permutation", "Human", "FIT")) %>%
   group_by(pathogen, model, timepoint_comparison) %>%
   roc_auc(truth, prob) %>%
   rename(auc = .estimate) %>%
@@ -580,14 +646,8 @@ roc_curve_auc_df = bind_rows(auc_results_up,
       bind_rows(roc_curve_down_notdown %>% 
                   filter(model != "Human")),
     by = join_by(pathogen, model, timepoint_comparison, comparison)) %>% 
-    mutate(model = fct_relevel(model, "Human", "Mouse", "DMD", "Immune", "Permutation"),
+    mutate(model = fct_relevel(model, "Human", "Mouse", "Control", "Immune", "Permutation"),
          comparison = fct_relevel(comparison, "Up", "Down"),
-         # timepoint_comparison = str_replace(timepoint_comparison, "Early hours", "Early\nhours"),
-         # timepoint_comparison = fct_relevel(timepoint_comparison, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T ~ pathogen),
          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
   mutate(auc = round(auc, 2) %>% as.character())
 
@@ -599,14 +659,8 @@ roc_curve_auc_df_DEGs = bind_rows(auc_results_up_DEGs,
       bind_rows(roc_curve_down_notdown_DEGs %>% 
                   filter(model != "Human")),
     by = join_by(pathogen, model, timepoint_comparison, comparison)) %>% 
-    mutate(model = fct_relevel(model, "Human", "Mouse", "DMD", "Immune", "Permutation"),
+    mutate(model = fct_relevel(model, "Human", "Mouse", "Control", "Immune", "Permutation"),
          comparison = fct_relevel(comparison, "Up", "Down"),
-         # timepoint_comparison = str_replace(timepoint_comparison, "Early hours", "Early\nhours"),
-         # timepoint_comparison = fct_relevel(timepoint_comparison, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T ~ pathogen),
          pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
   mutate(auc = round(auc, 2) %>% as.character())
 
@@ -615,6 +669,259 @@ roc_curve_auc_df %>%
 
 roc_curve_auc_df_DEGs %>% 
   dplyr::count(pathogen, model, comparison, timepoint_comparison, auc)
+
+#Get n genes
+ngenes = bind_rows(
+  classified_df_probs_up %>%
+    filter(pred == "up") %>% 
+  group_by(pathogen, timepoint_comparison, model) %>% 
+  summarise(n_genes = n(),
+            comparison = "Up") %>% 
+    ungroup(),
+  classified_df_probs_down %>%
+    filter(pred == "down") %>% 
+  group_by(pathogen, timepoint_comparison, model) %>% 
+  summarise(n_genes = n(),
+            comparison = "Down") %>% 
+    ungroup(),
+)
+
+
+# Visualize AUC
+roc_auc_df <- bind_rows(auc_results_up,
+auc_results_down) %>%
+  inner_join(ngenes, by = join_by(comparison, pathogen, timepoint_comparison, model)) %>% 
+  mutate(model = fct_relevel(model, "Human", "Mouse", "Immune", "Permutation", "Control", "FIT"),
+         comparison = fct_relevel(comparison, "Up", "Down"),
+         # timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
+         # timepoint = fct_relevel(timepoint, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
+                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
+                              pathogen == "Escherichia coli" ~ "E. coli",
+                              T ~ pathogen),
+         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
+                               T ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
+         ) 
+
+#Get n genes
+ngenes_DEGs = bind_rows(
+  classified_df_probs_up_DEGs %>%
+    filter(pred == "up") %>% 
+  group_by(pathogen, timepoint_comparison, model) %>% 
+  summarise(n_genes = n(),
+            comparison = "Up") %>% 
+    ungroup(),
+  classified_df_probs_down_DEGs %>%
+    filter(pred == "down") %>% 
+  group_by(pathogen, timepoint_comparison, model) %>% 
+  summarise(n_genes = n(),
+            comparison = "Down") %>% 
+    ungroup(),
+)
+
+
+# Visualize AUC
+roc_auc_df_DEGs <- bind_rows(auc_results_up_DEGs,
+                             auc_results_down_DEGs) %>%
+  inner_join(ngenes_DEGs, by = join_by(comparison, pathogen, timepoint_comparison, model)) %>% 
+  mutate(model = fct_relevel(model, "Human", "Mouse", "Immune", "Permutation", "Control", "FIT"),
+         comparison = fct_relevel(comparison, "Up", "Down"),
+         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
+                               T ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
+         ) 
+
+#=====================================================
+#Compute PR 
+#=====================================================
+
+pr_curve_up_notup = classified_df_probs_up %>% 
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+  group_by(pathogen, model, timepoint_comparison) %>%
+  pr_curve(truth, prob) %>%
+  mutate(comparison = "Up")
+
+pr_curve_up_notup_DEGs = classified_df_probs_up_DEGs %>% 
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+  group_by(pathogen, model, timepoint_comparison) %>%
+  pr_curve(truth, prob) %>%
+  mutate(comparison = "Up")
+
+pr_curve_up_notup %>% 
+  dplyr::count(pathogen, model, timepoint_comparison)
+
+pr_curve_up_notup_DEGs %>% 
+  dplyr::count(pathogen, model, timepoint_comparison)
+
+pr_curve_down_notdown = classified_df_probs_down %>% 
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+  group_by(pathogen, model, timepoint_comparison) %>%
+  pr_curve(truth, prob) %>%
+  mutate(comparison = "Down")
+
+pr_curve_down_notdown_DEGs = classified_df_probs_down_DEGs %>% 
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Control", "Human", "FIT")) %>%
+  group_by(pathogen, model, timepoint_comparison) %>%
+  pr_curve(truth, prob) %>%
+  mutate(comparison = "Down")
+
+pr_curve_down_notdown %>% 
+  dplyr::count(pathogen, model, timepoint_comparison)
+
+pr_curve_down_notdown_DEGs %>% 
+  dplyr::count(pathogen, model, timepoint_comparison)
+
+#=====================================================
+#Compute PR-AUC 
+#=====================================================
+pr_auc_results_up = classified_df_probs_up %>% 
+  mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "Control")) %>%
+  group_by(pathogen, model, timepoint_comparison) %>%
+  pr_auc(truth, prob) %>%
+  rename(pr_auc = .estimate) %>%
+  mutate(comparison = "Up") %>% 
+  ungroup() %>% 
+  select(pathogen, model, timepoint_comparison, pr_auc, comparison)
+
+pr_auc_results_up_DEGs = classified_df_probs_up_DEGs %>% 
+  mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "Control")) %>%
+  group_by(pathogen, model, timepoint_comparison) %>%
+  pr_auc(truth, prob) %>%
+  rename(pr_auc = .estimate) %>%
+  mutate(comparison = "Up") %>% 
+  ungroup() %>% 
+  select(pathogen, model, timepoint_comparison, pr_auc,  comparison)
+
+pr_auc_results_down = classified_df_probs_down %>% 
+  mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "Control")) %>%
+  group_by(pathogen, model, timepoint_comparison) %>%
+  pr_auc(truth, prob) %>%
+  rename(pr_auc = .estimate) %>%
+  mutate(comparison = "Down") %>% 
+  ungroup() %>% 
+  select(pathogen, model, timepoint_comparison, pr_auc,  comparison)
+
+pr_auc_results_down_DEGs = classified_df_probs_down_DEGs %>% 
+  mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
+  filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "Control")) %>%
+  group_by(pathogen, model, timepoint_comparison) %>%
+  pr_auc(truth, prob) %>%
+  rename(pr_auc = .estimate) %>%
+  mutate(comparison = "Down") %>% 
+  ungroup() %>% 
+  select(pathogen, model, timepoint_comparison, pr_auc,  comparison)
+
+
+##### Unite all results
+pr_curve_auc_df = bind_rows(pr_auc_results_up,
+                             pr_auc_results_down) %>% 
+  inner_join(
+    pr_curve_up_notup %>% 
+      bind_rows(pr_curve_down_notdown %>% 
+                  filter(model != "Human")),
+    by = join_by(pathogen, model, timepoint_comparison, comparison)) %>% 
+    mutate(model = fct_relevel(model, "Mouse", "Immune", "Permutation", "Human", "FIT", "Control"),
+         comparison = fct_relevel(comparison, "Up", "Down"),
+         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
+  mutate(pr_auc = round(pr_auc, 2) %>% as.character())
+
+pr_curve_auc_df_DEGs = bind_rows(pr_auc_results_up_DEGs,
+                                 pr_auc_results_down_DEGs) %>% 
+  inner_join(
+    pr_curve_up_notup_DEGs %>% 
+      bind_rows(pr_curve_down_notdown_DEGs %>% 
+                  filter(model != "Human")),
+    by = join_by(pathogen, model, timepoint_comparison, comparison)) %>% 
+    mutate(model = fct_relevel(model, "Mouse", "Immune", "Permutation", "Human", "FIT", "Control"),
+         comparison = fct_relevel(comparison, "Up", "Down"),
+         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
+  mutate(pr_auc = round(pr_auc, 2) %>% as.character())
+
+
+pr_curve_auc_df %>% 
+  dplyr::count(pathogen, model, comparison, timepoint_comparison, pr_auc)
+
+pr_curve_auc_df_DEGs %>% 
+  dplyr::count(pathogen, model, comparison, timepoint_comparison, pr_auc)
+
+#Get n genes
+ngenes = bind_rows(
+  classified_df_probs_up %>%
+    filter(pred == "up") %>% 
+  group_by(pathogen, timepoint_comparison, model) %>% 
+  summarise(n_genes = n(),
+            comparison = "Up") %>% 
+    ungroup(),
+  classified_df_probs_down %>%
+    filter(pred == "down") %>% 
+  group_by(pathogen, timepoint_comparison, model) %>% 
+  summarise(n_genes = n(),
+            comparison = "Down") %>% 
+    ungroup(),
+)
+
+
+# Visualize AUC
+pr_auc_df <- bind_rows(pr_auc_results_up,
+                      pr_auc_results_down) %>%
+  inner_join(ngenes, by = join_by(comparison, pathogen, timepoint_comparison, model)) %>% 
+  mutate(model = fct_relevel(model, "Human", "Mouse", "Immune", "Permutation", "Control", "FIT"),
+         comparison = fct_relevel(comparison, "Up", "Down"),
+         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
+                               T ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
+         ) 
+
+
+#Get n genes
+ngenes_DEGs = bind_rows(
+  classified_df_probs_up_DEGs %>%
+    filter(pred == "up") %>% 
+  group_by(pathogen, timepoint_comparison, model) %>% 
+  summarise(n_genes = n(),
+            comparison = "Up") %>% 
+    ungroup(),
+  classified_df_probs_down_DEGs %>%
+    filter(pred == "down") %>% 
+  group_by(pathogen, timepoint_comparison, model) %>% 
+  summarise(n_genes = n(),
+            comparison = "Down") %>% 
+    ungroup(),
+)
+
+
+# Visualize AUC
+pr_auc_DEGs_df <- bind_rows(pr_auc_results_up_DEGs,
+                      pr_auc_results_down_DEGs) %>%
+  inner_join(ngenes_DEGs, by = join_by(comparison, pathogen, timepoint_comparison, model)) %>% 
+  mutate(model = fct_relevel(model, "Human", "Mouse", "Immune", "Permutation", "Control", "FIT"),
+         comparison = fct_relevel(comparison, "Up", "Down"),
+         # timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
+         # timepoint = fct_relevel(timepoint, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
+         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
+                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
+                              pathogen == "Escherichia coli" ~ "E. coli",
+                              T ~ pathogen),
+         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
+                               T ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
+         ) 
 
 ```
 
@@ -723,10 +1030,10 @@ roc_curve_plot
 roc_curve_auc_df %>% 
   dplyr::count(pathogen, timepoint_comparison, comparison, model)
 
-roc_curve_plot %>%
-  ggsave(filename = here("Figures", paste0(filename, "_performance_roc_All_OnlyImmune.png")),
-         width = 8,
-         height = 5)
+# roc_curve_plot %>%
+#   ggsave(filename = here("Figures", paste0(filename, "_performance_roc_All_OnlyImmune.png")),
+#          width = 8,
+#          height = 5)
 ```
 
 
@@ -839,42 +1146,7 @@ roc_curve_degs_plot %>%
 ### Plot AUC 
 #### All Genes: Heatmap
 ```{r fig.height=3, fig.width=8}
-#Get n genes
-ngenes = bind_rows(
-  classified_df_probs_up %>%
-    filter(pred == "up") %>% 
-  group_by(pathogen, timepoint_comparison, model) %>% 
-  summarise(n_genes = n(),
-            comparison = "Up") %>% 
-    ungroup(),
-  classified_df_probs_down %>%
-    filter(pred == "down") %>% 
-  group_by(pathogen, timepoint_comparison, model) %>% 
-  summarise(n_genes = n(),
-            comparison = "Down") %>% 
-    ungroup(),
-)
 
-
-# Visualize AUC
-roc_auc_df <- bind_rows(auc_results_up,
-auc_results_down) %>%
-  inner_join(ngenes, by = join_by(comparison, pathogen, timepoint_comparison, model)) %>% 
-  mutate(model = fct_relevel(model, "Human", "Mouse", "Immune", "Permutation", "DMD", "FIT"),
-         comparison = fct_relevel(comparison, "Up", "Down"),
-         # timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
-         # timepoint = fct_relevel(timepoint, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T ~ pathogen),
-         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
-         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
-                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
-                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
-                               T ~ pathogen),
-         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
-         ) 
 
 roc_auc_heatmap = roc_auc_df %>% 
   ggplot() +
@@ -963,42 +1235,7 @@ roc_auc_heatmap %>%
 ```
 #### DEGs: Heatmap
 ```{r fig.height=3, fig.width=8}
-#Get n genes
-ngenes_DEGs = bind_rows(
-  classified_df_probs_up_DEGs %>%
-    filter(pred == "up") %>% 
-  group_by(pathogen, timepoint_comparison, model) %>% 
-  summarise(n_genes = n(),
-            comparison = "Up") %>% 
-    ungroup(),
-  classified_df_probs_down_DEGs %>%
-    filter(pred == "down") %>% 
-  group_by(pathogen, timepoint_comparison, model) %>% 
-  summarise(n_genes = n(),
-            comparison = "Down") %>% 
-    ungroup(),
-)
 
-
-# Visualize AUC
-roc_auc_df_DEGs <- bind_rows(auc_results_up_DEGs,
-                             auc_results_down_DEGs) %>%
-  inner_join(ngenes_DEGs, by = join_by(comparison, pathogen, timepoint_comparison, model)) %>% 
-  mutate(model = fct_relevel(model, "Human", "Mouse", "Immune", "Permutation", "DMD", "FIT"),
-         comparison = fct_relevel(comparison, "Up", "Down"),
-         # timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
-         # timepoint = fct_relevel(timepoint, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T ~ pathogen),
-         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
-         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
-                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
-                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
-                               T ~ pathogen),
-         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
-         ) 
 
 roc_auc_DEGs_heatmap = roc_auc_df_DEGs %>% 
   ggplot() +
@@ -1263,138 +1500,6 @@ roc_auc_DEGs_heatmap %>%
 
 ###Plot PR curve
 
-Compute PR 
-
-```{r fig.height=6, fig.width=10}
-#=====================================================
-#Compute PR 
-#=====================================================
-
-pr_curve_up_notup = classified_df_probs_up %>% 
-  filter(model %in% c("Mouse", "Immune", "Permutation", "DMD", "Human", "FIT")) %>%
-  group_by(pathogen, model, timepoint_comparison) %>%
-  pr_curve(truth, prob) %>%
-  mutate(comparison = "Up")
-
-pr_curve_up_notup_DEGs = classified_df_probs_up_DEGs %>% 
-  filter(model %in% c("Mouse", "Immune", "Permutation", "DMD", "Human", "FIT")) %>%
-  group_by(pathogen, model, timepoint_comparison) %>%
-  pr_curve(truth, prob) %>%
-  mutate(comparison = "Up")
-
-pr_curve_up_notup %>% 
-  dplyr::count(pathogen, model, timepoint_comparison)
-
-pr_curve_up_notup_DEGs %>% 
-  dplyr::count(pathogen, model, timepoint_comparison)
-
-pr_curve_down_notdown = classified_df_probs_down %>% 
-  filter(model %in% c("Mouse", "Immune", "Permutation", "DMD", "Human", "FIT")) %>%
-  group_by(pathogen, model, timepoint_comparison) %>%
-  pr_curve(truth, prob) %>%
-  mutate(comparison = "Down")
-
-pr_curve_down_notdown_DEGs = classified_df_probs_down_DEGs %>% 
-  filter(model %in% c("Mouse", "Immune", "Permutation", "DMD", "Human", "FIT")) %>%
-  group_by(pathogen, model, timepoint_comparison) %>%
-  pr_curve(truth, prob) %>%
-  mutate(comparison = "Down")
-
-pr_curve_down_notdown %>% 
-  dplyr::count(pathogen, model, timepoint_comparison)
-
-pr_curve_down_notdown_DEGs %>% 
-  dplyr::count(pathogen, model, timepoint_comparison)
-
-#=====================================================
-#Compute PR-AUC 
-#=====================================================
-pr_auc_results_up = classified_df_probs_up %>% 
-  mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
-  filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "DMD")) %>%
-  group_by(pathogen, model, timepoint_comparison) %>%
-  pr_auc(truth, prob) %>%
-  rename(pr_auc = .estimate) %>%
-  mutate(comparison = "Up") %>% 
-  ungroup() %>% 
-  select(pathogen, model, timepoint_comparison, pr_auc, comparison)
-
-pr_auc_results_up_DEGs = classified_df_probs_up_DEGs %>% 
-  mutate(truth = fct_relevel(truth, "up", after = 0)) %>% 
-  filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "DMD")) %>%
-  group_by(pathogen, model, timepoint_comparison) %>%
-  pr_auc(truth, prob) %>%
-  rename(pr_auc = .estimate) %>%
-  mutate(comparison = "Up") %>% 
-  ungroup() %>% 
-  select(pathogen, model, timepoint_comparison, pr_auc,  comparison)
-
-pr_auc_results_down = classified_df_probs_down %>% 
-  mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
-  filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "DMD")) %>%
-  group_by(pathogen, model, timepoint_comparison) %>%
-  pr_auc(truth, prob) %>%
-  rename(pr_auc = .estimate) %>%
-  mutate(comparison = "Down") %>% 
-  ungroup() %>% 
-  select(pathogen, model, timepoint_comparison, pr_auc,  comparison)
-
-pr_auc_results_down_DEGs = classified_df_probs_down_DEGs %>% 
-  mutate(truth = fct_relevel(truth, "down", after = 0)) %>% 
-  filter(model %in% c("Mouse", "Immune", "Permutation", "Human", "FIT", "DMD")) %>%
-  group_by(pathogen, model, timepoint_comparison) %>%
-  pr_auc(truth, prob) %>%
-  rename(pr_auc = .estimate) %>%
-  mutate(comparison = "Down") %>% 
-  ungroup() %>% 
-  select(pathogen, model, timepoint_comparison, pr_auc,  comparison)
-
-
-##### Unite all results
-pr_curve_auc_df = bind_rows(pr_auc_results_up,
-                             pr_auc_results_down) %>% 
-  inner_join(
-    pr_curve_up_notup %>% 
-      bind_rows(pr_curve_down_notdown %>% 
-                  filter(model != "Human")),
-    by = join_by(pathogen, model, timepoint_comparison, comparison)) %>% 
-    mutate(model = fct_relevel(model, "Mouse", "Immune", "Permutation", "Human", "FIT", "DMD"),
-         comparison = fct_relevel(comparison, "Up", "Down"),
-         # timepoint_comparison = str_replace(timepoint_comparison, "Early hours", "Early\nhours"),
-         # timepoint_comparison = fct_relevel(timepoint_comparison, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T ~ pathogen),
-         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
-  mutate(pr_auc = round(pr_auc, 2) %>% as.character())
-
-pr_curve_auc_df_DEGs = bind_rows(pr_auc_results_up_DEGs,
-                                 pr_auc_results_down_DEGs) %>% 
-  inner_join(
-    pr_curve_up_notup_DEGs %>% 
-      bind_rows(pr_curve_down_notdown_DEGs %>% 
-                  filter(model != "Human")),
-    by = join_by(pathogen, model, timepoint_comparison, comparison)) %>% 
-    mutate(model = fct_relevel(model, "Mouse", "Immune", "Permutation", "Human", "FIT", "DMD"),
-         comparison = fct_relevel(comparison, "Up", "Down"),
-         # timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
-         # timepoint_comparison = fct_relevel(timepoint_comparison, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T ~ pathogen),
-         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma")) %>% 
-  mutate(pr_auc = round(pr_auc, 2) %>% as.character())
-
-
-pr_curve_auc_df %>% 
-  dplyr::count(pathogen, model, comparison, timepoint_comparison, pr_auc)
-
-pr_curve_auc_df_DEGs %>% 
-  dplyr::count(pathogen, model, comparison, timepoint_comparison, pr_auc)
-
-```
 
 #### All genes
 ```{r fig.height=6, fig.width=10}
@@ -1612,42 +1717,7 @@ pr_curve_DEGs_plot %>%
 PR-AUC as heatmap
 ```{r fig.height=3, fig.width=8}
 
-#Get n genes
-ngenes = bind_rows(
-  classified_df_probs_up %>%
-    filter(pred == "up") %>% 
-  group_by(pathogen, timepoint_comparison, model) %>% 
-  summarise(n_genes = n(),
-            comparison = "Up") %>% 
-    ungroup(),
-  classified_df_probs_down %>%
-    filter(pred == "down") %>% 
-  group_by(pathogen, timepoint_comparison, model) %>% 
-  summarise(n_genes = n(),
-            comparison = "Down") %>% 
-    ungroup(),
-)
 
-
-# Visualize AUC
-pr_auc_df <- bind_rows(pr_auc_results_up,
-                      pr_auc_results_down) %>%
-  inner_join(ngenes, by = join_by(comparison, pathogen, timepoint_comparison, model)) %>% 
-  mutate(model = fct_relevel(model, "Human", "Mouse", "Immune", "Permutation", "DMD", "FIT"),
-         comparison = fct_relevel(comparison, "Up", "Down"),
-         # timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
-         # timepoint = fct_relevel(timepoint, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T ~ pathogen),
-         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
-         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
-                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
-                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
-                               T ~ pathogen),
-         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
-         ) 
 
 pr_auc_heatmap = pr_auc_df %>% 
   ggplot() +
@@ -1743,42 +1813,7 @@ pr_auc_heatmap %>%
 PR-AUC as heatmap
 ```{r fig.height=3, fig.width=8}
 
-#Get n genes
-ngenes_DEGs = bind_rows(
-  classified_df_probs_up_DEGs %>%
-    filter(pred == "up") %>% 
-  group_by(pathogen, timepoint_comparison, model) %>% 
-  summarise(n_genes = n(),
-            comparison = "Up") %>% 
-    ungroup(),
-  classified_df_probs_down_DEGs %>%
-    filter(pred == "down") %>% 
-  group_by(pathogen, timepoint_comparison, model) %>% 
-  summarise(n_genes = n(),
-            comparison = "Down") %>% 
-    ungroup(),
-)
 
-
-# Visualize AUC
-pr_auc_DEGs_df <- bind_rows(pr_auc_results_up_DEGs,
-                      pr_auc_results_down_DEGs) %>%
-  inner_join(ngenes_DEGs, by = join_by(comparison, pathogen, timepoint_comparison, model)) %>% 
-  mutate(model = fct_relevel(model, "Human", "Mouse", "Immune", "Permutation", "DMD", "FIT"),
-         comparison = fct_relevel(comparison, "Up", "Down"),
-         # timepoint = str_replace(timepoint, "Early hours", "Early\nhours"),
-         # timepoint = fct_relevel(timepoint, c("Early\nhours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7")),
-         pathogen = case_when(pathogen == "Hepatitis B" ~ "HepB",
-                              pathogen == "Staphylococcus aureus" ~ "S. aureus",
-                              pathogen == "Escherichia coli" ~ "E. coli",
-                              T ~ pathogen),
-         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
-         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
-                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
-                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
-                               T ~ pathogen),
-         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
-         ) 
 
 pr_auc_DEGs_heatmap = pr_auc_DEGs_df %>% 
   ggplot() +
@@ -2042,11 +2077,5 @@ PR-AUC as lineplots
 
 
 #====================
-
-```{r}
-#Biological negative control
-biological_null_degs = readRDS(file = here("tables", "duchenne_mouse_dge_limma_degs.rds")) %>% 
-  filter(timepoint == "Day 28")
-```
 
 

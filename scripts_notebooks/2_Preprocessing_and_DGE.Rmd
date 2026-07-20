@@ -10372,7 +10372,9 @@ all_human_mouse_samples_log2fc %>%
 Load and combine differential expression results from all conditions.
 
 ```{r}
-# DGE results
+#========================
+# Combine DGE results
+#========================
 # Load data
 #Fluad
 all_degs_human_mouse_fluad = readRDS(here("tables", "influenza_fluad_human_mouse_dge_limma_degs.rds")) %>% 
@@ -10435,8 +10437,13 @@ all_degs_human_mouse %>%
 all_degs_human_mouse %>% 
 # Save R object to disk in native RDS format: preserves data types and structure for fast loading
   saveRDS(here("tables", "all_human_mouse_dge_limma_degs.rds"))
+```
 
-#Duplicate to match Infection in human (24h) with different timepoints in mouse (2h, 4h, 6h, 12h, 24h) ====================
+Duplicate Infection timepoints
+```{r}
+#========================
+#Duplicate to match Infection in human (24h) with different timepoints in mouse (2h, 4h, 6h, 12h, 24h) #========================
+
 all_degs_human_mouse =
   readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds"))
 
@@ -10467,6 +10474,99 @@ all_degs_human_mouse_matched %>%
 all_degs_human_mouse_matched %>% 
 # Save R object to disk in native RDS format: preserves data types and structure for fast loading
   saveRDS(here("tables", "all_human_mouse_dge_limma_degs_matched.rds"))
+```
+
+### Pair all timepoints by pathogen
+```{r}
+# ==============================================================================
+# CREATE ALL TIMEPOINT PAIRS
+# ==============================================================================
+
+#=======================
+# Import datasets
+#=======================
+# Import and clean DEGs table
+all_degs_human_mouse_unmatched <- readRDS(file = here("tables", "all_human_mouse_dge_limma_degs.rds")) %>% 
+  mutate(timepoint = if_else(pathogen %in% c("Burn", "Trauma") & timepoint %in% c("2h", "Early hours"), "Early hours", timepoint)) 
+
+
+# Import and clean Metadata (Get N participants per condition)
+all_human_mouse_metadata <- readRDS(here("tables", "all_human_mouse_metadata.rds")) %>% 
+  rownames_to_column("~del") %>% 
+  group_by(pathogen, organism, timepoint) %>% 
+  summarise(n = n(), .groups = "drop")
+
+# Biological negative control
+biological_null_degs <- readRDS(file = here("tables", "duchenne_mouse_dge_limma_degs.rds")) %>% 
+  filter(timepoint == "Day 28")
+
+# Check original counts
+all_degs_human_mouse_unmatched %>% dplyr::count(pathogen, organism, timepoint)
+
+
+# ==============================================================================
+# 2. CREATE TIMEPOINT PAIRS (SIMPLIFIED CROSS-ORGANISM PAIRING)
+# ==============================================================================
+
+# Extract species-specific timepoints per pathogen to map them dynamically
+timepoint_map <- all_degs_human_mouse_unmatched %>% 
+  select(pathogen, organism, timepoint) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = organism, values_from = timepoint, values_fn = list)
+
+# Generate all cross-species timepoint combinations dynamically
+all_degs_human_mouse_matched <- all_degs_human_mouse_unmatched %>% 
+  left_join(timepoint_map, by = "pathogen") %>% 
+  mutate(opposite_timepoint = if_else(organism == "Human", Mouse, Human)) %>% 
+  unnest(opposite_timepoint) %>% 
+  mutate(
+    timepoint_human = if_else(organism == "Human", timepoint, opposite_timepoint),
+    timepoint_mouse = if_else(organism == "Mouse", timepoint, opposite_timepoint),
+    timepoint_comparison = paste0(timepoint_human, "-", timepoint_mouse)
+  ) %>% 
+  select(-Human, -Mouse, -opposite_timepoint)
+
+# Check matched counts
+all_degs_human_mouse_matched %>% 
+  dplyr::count(pathogen, organism, treatment, timepoint_comparison)
+
+
+######################
+#Bind negative control
+######################
+all_degs_human_mouse_matched_bionull =
+  bind_rows(
+  #Keep original
+  all_degs_human_mouse_matched,
+
+  #Match control with different pathogens and bind
+  biological_null_degs %>%
+    dplyr::mutate(organism = "DMD") %>%
+    dplyr::select(human_symbol:ave_expr, t:b, se, sd, organism) %>%
+    tidyr::crossing(
+      all_degs_human_mouse_matched %>%
+        dplyr::select(pathogen, timepoint, treatment, timepoint_comparison) %>%
+        dplyr::distinct()
+    )
+  )  %>%
+
+  #Add n participants
+  left_join(all_human_mouse_metadata,
+               by = join_by("pathogen", "organism", "timepoint")) %>%
+  #Add n participants for control
+  mutate(n = if_else(organism == "DMD", 5, n))  %>% 
+  group_by(treatment, pathogen) %>% 
+  #Copy timepoint comparison for control to match
+  fill(timepoint_comparison, .direction = "down") %>%
+  ungroup()
+
+#Check
+all_degs_human_mouse_matched_bionull %>%
+  dplyr::count(treatment, pathogen, organism, timepoint_comparison)
+
+#Save
+all_degs_human_mouse_matched_bionull %>% 
+  saveRDS(file = here("tables", "all_human_mouse_dge_limma_degs_matched_control.rds"))
 
 ```
 
