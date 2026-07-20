@@ -74,7 +74,7 @@ colors = list(organism = c("FIT" = "#4361ee",
                            "Mouse" = "gray50",
                            "Immune" = "#f72585",
                            "Human" = "black",
-                           "DMD" = "#00A087FF",
+                           "Control" = "#00A087FF",
                            "Permutation" = "gray80"),
               #Fill
               comparison = c("Mouse only" = "gray50",
