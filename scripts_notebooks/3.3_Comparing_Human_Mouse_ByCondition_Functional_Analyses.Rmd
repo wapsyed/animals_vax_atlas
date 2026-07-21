@@ -31,22 +31,6 @@ file, then each analysis (BTM means, BTM GSEA, Hallmarks means,
 Hallmarks GSEA) runs once on the combined data and produces a single
 output file.
 
-Condition configuration
-
-```{r}
-# Define all 6 conditions with display labels and file prefixes --------
-# hallmarks_plot controls whether a dedicated Hallmarks figure is generated for this condition
-conditions <- tribble(
-  ~name,        ~label,        ~hallmarks_plot, ~filename_prefix,
-  "Fluad",      "Influenza",   FALSE,           "influenza_fluad_human_mouse",
-  "Engerix B",  "Hepatitis B", TRUE,            "hepatitisb_engerixb_human_mouse",
-  "S. aureus",  "Saureus",     FALSE,           "saureus_infection_human_mouse",
-  "E. coli",    "Ecoli",       FALSE,           "ecoli_infection_human_mouse",
-  "Burn",       "Burn",        FALSE,           "burn_human_mouse",
-  "Trauma",     "Trauma",      FALSE,           "trauma_human_mouse"
-)
-```
-
 ## Import all conditions
 
 Load the pre-merged DGE file that already contains all 6 conditions with
@@ -68,22 +52,26 @@ annotation_conditions <- all_degs %>%
 # ── Load BTM (Blood Transcriptional Modules) results --------
 # Import the BTM-to-gene annotation table used for module-level summaries
 # Load mean log2FC per BTM process, collapsed across genes within each module
-dge_btm_mean_process  <- readRDS(here("tables", "all_human_mouse_dge_btm_mean_process.rds"))
+dge_btm_mean_process <- readRDS(here("tables", "all_human_mouse_dge_btm_mean_process.rds"))
 
-# Load gene-level BTM membership: each row is a gene–process pair used for ORA and per-gene module analyses
+# Load gene-level BTM membership
 dge_btm_process_genes <- readRDS(here("tables", "all_human_mouse_dge_btm_process_genes.rds"))
+#Save
+dge_btm_process_genes_wide = readRDS(here("tables", "all_human_mouse_dge_btm_process_genes_wide.rds"))
 
-# Load pre-computed GSEA results (fgsea) for BTMs across all conditions
-gsea_results          <- readRDS(here("tables", "all_human_mouse_gsea_btm_results.rds"))
-
-
+# Load pre-computed GSEA results
+gsea_results <- readRDS(here("tables", "all_human_mouse_gsea_btm_results.rds"))
 
 # ── Load BTM GSEA + matched results --------
-# Wide-format table of mean GSEA NES per BTM for cross-condition comparison
-dge_btm_gsea_mean_wide       <- readRDS(here("tables", "all_human_mouse_dge_btm_gsea_mean_wide.rds"))
+dge_btm_gsea_mean_wide <- readRDS(here("tables", "all_human_mouse_dge_btm_gsea_mean_wide.rds"))
 
 # Matched GSEA results where human and mouse timepoints have been aligned for direct comparison
 gsea_btm_results_all_matched <- readRDS(here("tables", "all_human_mouse_gsea_btm_results_matched.rds"))
+
+
+
+#Filter timepoints combinations
+
 
 ```
 
@@ -103,40 +91,6 @@ BTMs correlation, intra- and inter-species Compare means and NES
 Prepare the wide-format table of BTM mean log2FC and NES values for human vs mouse comparison, then compute Pearson correlations between organisms under three significance filters: all modules, modules significant in mouse only, and modules significant in both. Assemble a combined data frame with facet-ready labels for downstream plotting.
 
 ```{r fig.height=5, fig.width=7}
-# Pivot GSEA results wide: one row per (pathogen, timepoint, process) with separate columns for human and mouse metrics --------
-dge_btm_gsea_mean_wide <- gsea_btm_results_all_matched %>%
-  # Select the core columns needed for cross-species comparison --------
-  select(pathogen, organism, timepoint, process, group, nes, mean_log2fc, p_adjust, p_adjust_mean) %>%
-  # Group by all non-organism columns to spread organism into columns --------
-  group_by(pathogen, timepoint, process, group) %>%
-  pivot_wider(names_from = organism,
-              values_from = c(mean_log2fc, nes, p_adjust, p_adjust_mean),
-              names_sep = "_") %>%
-  ungroup() %>%
-  # Keep only modules with a non-missing mean log2FC in mouse (core requirement for comparison) --------
-  drop_na(mean_log2fc_Mouse)
-
-# Inspect the number of modules per (pathogen, timepoint) after pivoting --------
-dge_btm_gsea_mean_wide %>%
-  dplyr::count(pathogen, timepoint)
-
-# Pivot the gene-level BTM table wide: one row per (timepoint, process) with separate human and mouse columns --------
-dge_btm_process_genes_wide <- dge_btm_process_genes %>%
-  ungroup() %>%
-  # Keep essential columns for per-gene cross-species comparison --------
-  select(symbol, mean_l2fc, adj_p_val, organism, timepoint, process, group) %>%
-  distinct() %>%
-  # Spread organism into separate columns for mean log2FC and adjusted p-value --------
-  group_by(organism, timepoint, process) %>%
-  pivot_wider(names_from = organism,
-              values_from = c(mean_l2fc, adj_p_val), values_fn = median) %>%
-  ungroup() %>%
-  # Set the immune module group order per the project convention --------
-  mutate(group = fct_relevel(group, c(immune_order))) %>%
-  # Keep only genes with non-missing human log2FC --------
-  drop_na(mean_l2fc_Human) %>%
-  mutate(timepoint = as.numeric(timepoint))
-
 # Define a safe correlation function that handles edge cases (too few points, zero variance, NAs) --------
 safe_cor_test <- function(x, y, method) {
   # Remove NAs and infinite values first --------
@@ -159,24 +113,23 @@ safe_cor_test <- function(x, y, method) {
 
 # Compute Pearson correlation between human and mouse mean log2FC across all modules (no filtering) --------
 cor_labels <- dge_btm_gsea_mean_wide %>%
-  # Select the columns needed for correlation: rename organism-specific columns for clarity --------
-  select(pathogen, process, timepoint, group,
+  select(pathogen, process, timepoint_comparison, group,
          Mouse = mean_log2fc_Mouse,
          Human = mean_log2fc_Human) %>%
-  # Compute one correlation per (pathogen, timepoint) group --------
-  group_by(pathogen, timepoint) %>%
+  # Compute one correlation per (pathogen, timepoint_comparison) group
+  group_by(pathogen, timepoint_comparison) %>%
   summarise(
-    test_result = list(safe_cor_test(Human, Mouse, method = "pearson")),
+    test_result = list(safe_cor_test(Human, Mouse, method = "spearman")),
     n = n(),
     .groups = "drop"
   ) %>%
-  # Extract correlation estimate and p-value from the nested test result --------
+  # Extract correlation estimate and p-value from the nested test result
   mutate(
     cor_value = purrr::map_dbl(test_result, "estimate"),
     p_value   = purrr::map_dbl(test_result, "p.value")
   ) %>%
   select(-test_result) %>%
-  # Format a human-readable label with r, R-squared, significance stars, and sample size --------
+  # Format a human-readable label 
   mutate(
     filter = "all",
     r_squared = cor_value^2,
@@ -193,6 +146,65 @@ cor_labels <- dge_btm_gsea_mean_wide %>%
     )
   )
 
+
+correlation_filtered_inter_weighted =      
+  dge_btm_gsea_mean_wide %>%
+  select(pathogen, process, timepoint_comparison, group,
+         Mouse = mean_log2fc_Mouse,
+         Human = mean_log2fc_Human) %>%
+  # Compute one correlation per (pathogen, timepoint_comparison) group
+  group_by(pathogen, timepoint_comparison) %>%
+  summarise({
+    # Compute weighted correlation
+    res <- wtd.cor(x = rank(Human), 
+                   y = rank(Mouse), 
+                   weight = weight_se_inverse)
+    
+    # Extract statistics
+    data.frame(
+      rho = res[1, "correlation"],
+      se  = res[1, "std.err"],
+      t   = res[1, "t.value"],
+      p   = res[1, "p.value"],
+      n_genes   = n()
+    )
+  }, .groups = 'drop')  %>% 
+  mutate(
+    #Significance
+    p_adj = p.adjust(p, method = "BH"),
+    p_adj_label = case_when(
+      is.na(p_adj)      ~ "ns",
+      p_adj <= 0.01     ~ "***",
+      p_adj <= 0.05     ~ "**",
+      p_adj <= 0.10     ~ "*",
+      TRUE                ~ "ns"
+    ),
+    label = paste0("rho=", round(rho, 2), ", n=", n_genes, ", ", p_adj_label)
+  ) %>% 
+  
+  #Standardize factors
+     mutate(
+       comparison = "Human vs. Mouse",
+       timepoint_comparison = paste0(timepoint_human, sep = "-", timepoint_mouse),
+       timepoint_comparison = str_replace_all(timepoint_comparison, "\n", " "),
+       pathogen_comparison = paste0(pathogen_human, "-", pathogen_mouse),
+       
+```
+
+
+```{r fig.height=10, fig.width=15}
+dge_btm_gsea_mean_wide %>%
+  select(pathogen, process, timepoint_comparison, group,
+         Mouse = mean_log2fc_Mouse,
+         Human = mean_log2fc_Human)  %>% 
+  ggplot()+
+  aes(x = Mouse, y = Human) +
+  facet_wrap(~pathogen+timepoint_comparison) +
+  geom_point()
+```
+
+
+```{r fig.height=5, fig.width=7}
 # Compute correlation restricted to modules significant in mouse (p_adjust <= 0.25) --------
 cor_labels_filter_Mouse <- dge_btm_gsea_mean_wide %>%
   filter(p_adjust_mean_Mouse <= 0.25) %>%
@@ -201,7 +213,7 @@ cor_labels_filter_Mouse <- dge_btm_gsea_mean_wide %>%
          Human = mean_log2fc_Human) %>%
   group_by(pathogen, timepoint) %>%
   summarise(
-    test_result = list(safe_cor_test(Human, Mouse, method = "pearson")),
+    test_result = list(safe_cor_test(Human, Mouse, method = "spearman")),
     n = n(),
     .groups = "drop"
   ) %>%
@@ -233,7 +245,7 @@ cor_labels_filter_Mouse_Human <- dge_btm_gsea_mean_wide %>%
          Human = mean_log2fc_Human) %>%
   group_by(pathogen, timepoint) %>%
   summarise(
-    test_result = list(safe_cor_test(Human, Mouse, method = "pearson")),
+    test_result = list(safe_cor_test(Human, Mouse, method = "spearman")),
     n = n(),
     .groups = "drop"
   ) %>%

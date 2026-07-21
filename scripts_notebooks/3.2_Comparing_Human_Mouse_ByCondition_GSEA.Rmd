@@ -71,16 +71,71 @@ organism and timepoint, test each module against zero, and save the
 unified output.
 
 ```{r}
-# Annotate each DEG with its BTM membership by joining on gene symbol --------
-# Rename human_symbol to symbol to match the BTM annotation key
-# Keep only Human and Mouse (exclude reference organisms)
+# Annotate each genes with its BTM membership by joining on gene symbol --------
 dge_btm_process_genes <- all_degs %>%
   rename(symbol = human_symbol) %>%
   ungroup() %>%
   inner_join(btm_annotation_genes, by = "symbol") %>%
-  filter(organism %in% c("Human", "Mouse", "DMD"))
+  filter(organism %in% c("Human", "Mouse"))
 
-# Collapse gene-level log2FC to BTM-level means per organism, pathogen, and timepoint 
+# Pivot the gene-level BTM table wide
+#Create timepoint pairs
+timepoint_map <- dge_btm_process_genes %>%
+  filter(pathogen != "DMD") %>%
+  select(pathogen, organism, timepoint) %>%
+  distinct() %>%
+  pivot_wider(
+    names_from = organism,
+    values_from = timepoint,
+    values_fn = list
+  )
+
+#Pivot and bind control
+dge_btm_process_genes_wide <- dge_btm_process_genes %>%
+  filter(pathogen != "DMD") %>%
+  select(symbol, mean_l2fc, adj_p_val, t, se, n_participants = n, pathogen, organism, timepoint, process, group) %>%
+  distinct() %>%
+  
+  # Map and unnest cross-species timepoint combinations
+  left_join(timepoint_map, by = "pathogen") %>%
+  mutate(opposite_timepoint = if_else(organism == "Human", Mouse, Human)) %>%
+  unnest(opposite_timepoint) %>%
+  mutate(
+    timepoint_human = if_else(organism == "Human", timepoint, opposite_timepoint),
+    timepoint_mouse = if_else(organism == "Mouse", timepoint, opposite_timepoint),
+    timepoint_comparison = stringr::str_c(timepoint_human, "-", timepoint_mouse)
+  ) %>%
+  select(-Human, -Mouse, -opposite_timepoint, -timepoint_human, -timepoint_mouse, -timepoint) %>%
+  
+  # Pivot the table wide
+  pivot_wider(
+    names_from = organism,
+    values_from = c(mean_l2fc, adj_p_val, t, se, n_participants),
+    values_fn = median
+  ) %>%
+  mutate(group = fct_relevel(group, immune_order)) %>%
+  drop_na(mean_l2fc_Human, mean_l2fc_Mouse) %>% 
+  inner_join(dge_btm_process_genes %>% 
+                ungroup() %>%
+              filter(pathogen == "DMD") %>%
+              mutate(organism = "Control") %>% 
+              select(symbol, mean_l2fc, adj_p_val, t, se, n_participants = n, organism, process, group) %>%
+              distinct() %>%
+              group_by(organism, process) %>%
+              pivot_wider(names_from = organism,
+                          values_from = c(mean_l2fc, adj_p_val, t, se, n_participants), values_fn = median) %>%
+              ungroup() %>%
+              mutate(group = fct_relevel(group, c(immune_order))),
+             by = join_by(symbol, process, group)
+  )
+
+#Check
+dge_btm_process_genes_wide
+
+#Save
+saveRDS(dge_btm_process_genes_wide, here("tables", "all_human_mouse_dge_btm_process_genes_wide.rds"))
+
+# Collapse gene-level log2FC to module-level
 dge_btm_mean_process <- dge_btm_process_genes %>%
   group_by(organism, pathogen, timepoint, process) %>%
   summarise(mean_log2fc = mean(mean_l2fc),
@@ -96,7 +151,6 @@ dge_btm_mean_process <- dge_btm_process_genes %>%
   mutate(condition = paste0(organism, "_", pathogen, "_", timepoint))
 
 # One-sample t-test per BTM vs zero with BH correction --------
-# Tests whether the mean log2FC of genes in this module differs from zero
 pvals_vs_zero <- dge_btm_process_genes %>%
   group_by(organism, pathogen, timepoint, process) %>%
   filter(n() >= 2) %>%
