@@ -319,24 +319,24 @@ theme_vaxgo = function(){
 #Functions ------
 
 #Function for correlation
-safe_cor_test <- function(x, y, method) {
-  # Remove NAs and infinite values first
-  ok <- is.finite(x) & is.finite(y)
-  x <- x[ok]
-  y <- y[ok]
-  
-  # cor.test requires n >= 3 to run without error
-  if (length(x) < 3 || sd(x) == 0 || sd(y) == 0) {
-    return(list(estimate = NA_real_, p.value = NA_real_))
-  } else {
-    tryCatch({
-      ct <- cor.test(x, y, method = method)
-      return(list(estimate = unname(ct$estimate), p.value = ct$p.value))
-    }, error = function(e) {
-      return(list(estimate = NA_real_, p.value = NA_real_))
-    })
-  }
-}
+# safe_cor_test <- function(x, y, method) {
+#   # Remove NAs and infinite values first
+#   ok <- is.finite(x) & is.finite(y)
+#   x <- x[ok]
+#   y <- y[ok]
+#   
+#   # cor.test requires n >= 3 to run without error
+#   if (length(x) < 3 || sd(x) == 0 || sd(y) == 0) {
+#     return(list(estimate = NA_real_, p.value = NA_real_))
+#   } else {
+#     tryCatch({
+#       ct <- cor.test(x, y, method = method)
+#       return(list(estimate = unname(ct$estimate), p.value = ct$p.value))
+#     }, error = function(e) {
+#       return(list(estimate = NA_real_, p.value = NA_real_))
+#     })
+#   }
+# }
 
 
 # Function for overlapping -------
@@ -563,6 +563,191 @@ cluster_by_day <- function(df, day_column = "day", condition_column = "condition
   
   return(order_df)
 }
+
+
+#Weighted correlation ====
+calculate_weighted_correlation_spearman <- function(data,
+                                           x_col = mean_log2fc_Human,
+                                           y_col = mean_log2fc_Mouse,
+                                           weight_col = weight_joint_gsea_fdr,
+                                           group_cols = c("pathogen", "timepoint_comparison")) {
+  
+  data %>%
+    # Select target variables and rename them for internal calculation
+    dplyr::select(
+      dplyr::all_of(group_cols),
+      x_val = {{ x_col }},
+      y_val = {{ y_col }},
+      weight_val = {{ weight_col }}
+    ) %>%
+    
+    # Compute weighted Spearman correlation per specified group with safety checks
+    dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
+    dplyr::summarise(
+      {
+        # Clean vectors by filtering out NAs and non-positive weights
+        valid_idx <- !is.na(x_val) & !is.na(y_val) & !is.na(weight_val) & weight_val > 0
+        x_clean <- x_val[valid_idx]
+        y_clean <- y_val[valid_idx]
+        w_clean <- weight_val[valid_idx]
+        
+        # Guard clause: Require at least 3 complete cases with non-zero variance
+        if (length(x_clean) < 3 || stats::var(x_clean) == 0 || stats::var(y_clean) == 0) {
+          data.frame(
+            cor_value = NA_real_,
+            se        = NA_real_,
+            t         = NA_real_,
+            p_value   = NA_real_,
+            n_obs     = length(x_clean)
+          )
+        } else {
+          # Safely execute weighted correlation on ranks (Spearman transformation)
+          res_try <- tryCatch(
+            weights::wtd.cor(
+              x = rank(x_clean),
+              y = rank(y_clean),
+              weight = w_clean
+            ),
+            error = function(e) NULL
+          )
+          
+          if (is.null(res_try)) {
+            data.frame(
+              cor_value = NA_real_,
+              se        = NA_real_,
+              t         = NA_real_,
+              p_value   = NA_real_,
+              n_obs     = length(x_clean)
+            )
+          } else {
+            data.frame(
+              cor_value = as.numeric(res_try[1, "correlation"]),
+              se        = as.numeric(res_try[1, "std.err"]),
+              t         = as.numeric(res_try[1, "t.value"]),
+              p_value   = as.numeric(res_try[1, "p.value"]),
+              n_obs     = length(x_clean)
+            )
+          }
+        }
+      },
+      .groups = "drop"
+    ) %>%
+    
+    # Calculate R-squared, FDR-adjusted p-values, and formatted label strings
+    dplyr::mutate(
+      # Raw p-value significance stars
+      p_label = dplyr::case_when(
+        is.na(p_value)  ~ "ns",
+        p_value <= 0.01 ~ "***",
+        p_value <= 0.05 ~ "**",
+        p_value <= 0.10 ~ "*",
+        TRUE            ~ "ns"
+      ),
+      
+      # BH adjusted p-values and significance stars
+      p_adj = stats::p.adjust(p_value, method = "BH"),
+      p_adj_label = dplyr::case_when(
+        is.na(p_adj)    ~ "ns",
+        p_adj <= 0.01   ~ "***",
+        p_adj <= 0.05   ~ "**",
+        p_adj <= 0.10   ~ "*",
+        TRUE            ~ "ns"
+      )
+    )
+}
+
+calculate_weighted_correlation_pearson <- function(data,
+                                           x_col = mean_log2fc_Human,
+                                           y_col = mean_log2fc_Mouse,
+                                           weight_col = weight_joint_gsea_fdr,
+                                           group_cols = c("pathogen", "timepoint_comparison")) {
+  
+  data %>%
+    # Select target variables and rename them for internal calculation
+    dplyr::select(
+      dplyr::all_of(group_cols),
+      x_val = {{ x_col }},
+      y_val = {{ y_col }},
+      weight_val = {{ weight_col }}
+    ) %>%
+    
+    # Compute weighted Spearman correlation per specified group with safety checks
+    dplyr::group_by(dplyr::across(dplyr::all_of(group_cols))) %>%
+    dplyr::summarise(
+      {
+        # Clean vectors by filtering out NAs and non-positive weights
+        valid_idx <- !is.na(x_val) & !is.na(y_val) & !is.na(weight_val) & weight_val > 0
+        x_clean <- x_val[valid_idx]
+        y_clean <- y_val[valid_idx]
+        w_clean <- weight_val[valid_idx]
+        
+        # Guard clause: Require at least 3 complete cases with non-zero variance
+        if (length(x_clean) < 3 || stats::var(x_clean) == 0 || stats::var(y_clean) == 0) {
+          data.frame(
+            cor_value = NA_real_,
+            se        = NA_real_,
+            t         = NA_real_,
+            p_value   = NA_real_,
+            n_obs     = length(x_clean)
+          )
+        } else {
+          # Safely execute weighted correlation on ranks (Spearman transformation)
+          res_try <- tryCatch(
+            weights::wtd.cor(
+              x = x_clean,
+              y = y_clean,
+              weight = w_clean
+            ),
+            error = function(e) NULL
+          )
+          
+          if (is.null(res_try)) {
+            data.frame(
+              cor_value = NA_real_,
+              se        = NA_real_,
+              t         = NA_real_,
+              p_value   = NA_real_,
+              n_obs     = length(x_clean)
+            )
+          } else {
+            data.frame(
+              cor_value = as.numeric(res_try[1, "correlation"]),
+              se        = as.numeric(res_try[1, "std.err"]),
+              t         = as.numeric(res_try[1, "t.value"]),
+              p_value   = as.numeric(res_try[1, "p.value"]),
+              n_obs     = length(x_clean)
+            )
+          }
+        }
+      },
+      .groups = "drop"
+    ) %>%
+    
+    # Calculate R-squared, FDR-adjusted p-values, and formatted label strings
+    dplyr::mutate(
+      r_squared = dplyr::if_else(!is.na(cor_value), cor_value^2, NA_real_),
+      
+      # Raw p-value significance stars
+      p_label = dplyr::case_when(
+        is.na(p_value)  ~ "ns",
+        p_value <= 0.01 ~ "***",
+        p_value <= 0.05 ~ "**",
+        p_value <= 0.10 ~ "*",
+        TRUE            ~ "ns"
+      ),
+      
+      # BH adjusted p-values and significance stars
+      p_adj = stats::p.adjust(p_value, method = "BH"),
+      p_adj_label = dplyr::case_when(
+        is.na(p_adj)    ~ "ns",
+        p_adj <= 0.01   ~ "***",
+        p_adj <= 0.05   ~ "**",
+        p_adj <= 0.10   ~ "*",
+        TRUE            ~ "ns"
+      )
+    )
+}
+
 
 #Safe correlation 
 safe_cor_test <- function(x, y, method) {

@@ -138,10 +138,10 @@ saveRDS(dge_btm_process_genes_wide, here("tables", "all_human_mouse_dge_btm_proc
 # Collapse gene-level log2FC to module-level
 dge_btm_mean_process <- dge_btm_process_genes %>%
   group_by(organism, pathogen, timepoint, process) %>%
-  summarise(mean_log2fc = mean(mean_l2fc),
-            median_log2fc = median(mean_l2fc),
-            sd_log2fc = sd(mean_l2fc),
-            var_log2fc = var(mean_l2fc),
+  summarise(mean_log2fc = mean(mean_l2fc, na.rm = T),
+            median_log2fc = median(mean_l2fc, na.rm = T),
+            sd_log2fc = sd(mean_l2fc, na.rm = T),
+            var_log2fc = var(mean_l2fc, na.rm = T),
             n_genes = n(),
             n_participants = dplyr::first(n),
             group = dplyr::first(group),
@@ -170,6 +170,17 @@ dge_btm_mean_process <- dge_btm_mean_process %>%
     by = c("organism", "pathogen", "timepoint", "process")
   ) %>%
   clean_names()
+
+#Pivot wide
+dge_btm_mean_wide <- dge_btm_mean_process %>%
+  select(organism, pathogen, timepoint, process, group,
+         mean_log2fc, median_log2fc, sd_log2fc, var_log2fc, n_genes, p, p_adjust) %>%
+  group_by(pathogen, timepoint, process) %>%
+  pivot_wider(names_from = organism,
+              values_from = c(mean_log2fc, median_log2fc, sd_log2fc, var_log2fc, n_genes, p, p_adjust),
+              names_sep = "_") %>% 
+  ungroup() 
+
 
 
 dge_btm_mean_process %>% 
@@ -215,92 +226,105 @@ gsea_results <- gsea_output$gsea %>%
   clean_names() %>%
   rename(process = id) %>%
   filter(!is.na(process)) %>%
-  inner_join(dge_btm_mean_process %>% 
+  rownames_to_column("del") %>% 
+  select(-del, -description) %>% 
+  full_join(dge_btm_mean_process %>% 
                rename(p_adjust_mean = p_adjust),
             by = join_by("condition", "process"))
 
 #Check
 gsea_results %>% dplyr::count(pathogen, organism, timepoint)
 
+
 #Save
 saveRDS(gsea_results, here("tables", "all_human_mouse_gsea_btm_results.rds"))
 ```
 
-BTM matching and wide pivot
 
-Duplicate Human timepoints for S. aureus and E. coli (where Human and
-Mouse timepoints differ) so cross-species comparisons align. Pivot GSEA
-and means to wide format (one column per organism).
-
-```{r}
-# Extract species-specific timepoints per pathogen to map them dynamically
-timepoint_map <- gsea_results %>% 
-  dplyr::filter(pathogen != "DMD") %>%
-  select(pathogen, organism, timepoint) %>% 
+```{r message=FALSE, warning=FALSE}
+#Compare humans to mice
+gsea_results_human = gsea_results %>% 
+  filter(organism == "Human",
+         pathogen != "DMD") %>% 
+  select(-organism) %>% 
   distinct() %>% 
-  pivot_wider(names_from = organism, values_from = timepoint, values_fn = list)
+  rename_with( .fn = ~ stringr::str_c(.x, "_Human"),
+               cols = c(enrichment_score:condition, timepoint, mean_log2fc:p_adjust_mean)) %>% 
+  rename(process = process_Human, gsea_enrichment = gsea_enrichment_Human,
+         pathogen = pathogen_Human, group = group_Human, subgroup = subgroup_Human)
+
+gsea_results_mouse = gsea_results %>% 
+  filter(organism == "Mouse",
+         pathogen != "DMD") %>% 
+  select(-organism) %>% 
+  distinct() %>% 
+  rename_with( .fn = ~ stringr::str_c(.x, "_Mouse"),
+               cols = c(enrichment_score:condition, timepoint, mean_log2fc:p_adjust_mean)) %>% 
+  rename(process = process_Mouse, gsea_enrichment = gsea_enrichment_Mouse,
+         pathogen = pathogen_Mouse, group = group_Mouse, subgroup = subgroup_Mouse)
+
+gsea_results_control = gsea_results %>% 
+  filter(organism == "Mouse",
+         pathogen == "DMD") %>% 
+  mutate(organism = "Control",
+         pathogen = "Control") %>% 
+  select(-organism, -timepoint, -pathogen,) %>% 
+  distinct() %>% 
+  rename_with( .fn = ~ stringr::str_c(.x, "_Control"),
+               cols = c(enrichment_score:condition, timepoint, mean_log2fc:p_adjust_mean)) %>% 
+  rename(process = process_Control, gsea_enrichment = gsea_enrichment_Control, group = group_Control, subgroup = subgroup_Control)
+
+dge_btm_gsea_mean_wide = gsea_results_human %>% 
+  full_join(gsea_results_mouse,
+            by = join_by(process, gsea_enrichment, pathogen, group, subgroup)) %>% 
+  full_join(gsea_results_control,
+            by = join_by(process, gsea_enrichment, group, subgroup)) %>% 
+  drop_na(timepoint_Human, timepoint_Mouse) %>% 
+  mutate(timepoint_comparison = paste0(timepoint_Human, "-", timepoint_Mouse)) %>% 
+#Calculate statistics
+  mutate(
+    # Cross-species effect size delta 
+    mean_log2fc_diff = mean_log2fc_Human - mean_log2fc_Mouse,
+    
+    # Joint FDR significance weighting (GSEA)
+    weight_human_gsea_fdr = -log10(pmax(p_adjust_Human, 1e-10)),
+    weight_mouse_gsea_fdr = -log10(pmax(p_adjust_Mouse, 1e-10)),
+    weight_joint_gsea_fdr = sqrt(weight_human_gsea_fdr * weight_mouse_gsea_fdr),
+    
+    # Statistical Weights for Weighted Correlation
+    se_sq_Human = var_log2fc_Human / n_genes_Human,
+    se_sq_Mouse = var_log2fc_Mouse / n_genes_Mouse,
+    
+    # Combined variance of the cross-species mean difference
+    var_combined = se_sq_Human + se_sq_Mouse,
+    
+    # Correct inverse variance weight
+    weight_var_inverse = 1 / var_combined,
+  )
+
+#Save
+saveRDS(dge_btm_gsea_mean_wide, here("tables", "all_human_mouse_dge_btm_gsea_mean_wide.rds"))
 
 
-# Generate matched timepoints for active organisms (Human and Mouse)
-active_matched_timepoints <- gsea_results %>% 
-  #Filter out control
-  dplyr::filter(!(pathogen == "DMD")) %>%
-  #Filter only Human and Mouse
-  dplyr::filter(organism %in% c("Human", "Mouse")) %>% 
-  dplyr::left_join(timepoint_map, by = "pathogen") %>% 
-  dplyr::mutate(opposite_timepoint = dplyr::if_else(organism == "Human", Mouse, Human)) %>% 
-  tidyr::unnest(opposite_timepoint) %>% 
-  dplyr::mutate(
-    timepoint_human = dplyr::if_else(organism == "Human", timepoint, opposite_timepoint),
-    timepoint_mouse = dplyr::if_else(organism == "Mouse", timepoint, opposite_timepoint),
-    timepoint_comparison = stringr::str_c(timepoint_human, "-", timepoint_mouse)
-  ) %>% 
-  dplyr::select(-Human, -Mouse, -opposite_timepoint)
-
-# Check
- active_matched_timepoints %>%
-  dplyr::count(organism, pathogen, timepoint_comparison)
-
-
-# Match DMD control across all comparisons
-gsea_btm_results_all_matched <- dplyr::bind_rows(
-  
-  # 1. Retain the dynamically paired active experimental rows
-  active_matched_timepoints,
-  
-  # 2. Extract DMD, strip original identifiers, rename the organism, and map universally
-  gsea_results %>%
-    dplyr::filter(organism == "Mouse" & pathogen == "DMD") %>%
-    dplyr::mutate(organism = "DMD") %>%
-    # Remove original pathogen/treatment/timepoint so they don't conflict during crossing
-    dplyr::select(-pathogen,  -timepoint) %>% 
-    tidyr::crossing(
-      active_matched_timepoints %>%
-        dplyr::select(pathogen, timepoint_comparison) %>%
-        dplyr::distinct()
-    )
-)
+#Pivot longer
+gsea_btm_results_all_matched = dge_btm_gsea_mean_wide %>% 
+  tidyr::pivot_longer(
+    # Select all organism-suffixed columns
+    cols = dplyr::ends_with(c("_Human", "_Mouse", "_Control")),
+    
+    # Split column names into the metric name (.value) and the organism level
+    names_to = c(".value", "organism"),
+    names_sep = "_(?=[^_]+$)" # Regex splits strictly at the final underscore
+  )
 
 #Save
 saveRDS(gsea_btm_results_all_matched, here("tables", "all_human_mouse_gsea_btm_results_matched.rds"))
 
 
-# Pivot to wide format: one row per module per timepoint with Human and Mouse side by side --------
-dge_btm_gsea_mean_wide <- gsea_btm_results_all_matched %>%
-  select(organism, pathogen, timepoint_comparison, process, group, set_size,
-         nes, mean_log2fc, p_adjust, p_adjust_mean) %>%
-  group_by(pathogen, process, group, set_size) %>%
-  pivot_wider(names_from = organism,
-              values_from = c(mean_log2fc, nes, p_adjust, p_adjust_mean, set_size),
-              names_sep = "_") %>% 
-  ungroup()
 
-dge_btm_gsea_mean_wide %>% 
-  dplyr::count(pathogen, timepoint_comparison)
-
-#Save
-saveRDS(dge_btm_gsea_mean_wide, here("tables", "all_human_mouse_dge_btm_gsea_mean_wide.rds"))
 ```
+
+
 
 ### BTM distribution plots (one per condition)
 
