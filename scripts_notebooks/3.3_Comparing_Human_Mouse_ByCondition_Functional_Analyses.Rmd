@@ -70,8 +70,10 @@ dge_btm_mean_process <- readRDS(here("tables", "all_human_mouse_dge_btm_mean_pro
 
 # Load gene-level BTM membership
 dge_btm_process_genes <- readRDS(here("tables", "all_human_mouse_dge_btm_process_genes.rds"))
-#Save
-dge_btm_process_genes_wide = readRDS(here("tables", "all_human_mouse_dge_btm_process_genes_wide.rds"))
+
+dge_btm_process_genes_wide = readRDS(here("tables", "all_human_mouse_dge_btm_process_genes_wide.rds")) %>% 
+  inner_join(conditions_filtered,
+             by = join_by(pathogen, timepoint_comparison))
 
 # Load pre-computed GSEA results
 gsea_results <- readRDS(here("tables", "all_human_mouse_gsea_btm_results.rds"))
@@ -110,10 +112,15 @@ combined data frame with facet-ready labels for downstream plotting.
 
 
 
-##### Plot means
+##### Mean Log2-FC
+
+###### Correlation
+
+####### Condition vs. Condition
 ```{r fig.height=5, fig.width=7}
 # Correlation between modules ==================
 
+# Conditions (No-control)
 # Compute correlation between human and mouse mean log2FC across all modules (no filtering)
 cor_labels =      
   dge_btm_gsea_mean_wide %>%
@@ -122,9 +129,7 @@ cor_labels =
     y_col = mean_log2fc_Mouse,
     weight_col = weight_joint_gsea_fdr,
     group_cols = c("pathogen", "timepoint_comparison")
-  ) 
-
-
+  )
 
 # Compute correlation restricted to modules significant in mouse (p_adjust <= 0.25)
 cor_labels_Mouse <- dge_btm_gsea_mean_wide %>%
@@ -146,6 +151,18 @@ cor_labels_Mouse_Human <- dge_btm_gsea_mean_wide %>%
     weight_col = weight_joint_gsea_fdr,
     group_cols = c("pathogen", "timepoint_comparison")
   )
+
+#Bind to one df
+cor_labels_mean_long = bind_rows(cor_labels %>% mutate(filter = "All"), 
+                                cor_labels_Mouse %>% mutate(filter = "Mouse"), 
+                                cor_labels_Mouse_Human %>% mutate(filter = "Mouse and Human")) %>% 
+  #Refactor
+  mutate(pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+                               pathogen %in% c("S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c("Burn", "Trauma") ~ "Injury",
+                               TRUE ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury"))
 
 # Join GSEA table with all three correlation summaries
 dge_btm_mean_group_correlation_df <- dge_btm_gsea_mean_wide %>%
@@ -185,11 +202,179 @@ dge_btm_mean_group_correlation_df %>%
 
 ```
 
-Multi-panel scatterplot of human vs mouse BTM mean log2FC, faceted by
-pathogen and timepoint, with points coloured by immune module group.
-Three significance-filter layers are overlaid: all modules (blurred),
-mouse-significant only, and both-significant.
+Conditions vs. Control
 
+```{r}
+
+# Conditions vs. Control =======
+# Compute correlation between human and mouse mean log2FC across all modules (no filtering)
+cor_labels_control =      
+  dge_btm_gsea_mean_wide %>%
+  calculate_weighted_correlation_pearson(
+    x_col = mean_log2fc_Human,
+    y_col = mean_log2fc_Control,
+    weight_col = weight_joint_gsea_fdr,
+    group_cols = c("pathogen", "timepoint_comparison")
+  )
+
+# Compute correlation restricted to modules significant in mouse (p_adjust <= 0.25)
+cor_labels_Mouse_control <- dge_btm_gsea_mean_wide %>%
+  filter(p_adjust_mean_Mouse <= 0.25) %>%
+  calculate_weighted_correlation_pearson(
+    x_col = mean_log2fc_Human,
+    y_col = mean_log2fc_Control,
+    weight_col = weight_joint_gsea_fdr,
+    group_cols = c("pathogen", "timepoint_comparison")
+  ) 
+
+
+# Compute correlation restricted to modules significant in both human and mouse
+cor_labels_Mouse_Human_control <- dge_btm_gsea_mean_wide %>%
+  filter(p_adjust_mean_Mouse <= 0.25, p_adjust_mean_Human <= 0.25) %>%
+  calculate_weighted_correlation_pearson(
+    x_col = mean_log2fc_Human,
+    y_col = mean_log2fc_Control,
+    weight_col = weight_joint_gsea_fdr,
+    group_cols = c("pathogen", "timepoint_comparison")
+  )
+
+#Bind to one df
+cor_labels_mean_long_control = bind_rows(cor_labels_control %>% mutate(filter = "All"), 
+                                cor_labels_Mouse_control %>% mutate(filter = "Mouse"), 
+                                cor_labels_Mouse_Human_control %>% mutate(filter = "Mouse and Human")) %>% 
+  #Refactor
+  mutate(pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+                               pathogen %in% c("S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c("Burn", "Trauma") ~ "Injury",
+                               TRUE ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury"))
+
+
+
+# Join GSEA table with all three correlation summaries
+dge_btm_mean_group_correlation_df_control <- dge_btm_gsea_mean_wide %>%
+  ungroup() %>%
+  
+  # Reorder module groups and wrap long process names for display
+  mutate(group = fct_relevel(group, c(immune_order)),
+         process = str_wrap(process, width = 15)) %>%
+  drop_na(mean_log2fc_Control) %>%
+  # Attach the three sets of correlation labels by (pathogen, timepoint_comparison
+  inner_join(cor_labels_control, by = join_by(pathogen, timepoint_comparison)) %>%
+  inner_join(cor_labels_Mouse_control %>% 
+                dplyr::rename_with(
+                .fn = ~ stringr::str_c(.x, "_filter_Mouse"),
+                .cols = cor_value:cor_label
+              ), by = join_by(pathogen, timepoint_comparison)) %>%
+  inner_join(cor_labels_Mouse_Human_control %>% 
+                dplyr::rename_with(
+                .fn = ~ stringr::str_c(.x, "_filter_Mouse_Human"),
+                .cols = cor_value:cor_label
+              ), by = join_by(pathogen, timepoint_comparison)) %>%
+  
+  
+  # Combine the three correlation labels into a single facet annotation
+  mutate(cor_labels_all_filtered = paste0("All: ", cor_label, ",\nM: ", cor_label_filter_Mouse, ",\nM&H: ", cor_label_filter_Mouse_Human),
+         facet_name = paste0(timepoint_comparison, "\n", cor_labels_all_filtered),
+         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         treatment = case_when(pathogen %in% c("Hep B", "Influenza") ~ "Vaccination",
+                               pathogen %in% c("S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c("Burn", "Trauma") ~ "Injury",
+                               TRUE ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury"))
+
+# Check
+dge_btm_mean_group_correlation_df_control %>%
+  dplyr::count(pathogen, timepoint_comparison)
+```
+
+
+
+###### Heatmap of summary results
+```{r fig.height=3, fig.width=14}
+
+#Merge to one DF
+cor_labels_mean_long_condition_control = bind_rows(cor_labels_mean_long,
+                                                  cor_labels_mean_long_control %>% 
+                                                    mutate(timepoint_comparison = "Control"))
+
+
+# Data preparation
+correlation_long_all_btm_mouse_human_timepoints_summary_heatmap_mean = cor_labels_mean_long_condition_control %>%
+  mutate(filter = str_replace(filter, "Mouse and Human", "Mouse\nand\nHuman"),
+         timepoint_comparison = fct_relevel(timepoint_comparison, "Control")) %>% 
+  # Aesthetics
+  ggplot() +
+  aes(x = timepoint_comparison,
+      y = filter %>% fct_rev(),
+      fill = cor_value) +
+  # Facets
+  facet_nested_wrap(~treatment+pathogen,
+                    scales = "free_x",
+                    nrow = 1) +
+  # Geoms
+  geom_point(aes(size = n_obs),
+             pch = 21) +
+  geom_text(aes(label = paste0("r=",round(cor_value,2), ", R²=", round(r_squared,2))),
+            color = "black",
+            vjust = -2.5, fontface = "plain",
+            size = 3) +
+  geom_text(aes(label = paste0("n=", n_obs)),
+            color = "black",
+            vjust = 0.5, fontface = "plain",
+            hjust = -0.5,
+            size = 3)+
+  # Scales
+  scale_size_continuous(range = c(2, 10)) +
+    scale_fill_gradientn(
+    colors = c("#4DBBD5FF", "white", "#4361ee"),
+    values = scales::rescale(c(-1, 0, 1)),
+    limits = c(-1, 1),
+    name = "Correlation",
+    guide = ggplot2::guide_colorbar(
+      barwidth = 10,
+      barheight = 1,
+      nbin = 10,
+      raster = FALSE
+    )
+  ) +
+  # Labels
+  labs(
+    x = "Time",
+    y = "Filter",
+    color = "Correlation",
+    size = "N genes") +
+  # Theme
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0, size = 10),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_blank(),
+        strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+        panel.spacing = unit(1, "lines"),
+        plot.margin = margin(0, 0.1, 0, 0.1, unit = "cm"),
+        legend.position = "top",
+        legend.direction = "horizontal",
+        legend.margin = margin(0, 0, 0, 0),
+        legend.box.margin = margin(0, 0, -10, 0),
+        legend.text = element_text(size = 10, hjust = 0.5),
+        legend.title = element_text(size = 10),
+        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) 
+
+# Render plot
+correlation_long_all_btm_mouse_human_timepoints_summary_heatmap_mean 
+   
+ 
+
+# Save
+correlation_long_all_btm_mouse_human_timepoints_summary_heatmap_mean %>%
+  ggsave(filename = here("Figures",  "all_human_mouse_mean_btm_correlation_all_timepoints_summary_heatmap_filtered.png"),
+         width = 14,
+         height = 4)
+```
+
+####### Scatter plot 
 ```{r fig.height=4, fig.width=14, message=FALSE, warning=FALSE}
 # Data preparation
 dge_btm_mean_group_correlation_df <-
@@ -266,7 +451,7 @@ dge_btm_mean_group_correlation_plot <- dge_btm_mean_group_correlation_df %>%
   # Theme customization
   theme_vaxgo() +
   theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 10),
-        axis.title.x = element_text(size = 8),
+        axis.title.x = element_text(size = 10),
         axis.text.y = element_text(size = 10),
         axis.title.y = element_text(size = 10),
         strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
@@ -294,12 +479,135 @@ dge_btm_mean_group_correlation_plot %>%
 
 
 
+
+
+###### Conditions vs. Control
+
+
+
+
+
+
+
+
+####### Scatter plot 
+```{r fig.height=4, fig.width=14, message=FALSE, warning=FALSE}
+# Data preparation
+dge_btm_mean_group_correlation_df_control_plot <-
+  bind_rows(
+    # All modules (no filtering)
+    dge_btm_mean_group_correlation_df_control %>%
+      mutate(filter = "All"),
+    # Modules significant in mouse only (padj <= 0.25 in mouse, > 0.25 in human)
+    dge_btm_mean_group_correlation_df_control %>%
+      filter(p_adjust_mean_Mouse <= 0.25, p_adjust_mean_Human > 0.25) %>%
+      mutate(filter = "Mouse"),
+    # Modules significant in both organisms
+    dge_btm_mean_group_correlation_df_control %>%
+      filter(p_adjust_mean_Mouse <= 0.25 & p_adjust_mean_Human <= 0.25) %>%
+      mutate(filter = "Mouse and Human"),
+  )
+
+# Scatterplot
+dge_btm_mean_group_correlation_plot_control <- dge_btm_mean_group_correlation_df_control_plot %>%
+  ggplot() +
+  aes(x = mean_log2fc_Mouse,
+      y = mean_log2fc_Control) +
+  facet_nested_wrap(vars(pathogen, facet_name),
+                    scales = "free",
+                    nrow = 1,
+                    strip = strip_nested(size = "variable")) +
+
+  # Guide lines
+  geom_abline(alpha = 0.2, linetype = 2) +
+  geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
+  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
+  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
+
+  # Geom layer: all modules shown with blur for background density
+  with_blur(
+    geom_point(aes(fill = group, color = group, shape = filter),
+               data = . %>% filter(filter == "All"),
+               size = 2, alpha = 0.2, stroke = 0.1, sigma = 2)
+  ) +
+
+  # Geom layer: mouse-only significant modules drawn with full opacity
+  geom_point(aes(fill = group, shape = filter, color = group),
+             data = . %>% filter(filter == "Mouse"),
+             size = 2, stroke = 0.1, alpha = 1) +
+
+  # Geom layer: both-significant modules drawn with black outline for emphasis
+  geom_point(aes(fill = group, shape = filter),
+             color = "black",
+             data = . %>% filter(filter == "Mouse and Human"),
+             size = 2, stroke = 0.1, alpha = 1) +
+
+  # Scales
+  scale_shape_manual(values = c(21, 22, 24)) +
+  scale_fill_manual(values = immune_colors) +
+  scale_color_manual(values = immune_colors) +
+  guides(color = FALSE,
+         fill = guide_legend(byrow = TRUE, nrow = 3,
+                             keywidth = unit(0.3, "cm"),
+                             keyheight = unit(0.3, "cm"),
+                             override.aes = list(size = 3, shape = 21, color = "black"),
+                             default.unit = "cm"),
+         shape = guide_legend(byrow = TRUE, nrow = 3,
+                              keywidth = unit(0.3, "cm"),
+                              keyheight = unit(0.3, "cm"),
+                              override.aes = list(size = 3),
+                              default.unit = "cm")) +
+
+  # Labels
+  labs(fill = "Group",
+       shape = "Significance",
+       y = "Human (Mean Log2FC)",
+       x = "Control (Mean Log2FC)") +
+
+  # Theme customization
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 10),
+        axis.title.x = element_text(size = 10),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
+        strip.text.x = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+        legend.position = "top",
+        legend.direction = "horizontal",
+        legend.text = element_text(size = 10, hjust = 0),
+        legend.title = element_text(size = 10),
+        legend.spacing.x = unit(0, "cm"),
+        legend.spacing.y = unit(0, "cm"),
+        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
+        legend.box.spacing = unit(0, "cm"),
+        panel.spacing = unit(0, "lines"),
+        plot.margin = margin(0, 0, 0, 0, unit = "cm"))
+
+# Render plot
+dge_btm_mean_group_correlation_plot_control
+
+# Save
+dge_btm_mean_group_correlation_plot_control %>%
+  ggsave(filename = here("Figures", "all_human_mouse_dge_btm_mean_group_correlation_plot_filtered_Control.png"),
+         width = 14, height = 4)
+```
+
+
+
+
+
+
+
+
+
+
 ##### Plot NES
 
 Compute Pearson correlations between Human and Mouse NES values across
 BTMs, stratified by pathogen and timepoint, for all genes and for
 significance-filtered subsets.
 
+Condition vs. Condition
 ```{r fig.height=5, fig.width=7}
 # Correlation for all modules
 cor_labels_nes <- dge_btm_gsea_mean_wide %>%
@@ -381,12 +689,101 @@ dge_btm_nes_group_correlation_df %>% dplyr::count(pathogen, timepoint_comparison
 ```
 
 
-Plot correlation values as heatmap
+Condition vs. Control
+```{r fig.height=5, fig.width=7}
+# Correlation for all modules
+cor_labels_nes_control <- dge_btm_gsea_mean_wide %>%
+  calculate_weighted_correlation_pearson(
+    x_col = nes_Control,
+    y_col = nes_Human,
+    weight_col = weight_joint_gsea_fdr,
+    group_cols = c("pathogen", "timepoint_comparison")
+  ) 
 
-```{r fig.height=3, fig.width=8}
+# Correlation for Mouse-significant modules
+cor_labels_nes_Mouse_control <- dge_btm_gsea_mean_wide %>%
+  filter(p_adjust_Control <= 0.25) %>% 
+  calculate_weighted_correlation_pearson(
+    x_col = nes_Control,
+    y_col = nes_Human,
+    weight_col = weight_joint_gsea_fdr,
+    group_cols = c("pathogen", "timepoint_comparison")
+  )
+
+# Correlation for both Mouse and Human significant modules 
+cor_labels_nes_Mouse_Human_control <- dge_btm_gsea_mean_wide %>%
+  filter(p_adjust_Control <= 0.25, p_adjust_Human <= 0.25) %>% 
+  calculate_weighted_correlation_pearson(
+    x_col = nes_Control,
+    y_col = nes_Human,
+    weight_col = weight_joint_gsea_fdr,
+    group_cols = c("pathogen", "timepoint_comparison")
+  ) 
+
+#Bind to one df
+cor_labels_nes_long_control = bind_rows(cor_labels_nes_control %>% mutate(filter = "All"), 
+                                cor_labels_nes_Mouse_control %>% mutate(filter = "Mouse"), 
+                                cor_labels_nes_Mouse_Human_control %>% mutate(filter = "Mouse and Human")) %>% 
+  #Refactor
+  mutate(pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+                               pathogen %in% c("S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c("Burn", "Trauma") ~ "Injury",
+                               TRUE ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury"))
+
+
+# Build master correlation data frame with scores and annotations
+dge_btm_nes_group_correlation_df_control = dge_btm_gsea_mean_wide %>%
+  ungroup() %>%
+  # Reorder module groups and wrap long process names for display
+  mutate(group = fct_relevel(group, c(immune_order)),
+         process = str_wrap(process, width = 15)) %>%
+  drop_na(mean_log2fc_Mouse) %>%
+  
+  # Attach the three sets of correlation labels by (pathogen, timepoint_comparison
+  inner_join(cor_labels_nes_control, by = join_by(pathogen, timepoint_comparison)) %>%
+  inner_join(cor_labels_nes_Mouse_control %>% 
+              dplyr::rename_with(
+                .fn = ~ stringr::str_c(.x, "_filter_Mouse"),
+                .cols = cor_value:cor_label
+              ), by = join_by(pathogen, timepoint_comparison)) %>%
+  inner_join(cor_labels_nes_Mouse_Human_control %>% 
+              dplyr::rename_with(
+                .fn = ~ stringr::str_c(.x, "_filter_Mouse_Human"),
+                .cols = cor_value:cor_label
+              ), by = join_by(pathogen, timepoint_comparison)) %>%
+  
+  
+  # Combine the three correlation labels into a single facet annotation
+  mutate(cor_labels_all_filtered = paste0("All: ", cor_label, ",\nM: ", cor_label_filter_Mouse, ",\nM&H: ", cor_label_filter_Mouse_Human),
+         facet_name = paste0(timepoint_comparison, "\n", cor_labels_all_filtered),
+         pathogen = fct_relevel(pathogen, "Influenza", "HepB", "S. aureus", "E. coli", "Burn", "Trauma"),
+         treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
+                               pathogen %in% c("S. aureus", "E. coli") ~ "Infection",
+                               pathogen %in% c("Burn", "Trauma") ~ "Injury",
+                               TRUE ~ pathogen),
+         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury"))
+
+dge_btm_nes_group_correlation_df_control %>% dplyr::count(pathogen, timepoint_comparison)
+
+```
+
+
+###### Heatmap of summary results
+
+```{r fig.height=3, fig.width=14}
+
+#Merge to one DF
+cor_labels_nes_long_condition_control = bind_rows(cor_labels_nes_long,
+                                                  cor_labels_nes_long_control %>% 
+                                                    mutate(timepoint_comparison = "Control"))
+
+
 # Data preparation
-correlation_long_all_btm_mouse_human_timepoints_summary_heatmap = cor_labels_nes_long %>%
-  mutate(filter = str_replace(filter, "Mouse and Human", "Mouse\nand Human")) %>% 
+correlation_long_all_btm_mouse_human_timepoints_summary_heatmap = cor_labels_nes_long_condition_control %>%
+  mutate(filter = str_replace(filter, "Mouse and Human", "Mouse\nand\nHuman"),
+         timepoint_comparison = fct_relevel(timepoint_comparison, "Control")) %>% 
   # Aesthetics
   ggplot() +
   aes(x = timepoint_comparison,
@@ -409,7 +806,7 @@ correlation_long_all_btm_mouse_human_timepoints_summary_heatmap = cor_labels_nes
             hjust = -0.5,
             size = 3)+
   # Scales
-  scale_size_continuous(range = c(2, 8)) +
+  scale_size_continuous(range = c(2, 10)) +
     scale_fill_gradientn(
     colors = c("#4DBBD5FF", "white", "#4361ee"),
     values = scales::rescale(c(-1, 0, 1)),
@@ -453,13 +850,13 @@ correlation_long_all_btm_mouse_human_timepoints_summary_heatmap
 # Save
 correlation_long_all_btm_mouse_human_timepoints_summary_heatmap %>%
   ggsave(filename = here("Figures",  "all_human_mouse_NES_btm_correlation_all_timepoints_summary_heatmap_filtered.png"),
-         width = 10,
-         height = 3)
+         width = 14,
+         height = 4)
 ```
 
 
 
-Plot correlation values as barplot
+###### Barplot of summary results
 
 ```{r fig.height=3, fig.width=6}
 # Data preparation
@@ -526,7 +923,7 @@ correlation_long_all_btm_mouse_human_timepoints_summary_barplot %>%
 ```
 
 
-Plot line plot
+######### Line plot of summary results
 ```{r fig.height=3, fig.width=10}
 
 # Data preparation
@@ -595,9 +992,7 @@ correlation_long_all_btm_mouse_human_timepoints_summary_lineplot
 #          height = 3)
 ```
 
-Plot NES correlation scatter plots between Human and Mouse, faceted by
-pathogen and timepoint, with points coloured by immune group and shaped
-by significance filter.
+###### Scatter plot
 
 ```{r fig.height=4, fig.width=10}
 
@@ -711,123 +1106,9 @@ dge_btm_nes_group_correlation_plot %>%
          height = 4)
 ```
 
-Plot correlation of ranked significance-weighted scores between Human
-and Mouse, providing a concordance view that is robust to outliers.
 
-```{r fig.height=4, fig.width=10}
 
-# Data preparation: stack filter levels
-dge_btm_nes_group_correlation_plot_score_rank =
-  bind_rows(
-    # All modules
-    dge_btm_nes_group_correlation_df %>%
-      mutate(filter = "All"),
-    # Only Mouse-significant modules
-    dge_btm_nes_group_correlation_df %>%
-      filter(p_adjust_Mouse <= 0.25, p_adjust_Human > 0.25) %>%
-      mutate(filter = "Mouse"),
-    # Both-significant modules
-    dge_btm_nes_group_correlation_df %>%
-      filter(p_adjust_Mouse <= 0.25 & p_adjust_Human <= 0.25) %>%
-      mutate(filter = "Mouse and Human"),
-  ) %>%
-  # Aesthetics
-  ggplot() +
-  aes(x = rank_Mouse,
-      y = rank_Human,
-      labels = process) +
-  # Facets
-  facet_nested_wrap(vars(pathogen, facet_name),
-                    scales = "free",
-                    nrow = 1,
-                    strip = strip_nested(size = "variable")) +
-  # Guide lines
-  geom_abline(alpha = 0.2, linetype = 2) +
-  geom_abline(alpha = 0.2, linetype = 2, slope = -1) +
-  geom_hline(yintercept = 0, alpha = 0.2, linetype = 2) +
-  geom_vline(xintercept = 0, alpha = 0.2, linetype = 2) +
-
-# All points with blur
-  with_blur(
-    geom_point(aes(fill = group,
-                 color = group,
-                 shape = filter),
-                 data = . %>% filter(filter == c("All")),
-             size = 1.5,
-             alpha = 0.2,
-    sigma = 2)
-    ) +
-   # Mouse-only significant points
-  geom_point(aes(fill = group,
-                 shape = filter,
-                 color = group),
-             data = . %>% filter(filter == c("Mouse")),
-             size = 2,
-             stroke = 0.1,
-             alpha = 1
-             ) +
-  # Both-significant points
-  geom_point(aes(fill = group,
-                 shape = filter),
-             color = "black",
-             data = . %>% filter(filter == c("Mouse and Human")),
-             size = 2,
-             stroke = 0.1,
-             alpha = 1
-             ) +
-  # Scales
-  scale_shape_manual(values = c(21, 22, 24)) +
-  scale_fill_manual(values = immune_colors) +
-  scale_color_manual(values = immune_colors) +
-  # Guides
-  guides(color = FALSE,
-         fill = guide_legend(byrow = TRUE, nrow = 3,
-                           keywidth = unit(0.3, "cm"),
-                           keyheight = unit(0.3, "cm"),
-                           override.aes = list(size = 3, shape = 21, color = "black"),
-                           default.unit = "cm"),
-         shape = guide_legend(byrow = TRUE,
-                              nrow = 3,
-                             keywidth = unit(0.3, "cm"),
-                           keyheight = unit(0.3, "cm"),
-                          override.aes = list(size = 3),
-                           default.unit = "cm")) +
-  # Labels
-  labs(fill = "Group",
-       shape = "Significance",
-       y = "Human (Ranked score)",
-       x = "Model (Ranked score)") +
-  # Theme
-  theme_vaxgo() +
-  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 10),
-        axis.title.x = element_text(size = 10),
-        axis.text.y = element_text(size = 10),
-        axis.title.y = element_text(size = 10),
-        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5),
-        strip.text.x = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
-        legend.position = "top",
-        legend.direction = "horizontal",
-        legend.text = element_text(size = 10, hjust = 0),
-        legend.title = element_text(size = 10),
-        legend.spacing.x = unit(0, "cm"),
-        legend.spacing.y = unit(0, "cm"),
-        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1),
-        legend.box.spacing = unit(0, "cm"),
-        panel.spacing = unit(0, "lines"),
-        plot.margin = margin(0, 0, 0, 0, unit = "cm"))
-
-# Render plot
-dge_btm_nes_group_correlation_plot_score_rank
-
-# Save plot
-dge_btm_nes_group_correlation_plot_score_rank %>%
-  ggsave(filename = here("Figures", "all_human_mouse_dge_btm_nes_group_correlation_plot_scores_rank_filtered.png"),
-         width = 10,
-         height = 4)
-```
-
-Compute precision by Mouse NES quartiles to assess whether modules with
-higher activation in the model show greater concordance in Human.
+###### Do modules with higher activation in the model show greater concordance in Human?
 
 ```{r fig.height=3, fig.width=10}
 # Precision analysis by Mouse NES quartiles
@@ -835,7 +1116,7 @@ higher activation in the model show greater concordance in Human.
 # Compute precision per quartile
 results_quartiles = dge_btm_nes_group_correlation_df %>%
   # Retain only all-module filter; exclude pathogens with few timepoints
-  filter(!pathogen %in% c("Influenza", "Hepatitis B")) %>%
+  # filter(!pathogen %in% c("Influenza", "Hepatitis B")) %>%
   # Stratify by pathogen and timepoint
   group_by(pathogen, timepoint_comparison) %>%
   # Restrict to positively enriched modules only
@@ -920,11 +1201,11 @@ safe_cor_test <- function(x, y, method) {
 # Compute per-BTM Spearman correlation
 dge_btm_process_genes_correlation <- dge_btm_process_genes_wide %>%
   # Group by BTM, pathogen, and timepoint
-  group_by(pathogen, timepoint, process) %>%
+  group_by(pathogen, timepoint_comparison, process) %>%
   # Compute correlation and count genes
   summarise(
     n_genes = n(),
-    test_result = list(safe_cor_test(x = Human, y = Mouse, method = "spearman")),
+    test_result = list(safe_cor_test(x = mean_l2fc_Mouse, y = mean_l2fc_Human, method = "spearman")),
     .groups = "drop"
   ) %>%
   # Extract correlation estimate and p-value
@@ -945,12 +1226,12 @@ dge_btm_process_genes_correlation <- dge_btm_process_genes_wide %>%
   ) %>%
   # Remove nested column and organise
   select(-test_result) %>%
-  arrange(timepoint) %>%
+  arrange(timepoint_comparison) %>%
   distinct()
 
 # Inspect and save per-BTM correlation
 dge_btm_process_genes_correlation %>%
-  dplyr::count(pathogen, timepoint)
+  dplyr::count(pathogen, timepoint_comparison)
 
 dge_btm_process_genes_correlation %>%
   saveRDS(file = here("tables", "all_human_mouse_dge_btm_process_genes_correlation.rds"))
@@ -958,14 +1239,14 @@ dge_btm_process_genes_correlation %>%
 # Compute per-gene Spearman correlation across conditions
 dge_btm_process_genes_correlation_bygene <- dge_btm_process_genes_wide %>%
   # Select relevant columns; exclude Influenza and Hepatitis B
-  select(symbol, pathogen, timepoint, Mouse, Human) %>%
+  select(symbol, pathogen, timepoint_comparison, Mouse = mean_l2fc_Mouse, Human = mean_l2fc_Human) %>%
   filter(!pathogen %in% c("Influenza", "Hepatitis B")) %>%
   distinct() %>%
   # Group by gene symbol
   group_by(symbol) %>%
   summarise(
     n_pathogens = n(),
-    test_result = list(safe_cor_test(x = Human, y = Mouse, method = "spearman")),
+      test_result = list(safe_cor_test(x = Human, y = Mouse, method = "spearman")),
     .groups = "drop"
   ) %>%
   # Extract correlation estimate and p-value
@@ -1006,7 +1287,7 @@ correlation_processes_bypathogen_time_df <- dge_btm_process_genes_correlation %>
   # Remove missing correlations
   drop_na(cor_value) %>%
   # Group by pathogen and timepoint
-  group_by(pathogen, timepoint) %>%
+  group_by(pathogen, timepoint_comparison) %>%
   # Rank within each stratum by descending absolute correlation
   arrange(process, -abs(cor_value)) %>%
   distinct() %>%
@@ -1025,14 +1306,14 @@ Visualise the distribution of per-BTM Spearman correlations across
 timepoints and pathogens with a violin-boxplot, annotating the top
 positively and negatively correlated processes.
 
-```{r fig.height = 10, fig.width=16}
+```{r fig.height = 5, fig.width=12}
 # Select extreme processes for labelling
 selected_processes_df = bind_rows(
     # Top positive correlations
     correlation_processes_bypathogen_time_df %>%
       filter(p_value <= 0.05,
              cor_value > 0) %>%
-      group_by(pathogen, timepoint) %>%
+      group_by(pathogen, timepoint_comparison) %>%
       filter(n_genes > 3) %>%
       arrange(-cor_value, -n_genes) %>%
       slice_head(n = 2),
@@ -1040,7 +1321,7 @@ selected_processes_df = bind_rows(
     correlation_processes_bypathogen_time_df %>%
       filter(p_value <= 0.05,
              cor_value < 0) %>%
-      group_by(pathogen, timepoint) %>%
+      group_by(pathogen, timepoint_comparison) %>%
       filter(n_genes > 3) %>%
       arrange(cor_value, -n_genes) %>%
       slice_head(n = 2),
@@ -1048,7 +1329,7 @@ selected_processes_df = bind_rows(
     correlation_processes_bypathogen_time_df %>%
       filter(p_value <= 0.05,
              cor_value > 0) %>%
-      group_by(pathogen, timepoint) %>%
+      group_by(pathogen, timepoint_comparison) %>%
       filter(n_genes > 3) %>%
       arrange(cor_value, -n_genes) %>%
       slice_head(n = 2),
@@ -1056,7 +1337,7 @@ selected_processes_df = bind_rows(
     correlation_processes_bypathogen_time_df %>%
       filter(p_value <= 0.05,
              cor_value < 0) %>%
-      group_by(pathogen, timepoint) %>%
+      group_by(pathogen, timepoint_comparison) %>%
       filter(n_genes > 3) %>%
       arrange(cor_value, -n_genes) %>%
       slice_head(n = 2)
@@ -1066,12 +1347,12 @@ selected_processes_df = bind_rows(
 correlation_processes_bypathogen_time = correlation_processes_bypathogen_time_df %>%
   # Aesthetics
   ggplot() +
-  aes(x = timepoint,
+  aes(x = timepoint_comparison,
       y = cor_value,
-      fill = timepoint,
-      color = timepoint) +
+      fill = pathogen,
+      color = pathogen) +
   # Facets
-  facet_nested_wrap(~pathogen, scales = "free_x") +
+  facet_nested_wrap(~pathogen, scales = "free_x", nrow = 1) +
   # Geoms: background violin for all data
   geom_violin(color = NA,
               fill = "black",
@@ -1094,7 +1375,7 @@ correlation_processes_bypathogen_time = correlation_processes_bypathogen_time_df
   # Repel labels for extreme processes
   geom_text_repel(aes(label = process),
                   max.overlaps = 10000,
-                  size = 2,
+                  size = 3,
                   nudge_x = 0.2,
                   hjust = 0,
                   color = "black",
@@ -1118,7 +1399,7 @@ correlation_processes_bypathogen_time = correlation_processes_bypathogen_time_df
   scale_x_discrete(expand = c(0.05, 0.05)) +
   scale_y_continuous(expand = c(0.01, 0.01),
                      limits = c(-1, 1)) +
-  scale_fill_manual(values = colors$timepoint) +
+  scale_fill_manual(values = colors$pathogen) +
   # Theme
   theme_vaxgo() +
   theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1, size = 10),
@@ -1142,8 +1423,8 @@ correlation_processes_bypathogen_time
 # Save plot
 correlation_processes_bypathogen_time %>%
   ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_intramodule_correlation_violinplot_labeled.png"),
-         width = 16,
-         height = 10)
+         width = 12,
+         height = 5)
 ```
 
 Display a heatmap of the significant per-BTM Spearman correlations, with
@@ -1155,18 +1436,18 @@ correlation.
 btm_correlation_process_heatmap_df =
   correlation_processes_bypathogen_time_df %>%
   # Retain only significant correlations
-  filter(p_value <= 0.05) %>%
+  # filter(p_value <= 0.05) %>%
   mutate(
     # Reorder processes by mean correlation
     process = fct_reorder(process, cor_value, .fun = mean),
-    timepoint = as.factor(timepoint),
+    timepoint = as.factor(timepoint_comparison),
     group = fct_relevel(group, immune_order)
   )
 
 # Build heatmap
 btm_correlation_process_heatmap = btm_correlation_process_heatmap_df %>%
   # Aesthetics
-  ggplot(aes(x = timepoint, y = process, fill = cor_value)) +
+  ggplot(aes(x = timepoint_comparison, y = process, fill = cor_value)) +
   # Facets by functional group and pathogen
   facet_grid(
     rows = vars(group),
@@ -1188,7 +1469,7 @@ btm_correlation_process_heatmap = btm_correlation_process_heatmap_df %>%
   labs(
     x = "",
     y = "",
-    title = paste0("BTM immune – intramodule correlation (", filename, ")")
+    title = paste0("BTM immune – intramodule correlation")
   ) +
   # Theme
   theme_vaxgo() +

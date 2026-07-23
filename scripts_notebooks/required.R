@@ -160,8 +160,9 @@ colors = list(organism = c("FIT" = "#4361ee",
                        "V-I" = "#ffadc7"),
               pathogen = c("Influenza" = "#4cc9f0",
                            "Hepatitis B" = "#a2d2ff",
-                           "Saureus" = "#669bbc",
-                           "Ecoli" = "#669bbc",
+                           "HepB" = "#a2d2ff",
+                           "S. aureus" = "#669bbc",
+                           "E. coli" = "#669bbc",
                            "Trauma" = "#3C5488FF",
                            "Burn" = "#184e77"))
 
