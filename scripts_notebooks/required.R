@@ -653,6 +653,17 @@ calculate_weighted_correlation_spearman <- function(data,
         p_adj <= 0.10   ~ "*",
         TRUE            ~ "ns"
       )
+    ) %>% 
+    mutate(
+      # Consolidated text label for plot annotations
+      cor_label = dplyr::if_else(
+        !is.na(cor_value),
+        stringr::str_c(
+          "r=", round(cor_value, 2),
+          p_label, ", n=", n_obs
+        ),
+        "NA"
+      )
     )
 }
 
@@ -744,6 +755,18 @@ calculate_weighted_correlation_pearson <- function(data,
         p_adj <= 0.05   ~ "**",
         p_adj <= 0.10   ~ "*",
         TRUE            ~ "ns"
+      )
+    ) %>% 
+    mutate(
+      # Consolidated text label for plot annotations
+      cor_label = dplyr::if_else(
+        !is.na(cor_value),
+        stringr::str_c(
+          "r=", round(cor_value, 2),
+          ", R²=", round(r_squared, 2),
+          p_label, ", n=", n_obs
+        ),
+        "NA"
       )
     )
 }
