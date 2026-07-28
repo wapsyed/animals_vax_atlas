@@ -22,9 +22,15 @@ gsea_btm_results_core_joined =
   readRDS(file = here("tables", "all_human_mouse_gsea_btm_results_core_joined.rds")) %>%
   distinct()
 
+#Import modules and LEGs
+dge_btm_process_module_correlation_and_legs = 
+  readRDS(file = here("tables", "all_human_mouse_gsea_btm_legs.rds"))
+
 # Import BTM gene-level correlation data
 dge_btm_process_genes_correlation_bygene =
   readRDS(file = here("tables", "all_human_mouse_dge_btm_process_genes_correlation_bygene.rds"))
+
+
 
 # Import homolog alignment data
 all_alignments = read_csv(here("tables", "human_to_mouse_alignment_mart_export.txt"))
@@ -33,27 +39,7 @@ all_alignments = read_csv(here("tables", "human_to_mouse_alignment_mart_export.t
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
 
 # Annotate genes with sequence identity and BTM membership
-# Build alignment-annotated dataset for core enrichment genes
-alignments_human2mouse = all_alignments %>%
-  # Clean column names
-  clean_names() %>%
-  # Keep only high-confidence orthologs
-  filter(mouse_orthology_confidence_0_low_1_high == 1) %>%
-  # Remove rows without mouse gene names
-  drop_na(mouse_gene_name) %>%
-  # Select identity, homology type, and gene name columns
-  select(gene = mouse_gene_name, mouse_homology_type,
-         identity_human2mouse = percent_id_query_gene_identical_to_target_mouse_gene,
-         identity_mouse2human = percent_id_target_mouse_gene_identical_to_query_gene) %>%
-  # Standardize gene names to uppercase
-  mutate(gene = str_to_upper(gene)) %>%
-  # Resolve multiple identity scores by taking the median per gene
-  group_by(gene) %>%
-  summarise(identity_human2mouse = median(identity_human2mouse)) %>%
-  ungroup() %>%
-  # Filter to only BTM core enrichment genes and append process membership
-  inner_join(gsea_btm_results_core_joined,
-             by = join_by(gene))
+# Build alignment-annotated dataset for core enrichment gene
 
 # Reference: all high-confidence orthologs in the database (unfiltered)
 alignments_human2mouse_all = all_alignments %>%
@@ -68,6 +54,19 @@ alignments_human2mouse_all = all_alignments %>%
   group_by(gene) %>%
   summarise(identity_human2mouse = median(identity_human2mouse)) %>%
   ungroup()
+
+# Filter to only BTM core enrichment genes and append process membership
+alignments_human2mouse = alignments_human2mouse_all %>% 
+  inner_join(dge_btm_process_module_correlation_and_legs,
+             by = join_by(gene == symbol))  %>% 
+  mutate(status = if_else(status == "Shared", status, "Not-shared"))
+
+#Group by process
+protein_identity_process = alignments_human2mouse %>% 
+  group_by(treatment, pathogen, timepoint_comparison, process, status) %>% 
+  summarise(facet_label = dplyr::first(facet_label), group = dplyr::first(group),
+            mean_identity = mean(identity_human2mouse, na.rm = T))
+
 
 # Commented out: biomaRt gene info retrieval (pre-computed and imported below)
 # human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
@@ -88,12 +87,238 @@ gene_info_human =
 
 Plot correlation distribution by gene
 
-```{r}
-dge_btm_process_genes_correlation_bygene %>% 
-  ggplot() +
-  aes(x = cor_value) +
-  geom_density() 
+
+```{r fig.height=3, fig.width=8}
+
+protein_identity_genes_distribution = alignments_human2mouse %>% 
+  mutate(status = if_else(status == "Shared", status, "Not-shared")) %>% 
+  ggplot(aes(x = status, y = identity_human2mouse)) +
+  
+  # Faceting and Axis Scaling
+  facet_nested_wrap(
+    ~treatment + pathogen + timepoint_comparison,
+    nrow = 1,
+    scales = "free",
+    strip = strip_nested(size = "variable")
+  ) +
+  
+    # 1. First layer: Boxplot filled by STATUS
+  geom_boxplot(aes(fill = status), outlier.shape = NA, alpha = 0.6) +
+  scale_fill_manual(
+    name = "Status",
+    values = colors$comparison
+  ) +
+  
+  scale_x_discrete(expand = expansion(mult = c(0.2, 0.2))) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05)),
+                     limits = c(50, 110)) +
+  
+  # Labels (Corrected X and Y axis mappings)
+  labs(
+    x = "Status",
+    y = "% Identity"
+  ) +
+  
+  # Theme and Legend Styling
+  theme_vaxgo() +
+  theme(
+    axis.text = element_text(size = 10),
+    strip.text = element_text(size = 10, hjust = 0),
+    panel.spacing = unit(1, "cm"),
+    legend.position = "top",
+    legend.box = "vertical",
+    legend.text = element_text(size = 10),
+    ggh4x.facet.nestline = element_line(colour = "black")
+  ) +
+  stat_compare_means(
+    mapping = aes(group = status),
+    comparisons = list(c("Shared", "Not-shared")),
+    method = "wilcox.test",
+    label = "p.format",
+    label.y = 102, size = 3
+  )
+
+
+protein_identity_genes_distribution
 ```
+
+
+
+```{r fig.height=4, fig.width=8}
+#Plot genes by process
+process_selected <- "immune activation - generic cluster"
+
+protein_identity_genes_distribution_selectedprocess = alignments_human2mouse %>% 
+  mutate(status = if_else(status == "Shared", status, "Not-shared")) %>% 
+  filter(process == process_selected) %>% 
+  ggplot(aes(x = status, y = identity_human2mouse)) +
+  
+  # Faceting and Axis Scaling
+  facet_nested_wrap(
+    ~process+treatment + pathogen + timepoint_comparison,
+    nrow = 1,
+    scales = "free",
+    strip = strip_nested(size = "variable")
+  ) +
+  
+    # 1. First layer: Boxplot filled by STATUS
+  geom_boxplot(aes(fill = status), outlier.shape = NA, alpha = 0.6) +
+  scale_fill_manual(
+    name = "Status",
+    values = colors$comparison
+  ) +
+  
+  scale_x_discrete(expand = expansion(mult = c(0.2, 0.2))) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05)),
+                     limits = c(50, 110)) +
+  
+  # Labels (Corrected X and Y axis mappings)
+  labs(
+    x = "Status",
+    y = "% Identity"
+  ) +
+  
+  # Theme and Legend Styling
+  theme_vaxgo() +
+  theme(
+    axis.text = element_text(size = 10),
+    strip.text = element_text(size = 10, hjust = 0),
+    panel.spacing = unit(1, "cm"),
+    legend.position = "top",
+    legend.box = "vertical",
+    legend.text = element_text(size = 10),
+    ggh4x.facet.nestline = element_line(colour = "black")
+  ) +
+  stat_compare_means(
+    mapping = aes(group = status),
+    comparisons = list(c("Shared", "Not-shared")),
+    method = "wilcox.test",
+    label = "p.format",
+    label.y = 102, size = 3
+  )
+
+protein_identity_genes_distribution_selectedprocess
+```
+
+```{r fig.width=8, fig.height= 4}
+protein_identity_process_distribution = protein_identity_process %>% 
+  ggplot(aes(x = status, y = mean_identity)) +
+  
+  # Faceting and Axis Scaling
+  facet_nested_wrap(
+    ~treatment + pathogen + timepoint_comparison,
+    nrow = 1,
+    scales = "fixed",
+    strip = strip_nested(size = "variable")
+  ) +
+  
+    # 1. First layer: Boxplot filled by STATUS
+  geom_boxplot(aes(fill = status), outlier.shape = NA, alpha = 0.6) +
+  scale_fill_manual(
+    name = "Status",
+    values = colors$comparison
+  ) +
+    
+  # 3. Second layer: Beeswarm points filled by GROUP
+  new_scale_fill() +
+  geom_jitter(
+    aes(fill = group,
+        # group = group
+        ),
+    pch = 21,
+    color = "black",
+    size = 2, position = position_dodge2(width = 0.3)
+    # cex = 5 # Adjusts horizontal point spacing
+  ) +
+  scale_fill_manual(
+    name = "Immune Group",
+    values = btm_immune_groups$group # Named vector/list with your group colors
+  ) +
+  
+  scale_x_discrete(expand = c(0.2, 0.2)) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05)),
+                     limits = c(50, 110)) +
+  
+  # Labels (Corrected X and Y axis mappings)
+  labs(
+    x = "Status",
+    y = "% Identity",
+    fill = "Group"
+  ) +
+  
+  # Theme and Legend Styling
+  theme_vaxgo() +
+  theme(
+    axis.text = element_text(size = 10),
+    strip.text = element_text(size = 10, hjust = 0),
+    panel.spacing = unit(1, "cm"),
+    legend.position = "top",
+    legend.box = "vertical",
+    legend.text = element_text(size = 10),
+    ggh4x.facet.nestline = element_line(colour = "black")
+  )
+
+protein_identity_process_distribution +
+  stat_compare_means(
+    mapping = aes(group = status),
+    comparisons = list(c("Shared", "Not-shared")),
+    method = "wilcox.test",
+    label = "p.format",
+    label.y = 102, size = 3
+  )
+```
+
+
+```{r fig.width=8, fig.height= 4}
+# NON-PARAMETRIC TEST (Wilcoxon) + EFFECT SIZE (r)
+# Calculate Wilcoxon test + manual r effect size
+# 1. Run the Wilcoxon test
+stat_test <- protein_identity_process %>%
+  group_by(treatment, pathogen, timepoint_comparison) %>%
+  wilcox_test(mean_identity ~ status) %>%
+  add_significance()
+
+# 2. Calculate the Effect Size (r)
+eff_size <- protein_identity_process %>%
+  group_by(treatment, pathogen, timepoint_comparison) %>%
+  wilcox_effsize(mean_identity ~ status)
+
+# 3. Combine both results and create the custom label
+stat_test_group <- stat_test %>%
+  left_join(
+    eff_size %>% select(treatment, pathogen, timepoint_comparison, effsize, magnitude),
+    by = c("treatment", "pathogen", "timepoint_comparison")
+  ) %>%
+  mutate(
+    label_custom = paste0(p.signif, " (r = ", round(effsize, 2), ")")
+  )
+
+# NON-PARAMETRIC TEST (Wilcoxon) + EFFECT SIZE (r)
+# Calculate Wilcoxon test + manual r effect size
+# 1. Run the Wilcoxon test
+stat_test <- protein_identity_process %>%
+  group_by(treatment, pathogen, timepoint_comparison) %>%
+  wilcox_test(mean_identity ~ status) %>%
+  add_significance()
+
+# 2. Calculate the Effect Size (r)
+eff_size <- protein_identity_process %>%
+  group_by(treatment, pathogen, timepoint_comparison) %>%
+  wilcox_effsize(mean_identity ~ status)
+
+# 3. Combine both results and create the custom label
+stat_test_group <- stat_test %>%
+  left_join(
+    eff_size %>% select(treatment, pathogen, timepoint_comparison, effsize, magnitude),
+    by = c("treatment", "pathogen", "timepoint_comparison")
+  ) %>%
+  mutate(
+    label_custom = paste0(p.signif, " (r = ", round(effsize, 2), ")")
+  )
+
+
+```
+
 
 Integrate sequence identity with cross-species gene correlation,
 organized by functional hierarchy. This prepares data for comparing
