@@ -203,19 +203,27 @@ btm_immune_groups = list(group = c("SIGNAL TRANSDUCTION" = "#708d81",
                                       "T CELLS" = "#f72585",
                                       "PLASMA CELLS" = "#ffafcc"))
 
+colors_genesets = list(immune_colors = c("SIGNAL TRANSDUCTION" = "#CA6702",
+                                         "CELL CYCLE" = "#9B2226",
+                                         "ECM AND MIGRATION" = "#d08c60",
+                                         "ENERGY METABOLISM" = "#ffc300", 
+                                         "PLATELETS" = "#a4b75c",
+                                         "INNATE RESPONSE" = "#3D405B",
+                                         "NEUTROPHILS" = "#90A4AEFF",
+                                         "NK CELLS" = "#001219",
+                                         "IFN"= "gray80",
+                                         "MONOCYTES" = "#8491B4FF",
+                                         "B CELLS" = "#4cc9f0",
+                                         "T CELLS" = "#4361ee"),
+                       hallmarks_colors = c("Immune Response" = "#4cc9f0",
+                                            "Apoptosis and Hormonal Response" = "#06d6a0",
+                                            "Differentiation and Cell Structure" = "gray80",
+                                            "Metabolism"  = "#4361ee", 
+                                            "Proliferation and Repair" = "#001219",
+                                            "Signaling and Stress Response"   = "#0A9396")
+                       )
 
-immune_colors = c("SIGNAL TRANSDUCTION" = "#CA6702",
-                  "CELL CYCLE" = "#9B2226",
-                  "ECM AND MIGRATION" = "#d08c60",
-                  "ENERGY METABOLISM" = "#ffc300", 
-                  "PLATELETS" = "#a4b75c",
-                  "INNATE RESPONSE" = "#3D405B",
-                  "NEUTROPHILS" = "#90A4AEFF",
-                  "NK CELLS" = "#001219",
-                  "IFN"= "gray80",
-                  "MONOCYTES" = "#8491B4FF",
-                  "B CELLS" = "#4cc9f0",
-                  "T CELLS" = "#4361ee")
+
 
 immune_order = c("SIGNAL TRANSDUCTION",
                  "CELL CYCLE",
@@ -231,42 +239,38 @@ immune_order = c("SIGNAL TRANSDUCTION",
                  "T CELLS")
 
 
-hallmarks_colors = c("Immune Response" = "#4cc9f0",
-                     "Apoptosis and Hormonal Response" = "#06d6a0",
-                     "Differentiation and Cell Structure" = "gray80",
-                     "Metabolism"  = "#4361ee", 
-                     "Proliferation and Repair" = "#001219",
-                     "Signaling and Stress Response"   = "#0A9396")
 
-colors_all <- c(
-  "#4361ee",
-  "#4DBBD5FF",
-  "#90A4AEFF",
-  "#06d6a0",
-  "#46eec6",
-  "#175289",
-  "#caf0f8",
-  "#4cc9f0",
-  "#669bbc",
-  "purple",
-  "#7014cc",
-  "#cd61a1",
-  "gray80",
+
+colors_all <- list(
+  #Blues
+  blues = c(
+    "#4361ee",
+    "#4DBBD5FF",
+    "#90A4AEFF",
+    "#06d6a0",
+    "#46eec6",
+    "#175289",
+    "#caf0f8",
+    "#4cc9f0",
+    "#669bbc",
+    "purple",
+    "#7014cc",
+    "#cd61a1",
+    "gray80"
+  ),
   #Neutral harmony bliss
-  "#F4F1DE",
-  "#E07A5F",
-  "#3D405B",
-  "#81B29A",
-  "#F2CC8F",
+  neutral_harmony = c("#F4F1DE", "#E07A5F", "#3D405B", "#81B29A", "#F2CC8F"),
   
   #Ocean sunset
-  "#001219",
-  "#005F73",
-  "#0A9396",
-  "#94D2BD",
-  "#CA6702",
-  "#AE2012",
-  "#9B2226"
+  ocean_sunset = c(
+    "#001219",
+    "#005F73",
+    "#0A9396",
+    "#94D2BD",
+    "#CA6702",
+    "#AE2012",
+    "#9B2226"
+  )
 )
 
 
@@ -280,40 +284,46 @@ colors_all <- c(
 
 # Aesthetics -----
 #Custom theme
-theme_vaxgo = function(){
-  theme_minimal() +
-    theme(
-      legend.position = "right",
-      plot.caption = element_text(hjust = 0, size = 5),
-      axis.text.x = element_text(size = 10,
-                                 color = "black",
-                                 angle = 0),
-      axis.text.y = element_text(size = 10,
-                                 color = "black",
-                                 angle = 0), 
-      strip.text = element_text(size = 10, color = "black"),
-      legend.text = element_text(size = 10),
-      legend.title = element_text(size = 12),
-      plot.title = element_text(size = 10),
-      plot.subtitle = element_text(size = 8),
-      axis.title.y = element_text(color = "black"),
-      panel.border = element_blank(),
-      panel.grid.major.y  = element_blank(),
-      panel.grid.major.x = element_blank(),
-      legend.key.width = unit(0.4, 'cm'),
-      legend.key.height = unit(0.4, 'cm'),
-      axis.line.x = element_line(size = 0.5,
-                                 colour = "black",
-                                 linetype = 1),
-      axis.line.y = element_line(size = 0.5 ,
-                                 colour = "black",
-                                 linetype = 1),
-      axis.ticks.x = element_line(size = 0.5, color = "black"),
-      axis.ticks.y = element_line(size = 0.5, color = "black"),
-      panel.grid.minor = element_blank(),
-      plot.margin = margin(0.1, 0.1, 0.1, 0.1, "cm"),
-      ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
-    )}
+theme_vaxgo <- function() {
+  ggplot2::theme_minimal() +
+    ggplot2::theme(
+      # Geral
+      ggh4x.facet.nestline = ggplot2::element_line(colour = "black", linetype = 1),
+      
+      # Axis
+      axis.text            = ggplot2::element_text(size = 10),
+      axis.text.x          = ggplot2::element_text(size = 10, color = "black", angle = 0),
+      axis.text.y          = ggplot2::element_text(size = 10, color = "black", angle = 0),
+      axis.title.y         = ggplot2::element_text(color = "black"),
+      axis.line.x          = ggplot2::element_line(linewidth = 0.5, colour = "black", linetype = 1),
+      axis.line.y          = ggplot2::element_line(linewidth = 0.5, colour = "black", linetype = 1),
+      axis.ticks.x         = ggplot2::element_line(linewidth = 0.5, color = "black"),
+      axis.ticks.y         = ggplot2::element_line(linewidth = 0.5, color = "black"),
+      
+      # Legend
+      legend.position      = "right",
+      legend.text          = ggplot2::element_text(size = 10),
+      legend.title         = ggplot2::element_text(size = 10),
+      legend.key.width     = grid::unit(0.4, "cm"),
+      legend.key.height    = grid::unit(0.4, "cm"),
+      
+      # Panel
+      panel.border         = ggplot2::element_blank(),
+      panel.grid.major.x   = ggplot2::element_blank(),
+      panel.grid.major.y   = ggplot2::element_blank(),
+      panel.grid.minor     = ggplot2::element_blank(),
+      panel.spacing        = grid::unit(0.2, "cm"),
+      
+      # Strip
+      strip.text           = ggplot2::element_text(size = 10, color = "black"),
+      
+      # Plot
+      plot.title           = ggplot2::element_text(size = 10),
+      plot.subtitle        = ggplot2::element_text(size = 8),
+      plot.caption         = ggplot2::element_text(hjust = 0, size = 5),
+      plot.margin          = ggplot2::margin(0.1, 0.1, 0.1, 0.1, "cm")
+    )
+}
 
 
 

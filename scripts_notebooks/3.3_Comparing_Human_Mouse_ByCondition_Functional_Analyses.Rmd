@@ -428,8 +428,8 @@ dge_btm_mean_group_correlation_plot <- dge_btm_mean_group_correlation_df %>%
 
   # Scales
   scale_shape_manual(values = c(21, 22, 24)) +
-  scale_fill_manual(values = immune_colors) +
-  scale_color_manual(values = immune_colors) +
+  scale_fill_manual(values = colors_genesets$immune_colors) +
+  scale_color_manual(values = colors_genesets$immune_colors) +
   guides(color = FALSE,
          fill = guide_legend(byrow = TRUE, nrow = 3,
                              keywidth = unit(0.3, "cm"),
@@ -544,8 +544,8 @@ dge_btm_mean_group_correlation_plot_control <- dge_btm_mean_group_correlation_df
 
   # Scales
   scale_shape_manual(values = c(21, 22, 24)) +
-  scale_fill_manual(values = immune_colors) +
-  scale_color_manual(values = immune_colors) +
+  scale_fill_manual(values = colors_genesets$immune_colors) +
+  scale_color_manual(values = colors_genesets$immune_colors) +
   guides(color = FALSE,
          fill = guide_legend(byrow = TRUE, nrow = 3,
                              keywidth = unit(0.3, "cm"),
@@ -1058,8 +1058,8 @@ dge_btm_nes_group_correlation_plot =
              ) +
   # Scales
   scale_shape_manual(values = c(21, 22, 24)) +
-  scale_fill_manual(values = immune_colors) +
-  scale_color_manual(values = immune_colors) +
+  scale_fill_manual(values = colors_genesets$immune_colors) +
+  scale_color_manual(values = colors_genesets$immune_colors) +
   # Guides
   guides(color = FALSE,
          fill = guide_legend(byrow = TRUE, nrow = 3,
@@ -1530,26 +1530,38 @@ stratified by status, process, pathogen, and timepoint.
 
 ```{r fig.height = 12, fig.width=4}
 # Compute percentage of LEGs per status and stratum
-legs_perc = gsea_btm_results_core_joined %>%
-  distinct() %>%
+legs_perc <- gsea_btm_results_core_joined %>%
+  dplyr::distinct() %>%
   # Count genes per status within each process stratum
-  group_by(pathogen, timepoint_comparison, process, status) %>%
-  summarise(n = n(), .groups = "drop_last") %>%
-  mutate(percent = (n / sum(n)) * 100,
-         ntotal = sum(n),
-         percent = percent %>% round(0)) %>%
-  ungroup() %>% 
-  #Refactor
-  mutate(
-    treatment = case_when(
-      pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
-      pathogen %in% c("S. aureus", "E. coli")         ~ "Infection",
-      pathogen %in% c("Burn", "Trauma")           ~ "Injury",
-      TRUE                                        ~ pathogen
+  dplyr::group_by(pathogen, timepoint_comparison, process, status) %>%
+  dplyr::summarise(n = dplyr::n(), .groups = "drop_last",
+                   group = dplyr::first(group)) %>%
+  # Calculate overall metrics and Mouse-specific denominator
+  dplyr::mutate(
+    #All in the denominator
+    percent       = (n / sum(n)) * 100,
+    ntotal        = sum(n),
+    percent       = round(percent, 0),
+    #Mouse total LEGs in the denominator
+    n_mouse_total = sum(n[status %in% c("Mouse only", "Shared")]),
+    percent_mouse = dplyr::case_when(
+      status %in% c("Mouse only", "Shared") & n_mouse_total > 0 ~ (n / n_mouse_total) * 100,
+      TRUE                                                     ~ NA_real_
     ),
-    treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
+    percent_mouse = round(percent_mouse, 0)
   ) %>%
-  arrange(timepoint_comparison)
+  dplyr::ungroup() %>%
+  # Refactor treatment categories and set explicit factor order
+  dplyr::mutate(
+    treatment = dplyr::case_when(
+      pathogen %in% c("HepB", "Influenza")     ~ "Vaccination",
+      pathogen %in% c("S. aureus", "E. coli")  ~ "Infection",
+      pathogen %in% c("Burn", "Trauma")        ~ "Injury",
+      TRUE                                     ~ pathogen
+    ),
+    treatment = stats::relevel(factor(treatment), "Vaccination")
+  ) %>%
+  dplyr::arrange(timepoint_comparison)
 
 # Save summary table
 legs_perc %>%
@@ -1558,9 +1570,12 @@ legs_perc %>%
 # Report mean and median shared percentage per pathogen
 legs_perc %>%
   filter(status == "Shared") %>%
-  group_by(pathogen, status) %>%
-  summarise(mean_perc = mean(percent),
-            median_perc = median(percent))
+  # group_by(pathogen) %>%
+  summarise(
+            # mean_perc = mean(percent),
+            median_perc = median(percent),
+            # mean_perc_mouse = mean(percent_mouse),
+            median_perc_mouse = median(percent_mouse))
 
 ```
 
@@ -1586,74 +1601,70 @@ shared_perc_plot_df = legs_perc %>%
     # timepoint = fct_relevel(timepoint, c("Early hours", "2h", "4h", "6h", "12h", "24h", "Day 1", "Day 3", "Day 7"))
   )
 
+#Labels
+top_bottom_shared_modules <- dplyr::bind_rows(
+  # Extract top 5 process modules per pathogen and timepoint
+  shared_perc_plot_df %>%
+    dplyr::group_by(pathogen, timepoint_comparison) %>%
+    dplyr::arrange(-percent_mouse, -ntotal) %>%
+    dplyr::slice_head(n = 2),
+  # Extract bottom 5 process modules per pathogen and timepoint
+  shared_perc_plot_df %>%
+    dplyr::group_by(pathogen, timepoint_comparison) %>%
+    dplyr::arrange(percent_mouse, -ntotal) %>%
+    dplyr::slice_head(n = 2)
+) %>%
+  # Apply text wrapping and assign randomized direction (-1 = left, 1 = right)
+  dplyr::mutate(
+    process = stringr::str_wrap(process, width = 10),
+    side    = sample(c(-1, 1), size = dplyr::n(), replace = TRUE),
+    nudge_x = side * 0.2,
+    hjust   = dplyr::if_else(side == 1, 0, 1)
+  )
+
+
 # Violin-boxplot of shared percentage
 shared_processes_bypathogen_time = shared_perc_plot_df %>%
   # Aesthetics
   ggplot() +
   aes(x = timepoint_comparison,
-      y = percent,
-      fill = timepoint_comparison,
-      color = timepoint_comparison) +
+      y = percent_mouse,
+      fill = pathogen,
+      color = pathogen) +
   # Facets
-  facet_grid(~treatment + pathogen,
-             scales = "free_x",
-             space = "free_x") +
+  facet_nested_wrap(~treatment + pathogen,
+             scales = "free_x", nrow = 1) +
   # Geoms
   geom_violin(color = NA,
-              alpha = 0.5) +
-  geom_boxplot(color = "black",
-               width = 0.1,
-               fill = NA,
-               outliers = FALSE) +
-  # Highlight extreme processes
-  geom_point(data = bind_rows(
-    shared_perc_plot_df %>%
-      group_by(pathogen, timepoint_comparison) %>%
-      arrange(-percent, -ntotal) %>%
-      slice_head(n = 1),
-    shared_perc_plot_df %>%
-      group_by(pathogen, timepoint_comparison) %>%
-      arrange(percent, -ntotal) %>%
-      slice_head(n = 1)
-  ),
-  color = "black",
-  pch = 21,
-  fill = "white") +
-  # Repel labels for extreme processes
-  geom_text_repel(aes(label = process),
-                  max.overlaps = 10000,
-                  size = 2,
-                  nudge_x = 0.2,
-                  hjust = 0,
-                  color = "black",
-                  fill = "white", lineheight = 0.6,
-                  box.padding = unit(0, "cm"),
-                  label.padding = unit(0.1, "cm"),
-                  data = bind_rows(
-                    shared_perc_plot_df %>%
-                      group_by(pathogen, timepoint_comparison) %>%
-                      arrange(-percent, -ntotal) %>%
-                      slice_head(n = 1),
-                    shared_perc_plot_df %>%
-                      group_by(pathogen, timepoint_comparison) %>%
-                      arrange(percent, -ntotal) %>%
-                      slice_head(n = 1)
-                  ) %>%
-                   mutate(process = str_wrap(process, width = 10))
+              alpha = 0.5,
+              fill = "gray90") +
+  geom_boxplot(
+    color = "black",
+    width = 0.1,
+    fill = NA,
+    outliers = FALSE
+  ) +
+  geom_point(
+    mapping = aes(fill = group,
+                  group = group),
+    color = "black",
+    pch = 21,
+    size = 2,
+    position = position_dodge2(width = 0.3)
   ) +
   # Median annotation
   stat_summary(
     fun = median,
     geom = "label",
     aes(label = after_stat(round(y, 1))),
-    size = 2.5,
+    size = 3,
     hjust = -0.2,
     color = "black",
     fill = "white"
   ) +
   # Scales
   scale_y_continuous(expand = c(0.05, 0.05)) +
-  # scale_fill_manual(values = colors$timepoint) +
+  scale_fill_manual(values = btm_immune_groups$group) +
   # Theme
   theme_vaxgo() +
   theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1, size = 10),
@@ -1662,24 +1673,28 @@ shared_processes_bypathogen_time = shared_perc_plot_df %>%
         strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
         panel.spacing = unit(0.2, "lines"),
         plot.margin = margin(0.3, 0.3, 0, 0, unit = "cm"),
-        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, face = "bold"), plot.title.position = "panel",
+        legend.position = "right", legend.key.size = unit(2, "pt"),
+        legend.text = element_text(size = 10),
+        legend.title = element_text(size = 10),
         ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) +
   # Labels
   labs(x = "Time",
        y = "%Shared LEGs",
        color = "",
-       fill = "",
+       fill = "BTM Group",
        title = "Distribution of %Shared LEGs, modules with p_adj <= 0.25") +
-  guides(fill = guide_legend(byrow = TRUE, nrow = 1))
+  guides(fill = guide_legend(byrow = TRUE, ncol = 1, size = 2))
 
 # Render plot
 shared_processes_bypathogen_time
+   
 
 # Save plot
-# shared_processes_bypathogen_time %>%
-#   ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_intramodule_shared_violinplot_percentage_labeled_horizontal.png"),
-#          width = 16,
-#          height = 4)
+shared_processes_bypathogen_time %>%
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_intramodule_shared_violinplot_percentage_labeled_horizontal.png"),
+         width = 12,
+         height = 4)
 ```
 
 
@@ -1689,11 +1704,6 @@ shared_processes_bypathogen_time
 ```{r fig.height=15, fig.width=10}
 # Build shared percentage bubble plot
 shared_perc_plot = shared_perc_plot_df %>%
-  # Attach functional group annotation
-  inner_join(btm_annotation_genes %>%
-               select(process, group) %>%
-               distinct(),
-             by = "process") %>%
   # Align process order with the correlation heatmap
   mutate(process = fct_relevel(process, btm_correlation_process_heatmap$data %>%
                                   arrange(process) %>%
@@ -1706,7 +1716,7 @@ shared_perc_plot = shared_perc_plot_df %>%
   ggplot() +
   aes(x = timepoint_comparison,
       y = process,
-      fill = percent,
+      fill = percent_mouse,
       size = n) +
   # Facets
   facet_grid(
@@ -1738,6 +1748,7 @@ shared_perc_plot = shared_perc_plot_df %>%
 
 # Render bubble plot
 shared_perc_plot
+
 ```
 
 Combine the correlation heatmap and the shared-percentage bubble plot
@@ -1753,6 +1764,7 @@ btm_correlation_shared_perc_plots %>%
   ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_correlation_and_leadingedge_shared_perc_heatmap.png"),
          width = 20,
          height = 20)
+
 btm_correlation_shared_perc_plots
 ```
 
@@ -1780,8 +1792,8 @@ df_legs <- dge_btm_process_genes_wide %>%
   inner_join(
     legs_perc %>%
       # filter(status == "Shared") %>%
-      rename(n_status_perc = percent),
-    by = join_by(pathogen, process, timepoint_comparison, status)
+      rename(n_status_perc = percent_mouse),
+    by = join_by(pathogen, group, process, timepoint_comparison, status)
   ) %>%
   
   # 4. Integrate Normalized Enrichment Scores (NES)
@@ -1789,8 +1801,8 @@ df_legs <- dge_btm_process_genes_wide %>%
     dge_btm_gsea_mean_wide %>%
       ungroup() %>%
       # filter(process == process_selected)
-      select(process, pathogen, timepoint_comparison, starts_with("nes_")),
-    by = join_by(pathogen, process, timepoint_comparison)
+      select(process, group, pathogen, timepoint_comparison, starts_with("nes_")),
+    by = join_by(pathogen, group, process, timepoint_comparison)
   ) %>%
 
   # 5. Integrate correlation statistics
@@ -1814,7 +1826,7 @@ df_legs <- dge_btm_process_genes_wide %>%
   distinct() %>%
   
   # Rank genes by log2FC within each condition group
-  group_by(pathogen, process, timepoint_comparison) %>%
+  group_by(pathogen, process, group, timepoint_comparison) %>%
   
   # Drop genes not measured in both organisms
   drop_na(mean_l2fc_Mouse, mean_l2fc_Human) %>%
@@ -1935,6 +1947,7 @@ legs_perc_barplot = legs_perc %>%
     ggh4x.facet.nestline = element_line(colour = "black")
   ) 
 
+legs_perc_barplot
 
 # Save and render barplot
 legs_perc_barplot %>%
@@ -2069,9 +2082,6 @@ legs_scatterplot_rank_significance_horizontal = df_legs %>%
         ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) 
 
 # Render both scatterplots
-
- 
-
 legs_scatterplot_rank_significance_horizontal %>% 
   ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_leadingedge_core_ranks_scatterplot_horizontal.png"),
          width = 8, height = 3 )
