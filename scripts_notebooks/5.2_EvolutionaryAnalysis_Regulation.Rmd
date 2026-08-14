@@ -31,11 +31,11 @@ gsea_btm_results_core_joined =
   distinct()
 
 #Import modules and LEGs
-dge_btm_process_module_correlation_and_legs = 
+dge_btm_process_module_diff_and_legs = 
   readRDS(file = here("tables", "all_human_mouse_gsea_btm_legs.rds"))
 
 # Import BTM gene-level correlation data
-human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune =
+dge_btm_process_genes_diff_bygene =
   readRDS(here("tables", "human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune.rds"))
 
 # Import homolog alignment data
@@ -43,6 +43,9 @@ all_alignments = read_csv(here("tables", "human_to_mouse_alignment_mart_export.t
 
 # Import BTM gene annotations
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
+
+# Annotate genes with sequence identity and BTM membership
+# Build alignment-annotated dataset for core enrichment gene
 
 # Reference: all high-confidence orthologs in the database (unfiltered)
 alignments_human2mouse_all = all_alignments %>%
@@ -60,7 +63,7 @@ alignments_human2mouse_all = all_alignments %>%
 
 # Filter to only BTM core enrichment genes and append process membership
 alignments_human2mouse = alignments_human2mouse_all %>% 
-  inner_join(dge_btm_process_module_correlation_and_legs,
+  inner_join(dge_btm_process_module_diff_and_legs,
              by = join_by(gene == symbol))  %>% 
   mutate(status = if_else(status == "Shared", status, "Not-shared"))
 
@@ -70,10 +73,39 @@ protein_identity_process = alignments_human2mouse %>%
   summarise(facet_label = dplyr::first(facet_label), group = dplyr::first(group),
             mean_identity = mean(identity_human2mouse, na.rm = T))
 
+
+# Commented out: biomaRt gene info retrieval (pre-computed and imported below)
+# human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+# gene_info_human = getBM(
+#   attributes = c("hgnc_symbol", "gene_biotype", "go_id", "namespace_1003", "name_1006"),
+#   mart = human_mart,
+#   values = alignments_human2mouse_all$gene %>% unique(),
+#   filters = "hgnc_symbol"
+# ) %>%
+#   rename(go_name = name_1006, go_domain = namespace_1003, gene = hgnc_symbol)
+# gene_info_human %>% saveRDS(file = here("tables", "gene_info_human.rds"))
+
 # Import pre-computed human gene information and join with alignment data
 gene_info_human =
   readRDS(file = here("tables", "gene_info_human.rds")) %>%
-  inner_join(alignments_human2mouse_all, by = "gene")
+  select(-hgnc_symbol) %>% 
+  inner_join(alignments_human2mouse_all, by = "gene") %>% 
+  full_join(alignments_human2mouse %>% 
+              select(gene, process, pathogen, treatment, timepoint_comparison, group, status) %>% 
+              distinct(),
+          by = "gene") %>%
+  
+  #Add difference in log2FC
+  inner_join(dge_btm_process_genes_diff_bygene %>% 
+               filter(gene_set == "All genes") %>% 
+               filter(pathogen_mouse != "DMD") %>% 
+               select(pathogen = pathogen_human, timepoint_comparison, 
+                      treatment = treatment_human, 
+                      gene = human_symbol, mean_log2fc_human, 
+                      mean_log2fc_mouse, mean_log2fc_diff, 
+                      weight_se_inverse_combined) %>% 
+               distinct(),
+             by = join_by(gene, pathogen, timepoint_comparison, treatment)) 
 ```
 
 
@@ -127,6 +159,8 @@ gene_attribute_tf_count <- gene_attribute_chea_clean %>%
 saveRDS(gene_attribute_tf_count,
         file = here("tables", "regulation_gene_tf_count.rds"))
 
+
+gene_attribute_tf_count
 
 ```
 

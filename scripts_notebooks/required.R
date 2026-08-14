@@ -60,6 +60,17 @@ for (pkg in all_packages) {
 
 #Colors --------
 
+colors_all <- list(
+  #Blues
+  blues = c("#4361ee", "#4DBBD5FF", "#90A4AEFF", "#06d6a0", "#46eec6", 
+            "#175289", "#caf0f8", "#4cc9f0", "#669bbc", "purple", "#7014cc", "#cd61a1", "gray80"),
+  #Neutral harmony bliss
+  neutral_harmony = c("#F4F1DE", "#E07A5F", "#3D405B", "#81B29A", "#F2CC8F"),
+  
+  #Ocean sunset
+  ocean_sunset = c("#001219", "#005F73", "#0A9396", "#94D2BD", "#ffc300", "#CA6702", "#AE2012", "#9B2226")
+)
+
 
 
 colors_vaccines = c("Agrippal" = "#669bbc",
@@ -106,6 +117,12 @@ colors = list(organism = c("FIT" = "#4361ee",
               comparison_versus = c("Human vs. Mouse" = "#4DBBD5FF",
                                     "Mouse vs. Mouse" = "gray50",
                                     "Human vs. Human" = "black"),
+              degs_comparison = c("DEG" = "#4DBBD5FF",
+                                  "DEG, both" = "#4DBBD5FF", 
+                                  "DEG, human" = "black", 
+                                  "DEG, mouse" = "gray50",
+                                  "not DEG" = NA,
+                                  "not DEG, both" = NA), 
               shared = c("All genes" = "black",
                          "All DEGs" = "#3dccc7",
                          "Shared DEGs" = "purple",
@@ -113,7 +130,9 @@ colors = list(organism = c("FIT" = "#4361ee",
               direction = c("Up-Up" = "#4DBBD5FF", 
                             "Up-Down" = "#4DBBD5FF", 
                             "Down-Down" = "#4361ee", 
-                            "Down-Up" = "#4361ee"),
+                            "Down-Up" = "#4361ee",
+                            "Same" = "#4DBBD5FF",
+                            "Different" = "#4361ee"),
               treatment = c("Vaccination" = "#006494",
                             "Infection" = "#3dccc7",
                             "Injury" = "#deaaff"),
@@ -167,7 +186,7 @@ colors = list(organism = c("FIT" = "#4361ee",
                            "Burn" = "#184e77"))
 
 
-#Define colors
+#Gene sets
 
 btm_immune_groups = list(group = c("SIGNAL TRANSDUCTION" = "#708d81",
                                    "CELL CYCLE" = "#06d6a0",
@@ -224,7 +243,6 @@ colors_genesets = list(immune_colors = c("SIGNAL TRANSDUCTION" = "#CA6702",
                        )
 
 
-
 immune_order = c("SIGNAL TRANSDUCTION",
                  "CELL CYCLE",
                  "ECM AND MIGRATION",
@@ -241,37 +259,6 @@ immune_order = c("SIGNAL TRANSDUCTION",
 
 
 
-colors_all <- list(
-  #Blues
-  blues = c(
-    "#4361ee",
-    "#4DBBD5FF",
-    "#90A4AEFF",
-    "#06d6a0",
-    "#46eec6",
-    "#175289",
-    "#caf0f8",
-    "#4cc9f0",
-    "#669bbc",
-    "purple",
-    "#7014cc",
-    "#cd61a1",
-    "gray80"
-  ),
-  #Neutral harmony bliss
-  neutral_harmony = c("#F4F1DE", "#E07A5F", "#3D405B", "#81B29A", "#F2CC8F"),
-  
-  #Ocean sunset
-  ocean_sunset = c(
-    "#001219",
-    "#005F73",
-    "#0A9396",
-    "#94D2BD",
-    "#CA6702",
-    "#AE2012",
-    "#9B2226"
-  )
-)
 
 
 
