@@ -117,7 +117,7 @@ biological_null_degs = readRDS(file = here("tables", "duchenne_mouse_dge_limma_d
 # 1. Get the target data using the arguments
 target_df <- human_mouse_log2fc_avg_wide_all %>%
   filter(organism_1 == "Human", organism_2 == "Mouse") %>%
-  mutate(diff_mean_log2fc = mean_log2fc_1 - mean_log2fc_2, model_type = "Observed Target") %>% 
+  mutate(diff_mean_log2fc = mean_log2fc_1 - mean_log2fc_2, model_type = "Mouse") %>% 
   rename(pathogen_1 = pathogen, treatment_1 = treatment) %>% 
   mutate(pathogen_2 = pathogen_1, treament_2 = treatment_1)
 
@@ -126,7 +126,7 @@ null_df <- biological_null_degs %>%
   filter(condition_2 == "DMD_Day28") %>%
   inner_join(target_df %>% select(!ends_with("_2")), by = "human_symbol", suffix = c("_2", "_1")) %>%
   mutate(diff_mean_log2fc = mean_log2fc_1 - mean_log2fc_2,
-         model_type = "Biological Null") %>% 
+         model_type = "Control") %>% 
   # Compute expression divergence and volatility metrics
   mutate(
     # Cross-species effect size delta 
@@ -146,7 +146,8 @@ null_df <- biological_null_degs %>%
   ) 
 
 # 3. Return combined rows
-human_mouse_log2fc_avg_wide_interspecies_bionull = bind_rows(target_df, null_df) %>% 
+human_mouse_log2fc_avg_wide_interspecies_bionull = bind_rows(target_df,
+                                                             null_df) %>% 
     #Rename 1 and 2 as human and mouse, respectively
      rename_with(
     ~ str_replace(.x, "_1$", "_human"), 
@@ -212,6 +213,12 @@ human_mouse_log2fc_avg_wide_interspecies_bionull = bind_rows(target_df, null_df)
 human_mouse_log2fc_avg_wide_interspecies_bionull %>% 
   dplyr::count(pathogen_human, pathogen_mouse, timepoint_human, timepoint_mouse, comparison_set)
 
+human_mouse_log2fc_avg_wide_interspecies_bionull %>% 
+  select(pathogen_human, pathogen_mouse, timepoint_comparison, model_type, human_symbol, mean_log2fc_diff) %>% 
+  distinct() %>% 
+  filter(human_symbol == "IL7R") %>% 
+  arrange(pathogen_human, pathogen_mouse)
+
 #Get immune and non immune genes ==========
 human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune = 
   
@@ -239,7 +246,7 @@ human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune =
 
 
 human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>% 
-  dplyr::count(pathogen_human, pathogen_mouse, comparison_set)
+  dplyr::count(pathogen_human, pathogen_mouse, comparison_set, model_type)
 
 # #Save
 human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>%
@@ -251,16 +258,199 @@ human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>%
 
 ### Distributions
 
-#### Log2FC diff vs. 1/SE
-```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
+#### Log2FC differences
+```{r fig.height=3, fig.width=12, message=FALSE, warning=FALSE}
 #Import
 human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune = 
   readRDS(here("tables", "human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune.rds"))
+#### Difference in means vs. status
+log2fc_wide_allconditions_control =  
+  
+  bind_rows(
+  human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>%
+               filter(gene_set == "All genes") %>% 
+               rename(pathogen = pathogen_human,
+                      treatment = treatment_human, 
+                      gene = human_symbol) %>% 
+    filter(model_type == "Mouse") %>% 
+    filter((pathogen == "E. coli" & timepoint_comparison == "24h-12h" |
+            pathogen == "S. aureus" & timepoint_comparison == "24h-12h" |
+            pathogen == "Burn" & timepoint_comparison == "Early hours-Day 7"|
+            pathogen == "Trauma" & timepoint_comparison == "Day 7-Day 3"|
+            pathogen == "Influenza" & timepoint_comparison == "Day 1-Day 7" |
+            pathogen == "HepB" & timepoint_comparison == "Day 7-Day 7")),
+  human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>%
+               filter(gene_set == "All genes") %>% 
+               rename(pathogen = pathogen_human,
+                      treatment = treatment_human, 
+                      gene = human_symbol) %>% 
+    filter(model_type == "Control")
+  )
+  
+
+# Calculate statistical significance tests per condition
+stat_results <- log2fc_wide_allconditions_control %>%
+  # Filter significant human DEGs (use drop_na to ensure valid filtering)
+  filter(!is.na(p_adj_human) & p_adj_human <= 0.05) %>%
+  mutate(abs_diff = abs(mean_log2fc_diff)) %>%
+  group_by(treatment, pathogen) %>%
+  summarise(
+    # Match exact factor levels present in your model_type column
+    n_target      = sum(model_type == "Mouse" & !is.na(abs_diff)),
+    n_control     = sum(model_type == "Control" & !is.na(abs_diff)),
+    
+    median_target = if (n_target > 0) median(abs_diff[model_type == "Mouse"], na.rm = TRUE) else NA_real_,
+    median_null   = if (n_control > 0) median(abs_diff[model_type == "Control"], na.rm = TRUE) else NA_real_,
+    
+    # Run Wilcoxon test safely
+    wilcox_p      = if (n_target >= 1 && n_control >= 1) {
+      wilcox.test(
+        abs_diff[model_type == "Mouse"],
+        abs_diff[model_type == "Control"],
+        alternative = "less"
+      )$p.value
+    } else {
+      NA_real_
+    },
+    
+    .groups = "drop"
+  ) %>%
+  mutate(
+    fdr_wilcox = p.adjust(wilcox_p, method = "BH"),
+    fdr_wilcox_sci = sprintf("%.2e", fdr_wilcox)
+  )
+
+# Inspect statistical summary table
+print(stat_results)
+
+#Plot
+log2fc_distribution_control_condition_plot = log2fc_wide_allconditions_control %>%
+  filter(p_adj_human <= 0.05) %>% 
+  inner_join(stat_results,
+             join_by(pathogen, treatment)) %>% 
+  ggplot() +
+  aes(
+    x     = abs(mean_log2fc_diff),
+    color = model_type,
+    fill = model_type
+  ) +
+  # Create nested wrap facets across treatment and pathogen strata
+  facet_nested_wrap(
+    ~ treatment + pathogen + paste0("padj = ", fdr_wilcox_sci),
+    nrow   = 1,
+  ) +
+  # Render density curves with linewidth formatting
+  geom_density(
+    linewidth = 1,
+    data = . %>% filter(model_type == "Mouse")
+  ) +
+  geom_density(
+    linewidth = 1,
+    data = . %>% filter(model_type == "Control")
+  ) +
+  geom_boxplot(aes(y = -0.1),
+               width = 0.2, 
+               outliers = F,
+               color = "black") +
+  # Restrict magnitude range to [0, 2] for maximum resolution
+  scale_x_continuous(limits = c(0, 2), expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0.05, 0.05)) +
+  # Set manual color palette for model types
+  scale_color_manual(
+    values = c(
+      "Control" = "black",
+      "Mouse" = "#4DBBD5FF"
+    )
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Control" = NA,
+      "Mouse" = "#4DBBD5FF"
+    )
+  ) +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        panel.spacing = grid::unit(0.7, "cm"),
+        plot.margin          = ggplot2::margin(0.1, 0.5, 0.1, 0.1, "cm"))  +
+  labs(x = "|ΔMean Log2FC|",
+       y = "Density",
+       fill = "Model",
+       color = "Model")
+
+log2fc_distribution_control_condition_plot
+
+
+log2fc_distribution_control_condition_plot %>%
+  ggsave(filename = here("Figures", "all_human_mouse_dge_degs_log2fcdiff_distribution.png"),
+         width = 12,
+         height = 3)
+
+
+```
+
+
+```{r fig.height=3, fig.width=12}
+log2fc_distribution_control_condition_boxplot 
+
+
+log2fc_wide_allconditions_control %>%
+  filter(p_adj_human <= 0.05) %>% 
+  inner_join(stat_results,
+             join_by(pathogen, treatment)) %>% 
+  ggplot() +
+  aes(
+    y     = abs(mean_log2fc_diff),
+    # y     = mean_log2fc_diff,
+    x = model_type,
+    color = model_type,
+    fill = model_type
+  ) +
+  # Create nested wrap facets across treatment and pathogen strata
+  facet_nested_wrap(
+    ~ treatment + pathogen + paste0("padj = ", fdr_wilcox_sci),
+    nrow   = 1,
+    
+  ) +
+  # Render density curves with linewidth formatting
+  geom_violin(width = 1) +
+  geom_boxplot(fill = NA,
+               outliers = F, 
+               color = "black", 
+               width = 0.1) +
+  scale_y_continuous(expand = c(0.01, 0,01),
+                     limits = c(0, 2)
+                     ) +
+  # Set manual color palette for model types
+  scale_fill_manual(
+    values = c(
+      "Control" = NA,
+      "Mouse" = "#4DBBD5FF"
+    )
+  ) +
+  scale_color_manual(
+    values = c(
+      "Control" = "black",
+      "Mouse" = "#4DBBD5FF"
+    )
+  ) +
+  theme_vaxgo() +
+  theme(legend.position = "none") +
+  labs(x = "Model",
+       y = "|ΔMean Log2FC|")
+
+
+```
+```
+
+
+
+#### Log2FC diff vs. 1/SE
+```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
+
 
 #### Difference in means vs. status
 log2fc_wide_allconditions = human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>%
                filter(gene_set == "All genes") %>% 
-               filter(pathogen_mouse != "DMD") %>% 
                rename(pathogen = pathogen_human,
                       treatment = treatment_human, 
                       gene = human_symbol) %>% 
@@ -316,57 +506,7 @@ log2fc_wide_effect_error_plot
 
 
 
-#### Distribution of Log2FC differences
-```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
-#### Difference in means vs. status
- human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>%
-               filter(gene_set == "All genes") %>% 
-               rename(pathogen = pathogen_human,
-                      treatment = treatment_human, 
-                      gene = human_symbol) %>% 
-    mutate(diff_sign_binary = if_else(sign(mean_log2fc_human) == sign(mean_log2fc_mouse), "Same", "Different"),
-         diff_sign = paste0(sign(mean_log2fc_human), sign(mean_log2fc_mouse)),
-         is_deg = case_when(p_adj_human <= 0.05 & p_adj_mouse <= 0.05 ~ "DEG, both",
-                            p_adj_human <= 0.05 & p_adj_mouse >0.05 ~ "DEG, human",
-                            p_adj_human > 0.05 & p_adj_mouse <=0.05 ~ "DEG, mouse",
-                            p_adj_human > 0.05 & p_adj_mouse > 0.05 ~ "not DEG, both", 
-                            T ~ NA))
-#Categorize in difference in log2fc and sign difference
-log2fc_wide_effect_error_plot = log2fc_wide_allconditions %>% 
 
-  # filter(treatment != "Vaccination") %>% 
-  select(treatment, pathogen, timepoint_comparison, is_deg, diff_sign_binary, mean_log2fc_diff, weight_se_inverse_combined) %>%
-  distinct() %>% 
-  ggplot() +
-  aes(x = weight_se_inverse_combined,
-      y = mean_log2fc_diff) +
-  facet_nested_wrap(~treatment+pathogen, nrow = 1, scales = "free_x")+
-  geom_point(pch = 21,
-             alpha = 1,
-             size = 2,
-             mapping = aes(fill = is_deg),
-             data = . %>% filter(is_deg == "not DEG, both")) +
-    geom_point(pch = 21,
-             alpha = 1,
-             size = 2,
-             mapping = aes(fill = is_deg),
-             data = . %>% filter(is_deg %in% c("DEG, mouse", "DEG, human"))) +
-      geom_point(pch = 21,
-             alpha = 1,
-             size = 2,
-             mapping = aes(fill = is_deg),
-             data = . %>% filter(is_deg %in% c("DEG, both"))) +
-  geom_hline(yintercept = 0, linetype = 2, linewidth = 0.5) +
-  scale_fill_manual(values = colors$degs_comparison) +
-  labs(fill = "DEG or not DEG",
-       x = "1/combinedSE",
-       y = "ΔMean Log2FC") +
-  theme_vaxgo() +
-  theme(legend.position = "top")
-
-#Print
-log2fc_wide_effect_error_plot
-```
 
 
 
@@ -393,8 +533,8 @@ log2fc_wide_effect_sign_plot = log2fc_wide_allconditions %>%
   geom_hline(yintercept = 0, linetype = 2, linewidth = 0.5) +
   scale_fill_manual(values = colors$direction) +
   labs(fill = "DEG or not DEG",
-       x = "1/combinedSE",
-       y = "ΔMean Log2FC") +
+       x = "",
+       y = "1/combinedSE") +
   theme_vaxgo() +
   theme(legend.position = "top",
         axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
