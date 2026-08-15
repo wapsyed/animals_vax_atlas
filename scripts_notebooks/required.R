@@ -293,6 +293,8 @@ theme_vaxgo <- function() {
       legend.title         = ggplot2::element_text(size = 10),
       legend.key.width     = grid::unit(0.4, "cm"),
       legend.key.height    = grid::unit(0.4, "cm"),
+      legend.margin=margin(0,0,0,0),
+      legend.box.margin=margin(0,0,-10,0),
       
       # Panel
       panel.border         = ggplot2::element_blank(),
@@ -302,7 +304,7 @@ theme_vaxgo <- function() {
       panel.spacing        = grid::unit(0.2, "cm"),
       
       # Strip
-      strip.text           = ggplot2::element_text(size = 10, color = "black"),
+      strip.text           = ggplot2::element_text(size = 10, color = "black", margin = margin(1, 0, 1, 0)),
       
       # Plot
       plot.title           = ggplot2::element_text(size = 10),

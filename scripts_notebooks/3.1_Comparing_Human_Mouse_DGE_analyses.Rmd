@@ -16,7 +16,7 @@ source(here("scripts_notebooks", "required.R"))
 # Unified analyses
 ## 1. Differential gene expression analysis
 
-#### Pivot DEGs table
+### Pivot DEGs table
 ```{r fig.height=20, fig.width=20}
 #Import datasets ==============
 #DEGs (matched)
@@ -25,6 +25,9 @@ all_degs_human_mouse =
 #DEGs (unmatched)
 all_degs_human_mouse_unmatched =
   readRDS(here("tables", "all_human_mouse_dge_limma_degs.rds"))
+#DEGs (matched with controls)
+all_degs_human_mouse_matched_bionull =
+  readRDS(file = here("tables", "all_human_mouse_dge_limma_degs_matched_control.rds"))
 
 #Check
 all_degs_human_mouse %>% 
@@ -76,23 +79,7 @@ human_mouse_log2fc_avg_wide_all =
     weight_se_inverse = 1 / (se_1^2 + se_2^2),
     
     se_combined = sqrt(se_1^2 + se_2^2),
-    weight_se_inverse_combined = 1/(se_combined^2),
-    
-    #Categorize in difference in log2fc and sign difference
-    mutate(
-    sign_human = case_when(
-      mean_log2fc_human > 0 ~ "Pos.",
-      mean_log2fc_human < 0 ~ "Neg.",
-      TRUE                  ~ "Zero"
-    ),
-    sign_mouse = case_when(
-      mean_log2fc_mouse > 0 ~ "Pos.",
-      mean_log2fc_mouse < 0 ~ "Neg.",
-      TRUE                  ~ "Zero"
-    ),
-    diff_sign_binary =  if_else(sign_human == sign_mouse, "Same", "Different"),
-    diff_sign        = stringr::str_c(sign_human, "_", sign_mouse)
-  )
+    weight_se_inverse_combined = 1/(se_combined^2)
   ) %>% 
   
   
@@ -155,23 +142,7 @@ null_df <- biological_null_degs %>%
     weight_se_inverse = 1 / (se_1^2 + se_2^2),
     
     se_combined = sqrt(se_1^2 + se_2^2),
-    weight_se_inverse_combined = 1/(se_combined^2),
-    
-    #Categorize in difference in log2fc and sign difference
-    mutate(
-    sign_human = case_when(
-      mean_log2fc_human > 0 ~ "Pos.",
-      mean_log2fc_human < 0 ~ "Neg.",
-      TRUE                  ~ "Zero"
-    ),
-    sign_mouse = case_when(
-      mean_log2fc_mouse > 0 ~ "Pos.",
-      mean_log2fc_mouse < 0 ~ "Neg.",
-      TRUE                  ~ "Zero"
-    ),
-    diff_sign_binary =  if_else(sign_human == sign_mouse, "Same", "Different"),
-    diff_sign        = stringr::str_c(sign_human, "_", sign_mouse)
-  )
+    weight_se_inverse_combined = 1/(se_combined^2)
   ) 
 
 # 3. Return combined rows
@@ -220,7 +191,22 @@ human_mouse_log2fc_avg_wide_interspecies_bionull = bind_rows(target_df, null_df)
                                pathogen_mouse %in% c( "S. aureus", "E. coli") ~ "Infection",
                                pathogen_mouse %in% c( "Burn", "Trauma") ~ "Injury",
                                T ~ pathogen_mouse),
-         treatment_mouse = fct_relevel(treatment_mouse, "Vaccination", "Infection", "Injury")) 
+         treatment_mouse = fct_relevel(treatment_mouse, "Vaccination", "Infection", "Injury")) %>% 
+  #Categorize in difference in log2fc and sign difference
+    
+   mutate(  
+    sign_human = case_when(
+      mean_log2fc_human > 0 ~ "Pos.",
+      mean_log2fc_human < 0 ~ "Neg.",
+      TRUE                  ~ "Zero"
+    ),
+    sign_mouse = case_when(
+      mean_log2fc_mouse > 0 ~ "Pos.",
+      mean_log2fc_mouse < 0 ~ "Neg.",
+      TRUE                  ~ "Zero"
+    ),
+    diff_sign_binary =  if_else(sign_human == sign_mouse, "Same", "Different"),
+    diff_sign        = stringr::str_c(sign_human, "_", sign_mouse))
 
 #Check
 human_mouse_log2fc_avg_wide_interspecies_bionull %>% 
@@ -249,11 +235,10 @@ human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune =
                              "Not-immune")) %>% 
   filter(p_adj_human <= 0.05 & p_adj_mouse <= 0.05)
   
-  )
+  ) 
 
 
 human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>% 
-  
   dplyr::count(pathogen_human, pathogen_mouse, comparison_set)
 
 # #Save
@@ -266,7 +251,7 @@ human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>%
 
 ### Distributions
 
-#### 
+#### Log2FC diff vs. 1/SE
 ```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
 #Import
 human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune = 
@@ -330,6 +315,62 @@ log2fc_wide_effect_error_plot
 ```
 
 
+
+#### Distribution of Log2FC differences
+```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
+#### Difference in means vs. status
+ human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>%
+               filter(gene_set == "All genes") %>% 
+               rename(pathogen = pathogen_human,
+                      treatment = treatment_human, 
+                      gene = human_symbol) %>% 
+    mutate(diff_sign_binary = if_else(sign(mean_log2fc_human) == sign(mean_log2fc_mouse), "Same", "Different"),
+         diff_sign = paste0(sign(mean_log2fc_human), sign(mean_log2fc_mouse)),
+         is_deg = case_when(p_adj_human <= 0.05 & p_adj_mouse <= 0.05 ~ "DEG, both",
+                            p_adj_human <= 0.05 & p_adj_mouse >0.05 ~ "DEG, human",
+                            p_adj_human > 0.05 & p_adj_mouse <=0.05 ~ "DEG, mouse",
+                            p_adj_human > 0.05 & p_adj_mouse > 0.05 ~ "not DEG, both", 
+                            T ~ NA))
+#Categorize in difference in log2fc and sign difference
+log2fc_wide_effect_error_plot = log2fc_wide_allconditions %>% 
+
+  # filter(treatment != "Vaccination") %>% 
+  select(treatment, pathogen, timepoint_comparison, is_deg, diff_sign_binary, mean_log2fc_diff, weight_se_inverse_combined) %>%
+  distinct() %>% 
+  ggplot() +
+  aes(x = weight_se_inverse_combined,
+      y = mean_log2fc_diff) +
+  facet_nested_wrap(~treatment+pathogen, nrow = 1, scales = "free_x")+
+  geom_point(pch = 21,
+             alpha = 1,
+             size = 2,
+             mapping = aes(fill = is_deg),
+             data = . %>% filter(is_deg == "not DEG, both")) +
+    geom_point(pch = 21,
+             alpha = 1,
+             size = 2,
+             mapping = aes(fill = is_deg),
+             data = . %>% filter(is_deg %in% c("DEG, mouse", "DEG, human"))) +
+      geom_point(pch = 21,
+             alpha = 1,
+             size = 2,
+             mapping = aes(fill = is_deg),
+             data = . %>% filter(is_deg %in% c("DEG, both"))) +
+  geom_hline(yintercept = 0, linetype = 2, linewidth = 0.5) +
+  scale_fill_manual(values = colors$degs_comparison) +
+  labs(fill = "DEG or not DEG",
+       x = "1/combinedSE",
+       y = "ΔMean Log2FC") +
+  theme_vaxgo() +
+  theme(legend.position = "top")
+
+#Print
+log2fc_wide_effect_error_plot
+```
+
+
+
+#### Difference in Log2FC and sign
 ```{r fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
 #Categorize in difference in log2fc and sign difference
 log2fc_wide_effect_sign_plot = log2fc_wide_allconditions %>% 
@@ -359,64 +400,132 @@ log2fc_wide_effect_sign_plot = log2fc_wide_allconditions %>%
         axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
 
 log2fc_wide_effect_sign_plot
+
 ```
 
-```{r fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+
+
+#### Mean SE by condition and timepoint
+```{r fig.height=3, fig.width=12, message=FALSE, warning=FALSE}
+
 #Categorize in difference in log2fc and sign difference
-log2fc_wide_effect_error_conditionwise_plot 
-
-
-all_degs_human_mouse_unmatched %>%
-  select(organism, 
+# Prepare base dataset with treatment releveling and DEG classification
+degs_base <- all_degs_human_mouse_unmatched %>%
+  dplyr::select(
+    organism,
     treatment, pathogen, timepoint,
     se, adj_p_val
   ) %>%
-  mutate(treatment = case_when(pathogen %in% c("HepB", "Influenza") ~ "Vaccination",
-                               pathogen %in% c( "S. aureus", "E. coli") ~ "Infection",
-                               pathogen %in% c( "Burn", "Trauma") ~ "Injury",
-                               T ~ pathogen),
-         treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")) %>% 
-  mutate(
-    is_deg   = if_else(adj_p_val <= 0.05, "DEG", "not DEG")
-  ) %>% 
-  distinct() %>% 
-  ggplot() +
-  aes(x = timepoint,
-      y = se,
-      group = is_deg) +
-  facet_nested_wrap(~treatment+pathogen, nrow = 1, scales = "free")+
-stat_summary(
-  mapping   = aes(
-    color    = organism,
-    linetype = is_deg,
-    group    = interaction(organism, is_deg)
-  ),
-  fun       = mean,
-  geom      = "line",
-  linewidth = 1,
-  position  = position_dodge(width = 0.3)
-) +
-  # Add mean standard error bars with matching horizontal dodge
-  stat_summary(
-    mapping  = aes(
-      color = organism,
-      group = interaction(organism, is_deg)
+  dplyr::mutate(
+    treatment = dplyr::case_when(
+      pathogen %in% c("HepB", "Influenza")    ~ "Vaccination",
+      pathogen %in% c("S. aureus", "E. coli") ~ "Infection",
+      pathogen %in% c("Burn", "Trauma")       ~ "Injury",
+      TRUE                                    ~ pathogen
     ),
-    fun.data = mean_se,
-    geom     = "errorbar",
-    width    = 1,
+    treatment = stats::relevel(factor(treatment), "Vaccination"),
+    is_deg    = dplyr::if_else(adj_p_val <= 0.05, "DEG", "not DEG")
+  ) %>%
+  dplyr::distinct()
+
+# Append "All genes" category and calculate 95% Confidence Intervals
+degs_summary <- dplyr::bind_rows(
+  degs_base,
+  degs_base %>% dplyr::mutate(is_deg = "All genes")
+) %>%
+  dplyr::group_by(treatment, pathogen, organism, timepoint, is_deg) %>%
+  dplyr::summarise(
+    n_genes    = dplyr::n(),
+    mean_se    = mean(se, na.rm = TRUE),
+    sd_se      = stats::sd(se, na.rm = TRUE),
+    se_of_mean = sd_se / sqrt(n_genes),
+    
+    # Calculate 95% Confidence Interval bounds using t-distribution
+    ci_lower   = mean_se - stats::qt(0.975, df = dplyr::if_else(n_genes > 1, n_genes - 1, 1)) * se_of_mean,
+    ci_upper   = mean_se + stats::qt(0.975, df = dplyr::if_else(n_genes > 1, n_genes - 1, 1)) * se_of_mean,
+    .groups    = "drop"
+  ) 
+  
+  
+  # Plot mean SE trends, confidence intervals, and gene counts across conditions
+log2fc_wide_effect_error_conditionwise_plot = degs_summary %>%
+  filter(is_deg == "DEG") %>%
+  mutate(
+    timepoint = str_replace_all(timepoint, " ", "\n"),
+    timepoint = fct_reorder(timepoint, parse_number(timepoint), .na_rm = FALSE),
+    timepoint = fct_relevel(timepoint, "Early\nhours")
+  ) %>% 
+  ggplot() +
+  aes(
+    x     = timepoint,
+    y     = mean_se,
+    group = interaction(organism, is_deg)
+  ) +
+  # Create nested wrap facets across treatment and pathogen strata
+  facet_nested_wrap(
+    ~ is_deg + treatment + pathogen,
+    nrow   = 1,
+    scales = "free"
+  ) +
+  # Force lower limit to 0 while leaving upper limit free per panel
+  scale_y_continuous(
+    limits = c(0, NA),
+    expand = expansion(mult = c(0, 0.05)) # Opcional: remove folga abaixo do zero
+  )+
+  # Render mean trend lines
+  geom_line(
+    mapping   = aes(
+      color    = organism
+    ),
+    linewidth = 1,
+    position  = position_dodge(width = 0.3)
+  ) +
+  # Render 95% Confidence Interval error bars
+  geom_errorbar(
+    mapping  = aes(
+      ymin  = ci_lower,
+      ymax  = ci_upper,
+      color = organism
+    ),
+    width    = 0.2,
     position = position_dodge(width = 0.3)
   ) +
+  # Render mean points with size mapped directly to gene count (n_genes)
+  geom_point(
+    mapping  = aes(
+      fill = organism
+    ),
+    pch      = 21,
+    color    = "black", 
+    position = position_dodge(width = 0.3)
+  ) +
+  #Add n genes
+    geom_text_repel(aes(label = n_genes,
+                        color = organism), 
+                  size = 3, 
+                  fontface = "bold",
+                  segment.alpha = 1) +
+  # Apply continuous size range and manual color scales
   scale_color_manual(values = colors$organism) +
-  labs(fill = "Organism",
-       x = "timepoint",
-       y = "SE") +
+  scale_fill_manual(values = colors$organism) +
+  # Define plot titles and legend labels
+  labs(
+    color    = "Organism",
+    fill     = "Organism",
+    x        = "Timepoint",
+    y        = "Mean SE"
+  ) +
+  # Apply custom theme and text formatting
   theme_vaxgo() +
-  theme(legend.position = "top",
-        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+  theme(legend.position = "top")
 
 
 log2fc_wide_effect_error_conditionwise_plot
+
+log2fc_wide_effect_error_conditionwise_plot %>%
+  ggsave(filename = here("Figures", "all_human_mouse_dge_degs_mean_se_timepoint.png"),
+         width = 12,
+         height = 3)
 ```
 
 
