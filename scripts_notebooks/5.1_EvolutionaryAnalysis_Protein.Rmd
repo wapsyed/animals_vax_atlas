@@ -122,34 +122,118 @@ gene_info_human =
 ### Protein id% vs. Diff. in means
 ```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
 #### Difference in means vs. status
-gene_info_human %>%
+df_clean <- gene_info_human %>%
   filter(treatment != "Vaccination") %>% 
   mutate(status = ifelse(status == "Shared", "Shared", "Not-shared")) %>% 
   select(treatment, pathogen, status, timepoint_comparison, identity_human2mouse, mean_log2fc_diff, weight_se_inverse_combined) %>% 
-  distinct() %>% 
-  ggplot() +
-  aes(x = status,
-      y = mean_log2fc_diff,
-      # size = weight_se_inverse_combined,
-      fill = status) +
-  facet_nested_wrap(~treatment+pathogen, nrow = 1)+
-  geom_boxplot(alpha = 0, width = 0.2,
-               position      = ggplot2::position_nudge(x = -0.2),) +
-  geom_violinhalf() + 
-  geom_hline(yintercept = 0, linetype = 2, linewidth = 0.5) +
-  scale_fill_manual(values = colors$comparison) +
-  theme_vaxgo() +
-  theme(legend.position = "top")
+  distinct()
+```
 
+
+```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
+
+##### Difference in means vs. status
+stat_results <- df_clean %>%
+  mutate(abs_diff = abs(mean_log2fc_diff)) %>%
+  group_by(treatment, pathogen) %>%
+  summarise(
+    n_shared     = sum(status == "Shared" & !is.na(abs_diff)),
+    n_not_shared = sum(status == "Not-shared" & !is.na(abs_diff)),
+    
+    median_shared     = if (n_shared > 0) median(abs_diff[status == "Shared"], na.rm = TRUE) else NA_real_,
+    median_not_shared = if (n_not_shared > 0) median(abs_diff[status == "Not-shared"], na.rm = TRUE) else NA_real_,
+    
+    # Teste de Wilcoxon comparando Shared e Not-shared
+    wilcox_p = if (n_shared >= 1 && n_not_shared >= 1) {
+      wilcox.test(
+        abs_diff[status == "Shared"],
+        abs_diff[status == "Not-shared"]
+      )$p.value
+    } else {
+      NA_real_
+    },
+    
+    .groups = "drop"
+  ) %>%
+  mutate(
+    fdr_wilcox = p.adjust(wilcox_p, method = "BH"),
+    fdr_wilcox_sci = sprintf("%.2e", fdr_wilcox),
+    
+    # Tamanho do Efeito r = |Z| / sqrt(N)
+    total_n       = n_shared + n_not_shared,
+    z_score       = abs(qnorm(wilcox_p / 2)),
+    effect_size_r = z_score / sqrt(total_n),
+    
+    # Rótulo formatado para o facet do gráfico
+    label_facet   = sprintf("padj=%s, r=%.2f", fdr_wilcox_sci, effect_size_r)
+  )
+
+#Plot
+difflog2fc_distribution_legs_plot = df_clean %>% 
+  inner_join(stat_results, by = c("treatment", "pathogen")) %>% 
+  ggplot() +
+  aes(
+    x     = abs(mean_log2fc_diff),
+    color = status,
+    fill  = status
+  ) +
+  # Facetamento agrupado com o p-ajustado no título
+  facet_nested_wrap(
+    ~ treatment + pathogen + label_facet,
+    nrow = 1
+  ) +
+  # Duas curvas de densidade (uma para cada status)
+  geom_density(
+    linewidth = 1,
+    data = . %>% filter(status == "Shared")
+  ) +
+  geom_density(
+    linewidth = 1,
+    data = . %>% filter(status == "Not-shared")
+  ) +
+  # Boxplot alinhado na base do eixo Y
+  geom_boxplot(
+    aes(y = -0.1),
+    width = 0.2, 
+    outliers = FALSE,
+    color = "black", show.legend = F
+  ) +
+  # Escalas e estética visual
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  scale_x_continuous(expand = c(0, 0)) +
+   # Set manual color palette for model types
+
+  scale_color_manual(values = c("Not-shared" = "black", "Shared" = "#4DBBD5FF")) +
+  scale_fill_manual(values = c("Not-shared" = NA, "Shared" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(
+    legend.position = "top",
+    panel.spacing   = grid::unit(0.7, "cm"),
+    plot.margin     = ggplot2::margin(0.1, 0.5, 0.1, 0.1, "cm")
+  ) +
+  labs(
+    x     = "|ΔMean Log2FC|",
+    y     = "Density",
+    fill  = "Status",
+    color = "Status"
+  )
+
+difflog2fc_distribution_legs_plot
+
+# Save to file
+difflog2fc_distribution_legs_plot %>%
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_LEGs_btms_legs_meanlog2fc.png"),
+         width = 8,
+         height = 3)
+```
+
+
+```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
 #Difference in means vs weight se
-gene_info_human %>%
-  filter(treatment != "Vaccination") %>% 
-  mutate(status = ifelse(status == "Shared", "Shared", "Not-shared")) %>% 
-  select(treatment, pathogen, status, timepoint_comparison, identity_human2mouse, mean_log2fc_diff, weight_se_inverse_combined) %>% 
-  distinct() %>% 
+df_clean %>% 
   ggplot() +
   aes(x = weight_se_inverse_combined,
-      y = mean_log2fc_diff,
+      y = abs(mean_log2fc_diff),
       # size = weight_se_inverse_combined,
       fill = status) +
   facet_nested_wrap(~treatment+pathogen, nrow = 1, scales = "free_x")+
@@ -169,25 +253,70 @@ gene_info_human %>%
 
 
 #### Difference in means vs. identity
-gene_info_human %>%
-  filter(treatment != "Vaccination") %>% 
-  mutate(status = ifelse(status == "Shared", "Shared", "Not-shared")) %>% 
-  select(treatment, pathogen, status, timepoint_comparison, identity_human2mouse, mean_log2fc_diff, weight_se_inverse_combined) %>% 
-  distinct() %>% 
+stats_df <- df_clean %>%
+  group_by(treatment, pathogen, status) %>%
+  summarise(
+    cor_res = list(cor.test(identity_human2mouse, abs(mean_log2fc_diff))),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    r = map_dbl(cor_res, ~ .x$estimate),
+    p = map_dbl(cor_res, ~ .x$p.value),
+    rr = r^2,
+    p_signif = as.character(cut(
+      p,
+      breaks = c(-Inf, 0.001, 0.01, 0.05, Inf),
+      labels = c("***", "**", "*", "ns")
+    )),
+    color_hex = ifelse(status == "Not-shared", "black", "#00A0D2"),
+    status_label = sprintf(
+      "<span style='color:%s;'>R=%.2f, R²=%.2f, %s</span>",
+      color_hex, r, rr, p_signif
+    )
+  ) %>% 
+  mutate(status = factor(status, levels = c("Not-shared", "Shared"))) %>%
+  arrange(treatment, pathogen, status) %>%
+  group_by(treatment, pathogen) %>%
+  summarise(
+    label_text = paste(status_label, collapse = "<br>"),
+    .groups = "drop"
+  )
+
+alignments_human2mouse_legs_identity_log2fc_plot = df_clean %>% 
+  inner_join(stats_df %>% select(treatment, pathogen, label_text),
+             by = join_by(treatment, pathogen)) %>% 
   ggplot() +
   aes(x = identity_human2mouse,
-      y = mean_log2fc_diff,
+      y = abs(mean_log2fc_diff),
       fill = status) +
-  facet_nested_wrap(~treatment+pathogen, ncol = 4)+
+  facet_nested_wrap(~treatment+pathogen+label_text, ncol = 4)+
   geom_point(pch = 21,
-             alpha = 0.5) +
-  geom_hline(yintercept = 0, linetype = 2, linewidth = 0.5) +
+             alpha = 0.2,
+             stroke = 0,
+             size = 2) +
+  stat_smooth(method = "lm",
+              mapping = aes(color = status)) +
   scale_fill_manual(values = colors$comparison) +
   scale_color_manual(values = colors$comparison) +
+  scale_x_continuous(expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
   theme_vaxgo() +
-  theme(legend.position = "top") +
-  stat_smooth(method = "lm",
-              mapping = aes(color = status))
+  theme(
+    legend.position = "top",
+    strip.text = ggtext::element_markdown()
+  ) +
+  labs(x = "%Identity",
+       y = "|Mean Log2FC|",
+       fill = "LEGs",
+       color = "LEGs")
+
+alignments_human2mouse_legs_identity_log2fc_plot
+
+# Save to file
+alignments_human2mouse_legs_identity_log2fc_plot %>%
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_LEGs_alignment_btms_human2mouse_legs_identity_vs_meanlog2fc.png"),
+         width = 8,
+         height = 3)
 
 ```
 
