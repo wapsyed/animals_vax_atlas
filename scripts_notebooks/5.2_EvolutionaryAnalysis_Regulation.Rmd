@@ -486,132 +486,332 @@ cres_homologous_1to1_comparison %>% saveRDS(file = here("tables", "cres_homologo
 
 
 ### Questions
-#### HUMAN: How many CREs per gene? And how many genes per enhancer?
+#### Human: How many CREs per gene? And how many genes per enhancer?
 ```{r fig.height=5, fig.width=10}
-#Import
+#Import annotated CREs
 cres_annotated = readRDS(file = here("tables", "cres_homologous_annotated.rds"))
 
-
+#=======================================
 #Compare classes of CREs between species
-cres_homologous_1to1_comparison = cres_annotated %>% 
+#======================================
 
-  #Filter ELITE PLS, pELS, dELS
-    filter(type_human %in% c("pELS", "dELS", "PLS"),
-         type_mouse %in% c("pELS", "dELS", "PLS"),
-         match_homology == "1:1") %>% 
-  
-  #Summarize
-  group_by(hgnc_symbol, type_human, subtype_human, type_mouse, subtype_mouse, match_homology, match_cretype, match_cresubtype) %>% 
-  dplyr::count(hgnc_symbol, type_human, subtype_human, type_mouse, subtype_mouse, match_homology, match_cretype, match_cresubtype) %>%
-  #Percentage
-  # group_by(hgnc_symbol, type_human, subtype_human, type_mouse, subtype_mouse, match_homology, match_cretype, match_cresubtype) %>% 
-  # dplyr::mutate(pct = round(100 * n / sum(n), 1)) %>%
-  dplyr::arrange(desc(n)) %>%
-  mutate(type_human = fct_relevel(type_human, "PLS", "pELS", "dELS"),
-         type_mouse = fct_relevel(type_mouse, "PLS", "pELS", "dELS")
-         )
+# Calculate cCRE type, subtype, and homology percentages per locus
 
-```
-
-
-```{r fig.height=5, fig.width=10}
-#Distribution
-#Annotate with elite or not-elite
-genes_cres_human_elite_notelite = genes_cres_human %>% 
-  full_join(cres_human_encode_genehancer %>% 
-              select(id_dhs_human, id_ccre_human, eliteness, genehancer_id, evidenceSources) %>% 
-              distinct(),
-            join_by(id_dhs_human, id_ccre_human)) %>% 
-  mutate(eliteness = if_else(!is.na(eliteness), eliteness,  "Not-Elite")) 
-
-genes_cres_human_core_stats <- genes_cres_human_elite_notelite %>% 
-  filter(type_human %in% c("pELS", "dELS", "PLS")) %>% 
-  group_by(hgnc_symbol, type_human, subtype_human) %>% 
-  dplyr::summarise(n = n(), .groups = "drop") %>%
-  filter(!hgnc_symbol %in% c("", NA)) %>% 
-  
-  # Dual-tier binning strategy by cCRE class
-  group_by(hgnc_symbol) %>%
+cres_type_homology_comparison <- cres_annotated %>%
+  # Filter target cCRE types and valid gene symbols
+  dplyr::filter(
+    type_human %in% c("pELS", "dELS", "PLS"),
+    type_mouse %in% c("pELS", "dELS", "PLS"),
+    !is.na(hgnc_symbol) & hgnc_symbol != ""
+  ) %>%
+  # Collapse granular match_homology into broad simplified categories
   dplyr::mutate(
-    pct = round(100 * n / sum(n), 1),
-    
-    # Conditional categorization logic
-    n_cat = case_when(
-      # PLS rule: 0 to 5, then >5
-      type_human == "PLS" & n <= 5 ~ as.character(n),
-      type_human == "PLS" & n > 5  ~ ">5",
-      
-      # pELS and dELS rule: 0 to 20, then >20
-      type_human %in% c("pELS", "dELS") & n <= 5 ~ as.character(n),
-      type_human %in% c("pELS", "dELS") & n > 5  ~ ">5",
-      
-      TRUE ~ NA_character_
+    match_homology_group = dplyr::case_when(
+      match_homology == "1:1" ~ "1:1 Match",
+      match_homology %in% c("1:N", "N:1", "N:M") ~ "Complex Homology",
+      match_homology %in% c("human_only", "mouse_only") ~ "Species Specific",
+      TRUE ~ "Other"
     ),
-    
-    # Unified factor level
-    n_cat = factor(
-      n_cat, 
-      levels = c(as.character(0:5), ">5"
-                 # as.character(6:10), ">10"
-                 )
+    match_homology_group = factor(
+      match_homology_group, 
+      levels = c("1:1 Match", "Complex Homology", "Species Specific")
     )
   ) %>%
-  ungroup() %>%
+  select(-match_homology) %>% 
+  distinct() %>% 
+  # Step 1: Count occurrences per gene locus and annotation/homology stratum
+  dplyr::group_by(
+    hgnc_symbol, type_human, subtype_human, type_mouse, subtype_mouse,
+    match_homology_group, match_cretype, match_cresubtype
+  ) %>%
+  dplyr::summarise(n_cres = dplyr::n(), .groups = "drop") %>%
   
-  # Inner join with cross-species differential expression stats
-  inner_join(
-    gene_info_human_log2fc_stats %>% 
-      select(
-        treatment, pathogen, status, 
+  # Step 2: Complete missing combinations with 0 to explicitly retain n = 0
+  tidyr::complete(
+    hgnc_symbol,
+    type_human = c("pELS", "dELS", "PLS"),
+    subtype_human,
+    fill = list(n_cres = 0)
+  ) %>%
+  
+  # Step 3: Compute relative percentage for each stratum over total locus cCREs
+  dplyr::group_by(hgnc_symbol) %>%
+  dplyr::mutate(
+    n_total_cres_gene = sum(n_cres),
+    pct_cres_gene     = dplyr::if_else(
+      n_total_cres_gene > 0, 
+      round(100 * n_cres / n_total_cres_gene, 2), 
+      0
+    )
+  ) %>%
+  
+  # Step 4: Compute percentage relative to same Human Type
+  dplyr::group_by(hgnc_symbol, type_human) %>%
+  dplyr::mutate(
+    n_total_cre_type_human = sum(n_cres),
+    pct_same_cre_type      = dplyr::if_else(
+      n_total_cre_type_human > 0,
+      round(
+        100 * sum(n_cres[match_cretype == "Same" | match_cretype == TRUE], na.rm = TRUE) / n_total_cre_type_human, 
+        2
+      ),
+      0
+    )
+  ) %>%
+  
+  # Step 5: Compute percentage relative to same Human Type & Subtype
+  dplyr::group_by(hgnc_symbol, type_human, subtype_human) %>%
+  dplyr::mutate(
+    n_total_cre_subtype_human = sum(n_cres),
+    pct_same_cre_subtype      = dplyr::if_else(
+      n_total_cre_subtype_human > 0,
+      round(
+        100 * sum(n_cres[match_cresubtype == "Same" | match_cresubtype == TRUE], na.rm = TRUE) / n_total_cre_subtype_human, 
+        2
+      ),
+      0
+    )
+  ) %>%
+  
+  # Step 6: Compute percentage relative to Homology Class per Gene
+  dplyr::group_by(hgnc_symbol, type_human, subtype_human, match_homology_group) %>%
+  dplyr::mutate(
+    
+    n_total_homology = sum(n_cres),
+    pct_homology     = dplyr::if_else(
+      n_total_cres_gene > 0,
+      round(100 * n_total_homology / n_total_cres_gene, 2),
+      0
+    )
+  ) %>%
+  
+  # Step 7: Categorize cCRE counts into unified frequency bins (n_cat)
+  dplyr::group_by(hgnc_symbol, type_human, subtype_human) %>%
+  dplyr::mutate(
+    n_cat = dplyr::case_when(
+      n_cres == 0 ~ "0",
+      n_cres == 1 ~ "1",
+      n_cres == 2 ~ "2",
+      n_cres == 3 ~ "3",
+      n_cres == 4 ~ "4",
+      n_cres >= 5 ~ ">5",
+      TRUE        ~ NA_character_
+    ),
+    n_cat = factor(n_cat, levels = c("0", "1", "2", "3", "4", ">5"))
+  ) %>%
+  dplyr::ungroup() %>%
+  
+  # Step 8: Sort by locus and count, then set factor levels for plotting
+  dplyr::arrange(hgnc_symbol, dplyr::desc(n_cres)) %>%
+  dplyr::mutate(
+    type_human = factor(type_human, levels = c("PLS", "pELS", "dELS")),
+    type_mouse = factor(type_mouse, levels = c("PLS", "pELS", "dELS"))
+  )
+
+#Print
+cres_type_homology_comparison
+
+#Save 
+cres_type_homology_comparison %>% 
+  saveRDS(file = here("tables", "cres_type_homology_comparison.rds"))
+
+
+# Inner join with cross-species differential expression statistics
+cres_type_homology_comparison_dge_legs_stats <- cres_type_homology_comparison %>%
+    dplyr::inner_join(
+    gene_info_human_log2fc_stats %>%
+      dplyr::select(
+        treatment, pathogen, status,
         hgnc_symbol = gene, identity_human2mouse,
         mean_log2fc_human:weight_se_inverse_combined
-      ) %>% 
-      distinct() %>%
-      arrange(hgnc_symbol),
-    by = join_by(hgnc_symbol)
-  ) %>% 
-  #Add homology stats
-  inner_join(cres_homologous_1to1_comparison %>% 
-               rename(n_homologous = n),
-             by = join_by(hgnc_symbol, type_human, subtype_human)) %>% 
-  arrange(hgnc_symbol, type_human, subtype_human, pathogen) 
+      ) %>%
+      dplyr::distinct() %>%
+      dplyr::arrange(hgnc_symbol),
+    by = dplyr::join_by(hgnc_symbol)
+  )
+
+#Print
+cres_type_homology_comparison_dge_legs_stats
+
+#Save
+cres_type_homology_comparison_dge_legs_stats %>% 
+  saveRDS(file = here("tables", "cres_type_homology_comparison_dge_legs_stats.rds"))
 
 ```
 
-What is the distribution of CREs by gene, by LEGs
+#### Have CREs diverged their functions?
+
+```{r classify-match-type, fig.height=6, fig.width=8}
+
+
+# Calculate shared cCRE type and subtype proportions across species ======
+cres_type_matrix_pct <- cres_type_homology_comparison %>%
+  
+  # Step 1: Aggregate total cCRE counts per Human & Mouse type/subtype combination
+  dplyr::group_by(type_human, subtype_human, type_mouse, subtype_mouse) %>%
+  dplyr::summarise(n_pair_cres = sum(n_cres), .groups = "drop") %>%
+  
+  # Step 2: Compute relative percentage relative to total human cCREs in that stratum
+  dplyr::group_by(type_human, subtype_human) %>%
+  dplyr::mutate(
+    n_human_stratum = sum(n_pair_cres),
+    pct             = dplyr::if_else(
+      n_human_stratum > 0, 
+      round(100 * n_pair_cres / n_human_stratum, 1), 
+      0
+    )
+  ) %>%
+  dplyr::ungroup() %>%
+  
+  # Step 3: Order factor levels for heatmaps
+  dplyr::mutate(
+    type_human = factor(type_human, levels = c("PLS", "pELS", "dELS")),
+    type_mouse = factor(type_mouse, levels = c("PLS", "pELS", "dELS"))
+  )
+
+#Heatmap
+cres_type_matrix_pct_mouse_human_plot = cres_type_matrix_pct %>% 
+  #Filter out CREs that do not exist in mice
+  drop_na(type_mouse) %>% 
+  #Plot
+  ggplot() +
+    aes(x = subtype_mouse %>% str_replace(., "-", "\n") %>% fct_rev(),
+         y = subtype_human %>% str_replace(., "-", "\n")%>% fct_rev()) +
+  facet_grid(~paste0("Mouse ", type_mouse) %>% fct_rev()~paste0("Human ", type_human) %>% fct_rev()) +
+  # geom_tile(aes(fill = pct), color = "black", linewidth = 0.4) +
+  geom_point(aes(fill = pct, size = n_pair_cres), 
+             color = "black",
+             pch = 21) +
+  geom_text(aes(label = paste0(pct, "%")),
+            size = 3.5,
+            nudge_y = 0.4) +
+
+  scale_fill_gradient2(low = "white",
+                       high = "#4DBBD5FF",
+                       guide = guide_colorbar(barwidth = unit(2, "cm"))) +
+  scale_size_continuous(range = c(4, 12)) +
+  theme_vaxgo() +
+  theme(axis.text.x = element_text(angle = 0,
+                                   # vjust = 0,
+                                   hjust = 0.5),
+        legend.position = "right"
+        ) +
+  labs(x = "Mouse",
+       y = "Human",
+       fill = "%Shared, from human",
+       size = "CRE pairs") 
+  # guides(size = guide_legend(
+  #     nrow           = 3,
+  #     byrow          = TRUE)) 
+
+cres_type_matrix_pct_mouse_human_plot
+
+cres_type_matrix_pct_mouse_human_plot %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_regulation_cres_type_matrix_pct_plot.png"),
+         width = 8, height = 6)
+
+```
+
+
+
+
+#### Distribution of CREs by gene, by LEGs
 https://pubmed.ncbi.nlm.nih.gov/29180706/#&gid=article-figures&pid=figure-2-uid-1
-```{r fig.height=8, fig.width=16}
+
+```{r fig.height=3, fig.width=12}
 #Plot
 genes_cres_human_core_stats %>% 
+  # filter(eliteness == "Elite") %>% 
   # filter(type_human == "PLS") %>% 
   ggplot() +
   aes(x = n_cat,
-      y = mean_log2fc_human,
-      # label = hgnc_symbol,
+      y = abs(mean_log2fc_diff),
+      color = status,
       fill =  status,
       ) +
-  facet_nested_wrap(~fct_rev(type_human)+treatment+pathogen, nrow = 3,
-                    scales = "free") +
-  geom_hline(yintercept = 0, color = "black", linetype = 2) +
-    geom_point(position = position_dodge2(0.5),
-               mapping = aes(color = status),
-               size = 0.5,
-               alpha = 0.5) +
-  geom_violin() +
+  facet_nested_wrap(~fct_rev(type_human), 
+                    nrow = 1, axes = "all", scales = "free") +
+  geom_point(alpha = 0.2,
+             size = 0.5,
+            position = position_jitterdodge(jitter.width = 0.15, 
+                                    dodge.width = 0.9),) +
+  geom_boxplot(width = 0.7,
+               alpha = 0.5,
+               outliers = F) +
+  # STATISTICAL TEST LAYER
+  stat_compare_means(
+    aes(group = status),
+    method = "wilcox.test",
+    label = "p.signif",
+    symnum.args = list(
+      cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+      symbols = c("***", "**", "*", "ns")
+    ),
+    vjust = 1.2,
+    label.y.np = "top",
+    hide.ns = T
+  ) +
+#   # Linear regression
+#   stat_smooth(
+#   aes(x = as.numeric(forcats::fct_drop(n_cat)), group = status),
+#   method = "loess",
+#   se = TRUE,
+#   linewidth = 1.2,
+#   alpha = 0.25
+# ) +
   scale_fill_manual(values = colors$comparison) +
   scale_color_manual(values = colors$comparison) +
   labs(x = "N",
-       y = "Human Log2FC") +
+       y = "|Log2FC|",
+       color = "",
+       fill = "") +
   theme_vaxgo() +
   theme(legend.position = "top")
 
 ```
 
-What is the distribution of diffLog2FC, by CREs, by gene, by LEGs
-https://pubmed.ncbi.nlm.nih.gov/29180706/#&gid=article-figures&pid=figure-2-uid-1
-```{r fig.height=8, fig.width=10}
+#### Distribution of diffLog2FC, by CREs, by gene, by LEGs
+```{r fig.height=8, fig.width=12}
 #Plot
-genes_cres_human_core_stats %>% 
+cres_type_homology_comparison_dge_legs_stats %>% 
+  # filter(type_human == "PLS") %>%
+  ggplot() +
+  aes(x = n_cat,
+      y = mean_log2fc_human,
+      # label = hgnc_symbol,
+      fill =  status,
+      color = status
+      ) +
+  facet_nested_wrap(~fct_rev(type_human)+ 
+                      # subtype_human + 
+                      treatment+ pathogen, nrow = 3,
+                    scales = "free") +
+  geom_hline(yintercept = 0, color = "black", linetype = 2) +
+    geom_point(position = position_jitterdodge(jitter.width = 0.2, 
+                                    dodge.width = 0.9),
+               mapping = aes(color = status),
+               size = 0.5,
+               alpha = 0.5) +
+  geom_violin(alpha = 0.1, ) +
+    # geom_boxplot(width = 0.7,
+    #            alpha = 0.5,
+    #            outliers = F) +
+  scale_fill_manual(values = colors$comparison) +
+  scale_color_manual(values = colors$comparison) +
+  labs(x = "N",
+       y = "Human Log2FC",
+       fill = "",
+       color = "") +
+  theme_vaxgo() +
+  theme(legend.position = "top")
+
+```
+
+What is the distribution of absolute diffLog2FC, by CREs, by gene, by LEGs
+https://pubmed.ncbi.nlm.nih.gov/29180706/#&gid=article-figures&pid=figure-2-uid-1
+```{r fig.height=8, fig.width=12}
+#Plot
+cres_type_homology_comparison_dge_legs_stats %>% 
   # filter(type_human == "PLS") %>% 
   ggplot() +
   aes(x = n_cat,
@@ -644,7 +844,7 @@ genes_cres_human_core_stats %>%
   scale_fill_manual(values = colors$comparison) +
   scale_color_manual(values = colors$comparison) +
   labs(x = "N",
-       y = "|Log2FC|",
+       y = expression("|" * Delta * "Log"[2] * "FC|"),
        fill = "",
        color = "") +
   theme_vaxgo() +
@@ -653,9 +853,9 @@ genes_cres_human_core_stats %>%
 ```
 
 
-CREs vs. Identity
+#### nCREs vs. Identity
 ```{r fig.height=6, fig.width=8}
-genes_cres_human_core_stats %>% 
+cres_type_homology_comparison_dge_legs_stats %>% 
   ggplot(aes(
     x = abs(mean_log2fc_diff),
     y = identity_human2mouse,
@@ -694,148 +894,167 @@ genes_cres_human_core_stats %>%
 
 
 
-```{r fig.height=3, fig.width=8}
-#Plot
-genes_cres_human_core_stats %>% 
-  # filter(eliteness == "Elite") %>% 
-  # filter(type_human == "PLS") %>% 
-  ggplot() +
-  aes(x = n_cat,
-      y = abs(mean_log2fc_diff),
-      color = status,
-      fill =  status,
-      ) +
-  facet_nested_wrap(~fct_rev(type_human), 
-                    nrow = 1, axes = "all", scales = "free") +
-  geom_point(alpha = 0.2,
-             size = 0.5,
-            position = position_jitterdodge(jitter.width = 0.15, 
-                                    dodge.width = 0.5),) +
-  geom_boxplot(width = 0.7,
-               alpha = 0.5,
-               outliers = F) +
-  # STATISTICAL TEST LAYER
-  stat_compare_means(
-    aes(group = status),
-    method = "wilcox.test",
-    label = "p.signif",
-    symnum.args = list(
-      cutpoints = c(0, 0.001, 0.01, 0.05, 1),
-      symbols = c("***", "**", "*", "ns")
-    ),
-    vjust = 1.2,
-    label.y.np = "top",
-    hide.ns = T
-  ) +
-#   # Linear regression
-#   stat_smooth(
-#   aes(x = as.numeric(forcats::fct_drop(n_cat)), group = status),
-#   method = "loess",
-#   se = TRUE,
-#   linewidth = 1.2,
-#   alpha = 0.25
-# ) +
-  scale_fill_manual(values = colors$comparison) +
-  scale_color_manual(values = colors$comparison) +
-  labs(x = "N",
-       y = "|Log2FC|",
-       color = "",
-       fill = "") +
-  theme_vaxgo() +
-  theme(legend.position = "top")
 
-```
 
 
 #### Regression
 ```{r}
-library(dplyr)
-library(broom)
-library(pROC)
-library(ggplot2)
+# Load required core libraries
+# --------
+library(tidyverse)
+library(tidymodels)
+library(here)
 
-# 1. Preparar a variável de desfecho binária (1 = Shared, 0 = Not-shared)
-df_logistic <- genes_cres_human_core_stats %>%
-  filter(!is.na(identity_human2mouse), !is.na(n), !is.na(status)) %>%
-  mutate(
-    status_bin = ifelse(status == "Shared", 1, 0),
-    type_human = factor(type_human, levels = c("PLS", "pELS", "dELS"))
+# --------
+# Prepare master wide features dataset per gene locus
+# --------
+genes_features_master <- cres_type_homology_comparison_dge_legs_stats %>%
+  # Filter missing identities to ensure clean modeling data
+  drop_na(identity_human2mouse, status) %>%
+  select(
+         hgnc_symbol, treatment, pathogen, status, identity_human2mouse, mean_log2fc_human, mean_log2fc_mouse, 
+         type_human, subtype_human, match_homology_group, 
+         n_cres, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology) %>% 
+  distinct() %>% 
+  
+  # Step 1: Pivot all required features (counts and percentages) to wide format
+  group_by(hgnc_symbol, treatment, pathogen, status, identity_human2mouse) %>% 
+  tidyr::pivot_wider(
+    id_cols     = c(hgnc_symbol, treatment, pathogen, status, identity_human2mouse, mean_log2fc_human, mean_log2fc_mouse),
+    names_from  = c(type_human, subtype_human, match_homology),
+    values_from = c(n_cres, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology),
+    names_sep   = "_",
+    # Corrected values_fill syntax passing explicit default scalar types
+    # values_fill = 0
+    ) %>%
+  janitor::clean_names() %>%
+  
+  # Step 2: Define Target Variables for Logistic and Linear Regression
+  dplyr::mutate(
+    # Target for Logistic Regression (1 = Shared, 0 = Not Shared)
+    status_bin = factor(dplyr::if_else(status == "Shared", "Shared", "Not_Shared"), levels = c("Shared", "Not_Shared")),
+    
+    # Target for Linear Regression (Absolute Log2FC divergence magnitude)
+    abs_log2fc_diff = abs(mean_log2fc_human - mean_log2fc_mouse)
   )
 
-# 2. Ajustar os Modelos de Regressão Logística Binomial
-
-# Modelo 1: Aditivo (Efeitos principais independentes)
-model_add <- glm(
-  status_bin ~ identity_human2mouse + n + type_human,
-  data = df_logistic,
-  family = binomial(link = "logit")
-)
-
-# Modelo 2: Com Interação (Testa se o efeito do N de cCREs depende da identidade de proteína)
-model_int <- glm(
-  status_bin ~ identity_human2mouse * n + type_human,
-  data = df_logistic,
-  family = binomial(link = "logit")
-)
-
-# Comparar o ajuste dos modelos via AIC / Likelihood Ratio Test
-anova(model_add, model_int, test = "Chisq")
 
 
-# Extrair Odds Ratios (OR) e Intervalos de Confiança de 95%
-or_results <- tidy(model_int, exponentiate = TRUE, conf.int = TRUE) %>%
-  select(term, estimate, std.error, p.value, conf.low, conf.high) %>%
-  rename(
-    Predictor = term,
-    Odds_Ratio = estimate,
-    CI_2.5 = conf.low,
-    CI_97.5 = conf.high
+
+cres_type_homology_comparison_dge_legs_stats %>%
+  # Filter missing identities to ensure clean modeling data
+  drop_na(identity_human2mouse, status) %>%
+  filter(hgnc_symbol == "GNAI2") %>% 
+  select(
+         hgnc_symbol, treatment, pathogen, status, 
+         type_human, subtype_human, match_homology_group, identity_human2mouse, mean_log2fc_human, mean_log2fc_mouse, mean_log2fc_diff,
+         n_cres, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology) %>% 
+  distinct() %>% 
+  
+  # Step 1: Pivot all required features (counts and percentages) to wide format
+  tidyr::pivot_wider(
+    id_cols     = c(hgnc_symbol, treatment, pathogen, status, identity_human2mouse, mean_log2fc_human, mean_log2fc_mouse, mean_log2fc_diff),
+    names_from  = c(type_human, subtype_human, match_homology_group),
+    values_from = c(n_cres, 
+                    # n_cat, 
+                    pct_same_cre_type, pct_same_cre_subtype, pct_homology),
+    names_sep   = "_", 
+    values_fn = median
+    ) %>% 
+  # Step 2: Define Target Variables for Logistic and Linear Regression
+  dplyr::mutate(
+    # Target for Logistic Regression (1 = Shared, 0 = Not Shared)
+    status_bin = factor(dplyr::if_else(status == "Shared", "Shared", "Not_Shared"), levels = c("Shared", "Not_Shared")),
+    
+    # Target for Linear Regression (Absolute Log2FC divergence magnitude)
+    abs_log2fc_diff = abs(mean_log2fc_diff)
   )
 
-print(or_results)
+```
 
 
-# 1. Calcular as probabilidades preditas pelo modelo
-df_logistic$prob_pred <- predict(model_int, type = "response")
+```{r}
+# ==============================================================================
+# PIPELINE 1: LOGISTIC REGRESSION (Classify Shared vs Not-Shared LEGs)
+# ==============================================================================
 
-# 2. Gerar o objeto ROC
-roc_obj <- roc(df_logistic$status_bin, df_logistic$prob_pred)
+# --------
+# Configure logistic regression specification and recipe
+# --------
+logistic_spec <- logistic_reg() %>%
+  set_engine("glm") %>%
+  set_mode("classification")
 
-# 3. Extrair a Área Sob a Curva (AUC)
-auc_val <- round(auc(roc_obj), 3)
-cat("Área Sob a Curva (AUC):", auc_val, "\n")
+logistic_recipe <- recipes::recipe(status_bin ~ ., data = genes_features_master) %>%
+  # Preserve metadata columns by assigning them to an "id" role (they won't be used as predictors)
+  recipes::update_role(hgnc_symbol, treatment, pathogen, status, mean_log2fc_human, mean_log2fc_mouse, abs_log2fc_diff, new_role = "id") %>%
+  # Convert n_cat categorical variables into dummy binaries for glm
+  recipes::step_dummy(recipes::all_nominal_predictors()) %>%
+  # Remove zero-variance predictors
+  recipes::step_zv(recipes::all_predictors()) %>%
+  # Scale and center all numeric predictor metrics (percentages and raw counts)
+  recipes::step_normalize(recipes::all_numeric_predictors())
 
-# 4. Plotar a Curva ROC
-ggroc(roc_obj, color = "#2b5c8f", size = 1.2) +
-  geom_abline(intercept = 1, slope = 1, linetype = "dashed", color = "gray50") +
-  annotate(
-    "text", x = 0.3, y = 0.2, 
-    label = paste0("AUC = ", auc_val), 
-    size = 5, fontface = "bold"
-  ) +
-  labs(
-    title = "ROC Curve: Prediction of Species-Shared Status",
-    x = "Specificity",
-    y = "Sensitivity"
-  ) +
-  theme_minimal()
+# --------
+# Fit logistic workflow and extract engine
+# --------
+logistic_fit <- tidymodels::workflow() %>%
+  tidymodels::add_recipe(logistic_recipe) %>%
+  tidymodels::add_model(logistic_spec) %>%
+  tidymodels::fit(data = genes_features_master)
+
+# Extract native GLM object for direct diagnostics
+logistic_glm_engine <- tidymodels::extract_fit_engine(logistic_fit)
+
+# -> Example direct analysis via pROC
+genes_features_master$prob_shared <- predict(logistic_glm_engine, type = "response")
+roc_obj <- pROC::roc(genes_features_master$status_bin, genes_features_master$prob_shared, levels = c("Not_Shared", "Shared"))
+cat("Logistic AUC:", round(pROC::auc(roc_obj), 3), "\n")
+
+# -> Example direct analysis via broom
+logistic_or_table <- broom::tidy(logistic_glm_engine, exponentiate = TRUE, conf.int = TRUE)
+```
 
 
-# Plotar curvas de probabilidade logística predita
-df_logistic %>%
-  ggplot(aes(x = identity_human2mouse, y = prob_pred, color = n_cat)) +
-  facet_wrap(~type_human) +
-  geom_point(aes(y = status_bin), alpha = 0.1, size = 0.8) + # Pontos reais (0 ou 1)
-  stat_smooth(method = "glm", method.args = list(family = "binomial"), se = FALSE, size = 1) +
-  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
-  labs(
-    x = "% Protein Identity (Human vs. Mouse)",
-    y = "Predicted Probability of being Shared (%)",
-    color = "N CREs",
-    title = "Logistic Regression Predicted Probabilities"
-  ) +
-  theme_vaxgo() +
-  theme(legend.position = "right")
+```{r}
+# ==============================================================================
+# PIPELINE 2: LINEAR REGRESSION (Predict Log2FC Divergence Magnitude)
+# ==============================================================================
+
+# --------
+# Configure linear regression specification and recipe
+# --------
+linear_spec <- tidymodels::linear_reg() %>%
+  tidymodels::set_engine("lm") %>%
+  tidymodels::set_mode("regression")
+
+linear_recipe <- recipes::recipe(abs_log2fc_diff ~ ., data = genes_features_master) %>%
+  recipes::update_role(hgnc_symbol, treatment, pathogen, status, status_bin, prob_shared, mean_log2fc_human, mean_log2fc_mouse, new_role = "id") %>%
+  recipes::step_dummy(recipes::all_nominal_predictors()) %>%
+  recipes::step_zv(recipes::all_predictors()) %>%
+  recipes::step_normalize(recipes::all_numeric_predictors())
+
+# --------
+# Fit linear workflow and extract engine
+# --------
+linear_fit <- tidymodels::workflow() %>%
+  tidymodels::add_recipe(linear_recipe) %>%
+  tidymodels::add_model(linear_spec) %>%
+  tidymodels::fit(data = genes_features_master)
+
+# Extract native LM object for direct diagnostics
+linear_lm_engine <- tidymodels::extract_fit_engine(linear_fit)
+
+# -> Example direct analysis via broom
+linear_coefficients <- broom::tidy(linear_lm_engine, conf.int = TRUE)
+
+
+# --------
+# Save model workflows and extracted engines to disk
+# --------
+# Save
+saveRDS(logistic_glm_engine, file = here::here("tables", "logistic_glm_engine.rds"))
+saveRDS(linear_lm_engine, file = here::here("tables", "linear_lm_engine.rds"))
 ```
 
 
@@ -846,63 +1065,8 @@ df_logistic %>%
 
 
 
-#### Mouse to Human: Have CREs diverged their functions?
-
-```{r classify-match-type, fig.height=5, fig.width=5}
-#Heatmap
-
-#Elite CREs
-cres_homologous_1to1_comparison %>% 
-    # dplyr::filter(!is.na(hgnc_symbol)) %>% #1,706
-  #Plot
-  ggplot() +
-    aes(x = subtype_mouse %>% str_replace(., "-", "\n"),
-         y = subtype_human %>% str_replace(., "-", "\n")) +
-  facet_grid(~type_human~type_mouse) +
-  geom_tile(aes(fill = pct), color = "black", linewidth = 0.4) +
-  geom_text(aes(label = paste0(pct, "%")),
-            size = 3) +
-  theme_vaxgo() +
-  scale_fill_gradient2(low = "white",
-                       high = "#4361ee",
-                       guide = guide_colorbar(barwidth = unit(2, "cm"))) +
-  scale_x_discrete(expand = c(0.05, 0.05)) +
-  scale_y_discrete(expand = c(0.05, 0.05)) +
-  theme(axis.text.x = element_text(angle = 0,
-                                   # vjust = 0,
-                                   hjust = 0.5),
-        legend.position = "top") +
-  labs(x = "Mouse",
-       y = "Human",
-       fill = "%Shared, from human")
 
 
-# All CREs
-cres_homologous %>% 
-  #Plot
-  ggplot() +
-    aes(x = subtype_mouse %>% str_replace(., "-", "\n"),
-         y = subtype_human %>% str_replace(., "-", "\n")) +
-  facet_grid(~type_human~type_mouse) +
-  geom_tile(aes(fill = pct), color = "black", linewidth = 0.4) +
-  geom_text(aes(label = paste0(pct, "%")),
-            size = 3) +
-  theme_vaxgo() +
-  scale_fill_gradient2(low = "white",
-                       high = "#4361ee",
-                       guide = guide_colorbar(barwidth = unit(2, "cm"))) +
-  scale_x_discrete(expand = c(0.05, 0.05)) +
-  scale_y_discrete(expand = c(0.05, 0.05)) +
-  theme(axis.text.x = element_text(angle = 0,
-                                   # vjust = 0,
-                                   hjust = 0.5),
-        legend.position = "top") +
-  labs(x = "Mouse",
-       y = "Human",
-       fill = "%Shared, from human")
-
-
-```
 
 
 
