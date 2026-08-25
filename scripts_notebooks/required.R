@@ -25,10 +25,12 @@ bioc_pkgs <- c(
 )
 
 
+# install.packages("https://cran.r-project.org/src/contrib/Archive/notifier/notifier_1.0.0.tar.gz")
+
 
 # 3. Safe, Non-Destructive Loading Pipeline
 # Combining lists to load sequentially via base R
-all_packages <- c(cran_pkgs, bioc_pkgs)
+all_packages <- c(cran_pkgs, "notifier", bioc_pkgs)
 
 for (pkg in all_packages) {
   if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
@@ -103,7 +105,7 @@ colors = list(organism = c("FIT" = "#4361ee",
                              "Immune\nBTMs" = "#4361ee",
                              "Non-Immune BTMs" = "#3a86ff",
                              "Non-Immune\nBTMs" = "#3a86ff",
-                             "All" = "gray90"),
+                             "All" = "black"),
               #Color
               comparison_color = c("Mouse only" = "black",
                                    "Mouse\nonly" = "black",
@@ -192,7 +194,6 @@ colors = list(organism = c("FIT" = "#4361ee",
               )
 
 
-#Gene sets
 
 btm_immune_groups = list(group = c("SIGNAL TRANSDUCTION" = "#708d81",
                                    "CELL CYCLE" = "#06d6a0",
@@ -1557,7 +1558,77 @@ classification_performance_compute_modules = function(df = btms_df_input,
 
 
 
+# Codon Alignment ----
 
+# Molecular distance
+calculate_pairwise_dna_distance <- function(human_cds, mouse_cds) {
+  # Clean sequence inputs (remove whitespace/newlines and convert to uppercase)
+  human_cds <- toupper(gsub("\\s+", "", human_cds))
+  mouse_cds <- toupper(gsub("\\s+", "", mouse_cds))
+  
+  # Validation: Ensure non-empty sequences
+  if (nchar(human_cds) == 0 || nchar(mouse_cds) == 0) {
+    return(tibble::tibble(
+      dist_jc69    = NA_real_,
+      dist_k80     = NA_real_,
+      status_dist  = "Empty sequence"
+    ))
+  }
+  
+  # Step 1: Global nucleotide alignment to guarantee matching length and gap positions
+  dna_align <- tryCatch({
+    pwalign::pairwiseAlignment(
+      Biostrings::DNAString(human_cds),
+      Biostrings::DNAString(mouse_cds),
+      type = "global"
+    )
+  }, error = function(e) { NULL })
+  
+  if (is.null(dna_align)) {
+    return(tibble::tibble(
+      dist_jc69    = NA_real_,
+      dist_k80     = NA_real_,
+      status_dist  = "Alignment failed"
+    ))
+  }
+  
+  # Step 2: Extract aligned sequence strings with gap characters ('-')
+  aligned_h <- as.character(pwalign::alignedPattern(dna_align))
+  aligned_m <- as.character(pwalign::alignedSubject(dna_align))
+  
+  # Step 3: Construct character matrix and convert via ape::as.alignment & ape::as.DNAbin
+  ab <- rbind(
+    unlist(strsplit(aligned_h, "")),
+    unlist(strsplit(aligned_m, ""))
+  )
+  
+  bin_dna <- tryCatch({
+    ape::as.DNAbin(ape::as.alignment(ab))
+  }, error = function(e) { NULL })
+  
+  if (is.null(bin_dna)) {
+    return(tibble::tibble(
+      dist_jc69    = NA_real_,
+      dist_k80     = NA_real_,
+      status_dist  = "DNAbin conversion failed"
+    ))
+  }
+  
+  # Step 4: Calculate distances using Jukes-Cantor (JC69) and Kimura (K80)
+  jc69_val <- tryCatch({
+    as.numeric(ape::dist.dna(bin_dna, model = "JC69")[1])
+  }, error = function(e) { NA_real_ })
+  
+  k80_val <- tryCatch({
+    as.numeric(ape::dist.dna(bin_dna, model = "K80")[1])
+  }, error = function(e) { NA_real_ })
+  
+  return(tibble::tibble(
+    dist_jc69   = jc69_val,
+    dist_k80    = k80_val,
+    status_dist = if (!is.na(jc69_val)) "Success" else "Distance calculation failed"
+  ))
+}
 
 
 

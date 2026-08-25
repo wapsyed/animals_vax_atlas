@@ -1,0 +1,181 @@
+---
+title: "6_Statistical_Modelling"
+output: html_document
+---
+# Setup
+
+```{r message=FALSE, warning=FALSE}
+# Load core packages for the analysis session
+library(here)
+source(here("scripts_notebooks", "required.R"))
+
+
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+library(GenomeInfoDb)
+library(GenomicRanges)
+library(IRanges)
+library(rtracklayer)
+library(org.Hs.eg.db)
+library(pwalign)
+library(biomaRt)
+```
+
+
+# Statistical modelling
+```{r}
+#Distance
+gene_cds_distance = readRDS(file = here::here("tables", "human_mouse_dna_distances.rds"))
+
+#Transcription factors
+gene_tf_shared_unique =
+  readRDS(file = here("tables", "gene_tf_shared_unique.rds"))
+
+#CREs
+cres_type_homology_comparison =  
+  readRDS(file = here("tables", "cres_type_homology_comparison.rds"))
+
+cres_type_homology_comparison_dge_legs_stats =  
+  readRDS(file = here("tables", "cres_type_homology_comparison_dge_legs_stats.rds"))
+
+
+# Load required core libraries
+# --------
+library(tidyverse)
+library(tidymodels)
+library(here)
+
+# --------
+# Prepare master wide features dataset per gene locus
+# --------
+genes_features_master <- cres_type_homology_comparison_dge_legs_stats %>%
+  # Filter missing identities to ensure clean modeling data
+  tidyr::drop_na(identity_human2mouse, status, type_mouse) %>%
+  dplyr::select(
+    hgnc_symbol, treatment, pathogen, status,
+    type_human, subtype_human, match_homology_group, identity_human2mouse, mean_log2fc_diff,
+    n_total_cre_type_human, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology
+  ) %>%
+  dplyr::distinct() %>%
+  dplyr::arrange(hgnc_symbol, pathogen, type_human, subtype_human, match_homology_group) %>%
+  
+  # Step 1: Pivot all required features (counts and percentages) to wide format
+  tidyr::pivot_wider(
+    id_cols     = c(hgnc_symbol, treatment, pathogen, status, identity_human2mouse, mean_log2fc_diff),
+    names_from  = c(type_human, subtype_human, match_homology_group),
+    values_from = c(n_total_cre_type_human, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology),
+    names_sep   = "_"
+  ) %>%
+  janitor::clean_names() %>%
+  
+  # Step 2: Fill post-pivot NAs with 0 for numeric features and "0" for n_cat categorical features
+  dplyr::mutate(
+    dplyr::across(
+      .cols = tidyselect::where(is.numeric) & !c(identity_human2mouse, mean_log2fc_diff),
+      .fns  = ~ tidyr::replace_na(., 0)
+    ),
+    dplyr::across(
+      .cols = tidyselect::contains("n_cat"),
+      .fns  = ~ tidyr::replace_na(as.character(.), "0")
+    )
+  ) %>%
+  
+  # Step 3: Define Target Variables for Logistic and Linear Regression
+  dplyr::mutate(
+    # Target for Logistic Regression (1 = Shared, 0 = Not Shared)
+    status_bin = factor(dplyr::if_else(status == "Shared", "Shared", "Not_Shared"), levels = c("Shared", "Not_Shared")),
+    # Target for Linear Regression (Absolute Log2FC divergence magnitude)
+    abs_log2fc_diff = abs(mean_log2fc_diff)
+  )
+
+
+
+
+```
+
+
+```{r}
+# ==============================================================================
+# PIPELINE 1: LOGISTIC REGRESSION (Classify Shared vs Not-Shared LEGs)
+# ==============================================================================
+
+# --------
+# Configure logistic regression specification and recipe
+# --------
+logistic_spec <- logistic_reg() %>%
+  parsnip::set_engine("glm") %>%
+  parsnip::set_mode("classification")
+
+logistic_recipe <- recipes::recipe(status_bin ~ ., data = genes_features_master) %>%
+  # Preserve metadata columns by assigning them to an "id" role (they won't be used as predictors)
+  recipes::update_role(hgnc_symbol, treatment, pathogen, status, abs_log2fc_diff, 
+                       new_role = "id") %>%
+  # Convert n_cat categorical variables into dummy binaries for glm
+  recipes::step_dummy(recipes::all_nominal_predictors()) %>%
+  # Remove zero-variance predictors
+  recipes::step_zv(recipes::all_predictors()) %>%
+  # Scale and center all numeric predictor metrics (percentages and raw counts)
+  recipes::step_normalize(recipes::all_numeric_predictors())
+
+# --------
+# Fit logistic workflow and extract engine
+# --------
+logistic_fit <- workflows::workflow() %>%
+  workflows::add_recipe(logistic_recipe) %>%
+  workflows::add_model(logistic_spec) %>%
+  workflows::fit(data = genes_features_master)
+
+# Extract native GLM object for direct diagnostics
+logistic_glm_engine <- extract_fit_engine(logistic_fit)
+
+# -> Example direct analysis via pROC
+genes_features_master$prob_shared <- predict(logistic_glm_engine, type = "response")
+roc_obj <- pROC::roc(genes_features_master$status_bin, genes_features_master$prob_shared, levels = c("Not_Shared", "Shared"))
+cat("Logistic AUC:", round(pROC::auc(roc_obj), 3), "\n")
+
+# -> Example direct analysis via broom
+logistic_or_table <- broom::tidy(logistic_glm_engine, 
+                                 exponentiate = TRUE, conf.int = TRUE)
+```
+
+
+```{r}
+# ==============================================================================
+# PIPELINE 2: LINEAR REGRESSION (Predict Log2FC Divergence Magnitude)
+# ==============================================================================
+
+# --------
+# Configure linear regression specification and recipe
+# --------
+linear_spec <- tidymodels::linear_reg() %>%
+  tidymodels::set_engine("lm") %>%
+  tidymodels::set_mode("regression")
+
+linear_recipe <- recipes::recipe(abs_log2fc_diff ~ ., data = genes_features_master) %>%
+  recipes::update_role(hgnc_symbol, treatment, pathogen, status, status_bin, prob_shared, mean_log2fc_human, mean_log2fc_mouse, new_role = "id") %>%
+  recipes::step_dummy(recipes::all_nominal_predictors()) %>%
+  recipes::step_zv(recipes::all_predictors()) %>%
+  recipes::step_normalize(recipes::all_numeric_predictors())
+
+# --------
+# Fit linear workflow and extract engine
+# --------
+linear_fit <- tidymodels::workflow() %>%
+  tidymodels::add_recipe(linear_recipe) %>%
+  tidymodels::add_model(linear_spec) %>%
+  tidymodels::fit(data = genes_features_master)
+
+# Extract native LM object for direct diagnostics
+linear_lm_engine <- tidymodels::extract_fit_engine(linear_fit)
+
+# -> Example direct analysis via broom
+linear_coefficients <- broom::tidy(linear_lm_engine, conf.int = TRUE)
+
+
+# --------
+# Save model workflows and extracted engines to disk
+# --------
+# Save
+saveRDS(logistic_glm_engine, file = here::here("tables", "logistic_glm_engine.rds"))
+saveRDS(linear_lm_engine, file = here::here("tables", "linear_lm_engine.rds"))
+```

@@ -116,24 +116,29 @@ gene_info_human =
                distinct(),
              by = join_by(gene, pathogen, timepoint_comparison, treatment)) 
 
+
 ```
 
 
 ### Protein id% vs. Diff. in means
 ```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
 #### Difference in means vs. status
-df_clean <- gene_info_human %>%
+gene_info_human_clean_dge <- gene_info_human %>%
   filter(treatment != "Vaccination") %>% 
   mutate(status = ifelse(status == "Shared", "Shared", "Not-shared")) %>% 
-  select(treatment, pathogen, status, timepoint_comparison, identity_human2mouse, mean_log2fc_diff, weight_se_inverse_combined) %>% 
+  select(treatment, pathogen, status, timepoint_comparison, gene, identity_human2mouse, mean_log2fc_diff, weight_se_inverse_combined) %>% 
   distinct()
+
+#Save
+gene_info_human_clean_dge %>% 
+  saveRDS(here("tables", "human_mouse_gene_info_dge_clean.rds"))
 ```
 
 
 ```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
 
 ##### Difference in means vs. status
-stat_results <- df_clean %>%
+stat_results <- gene_info_human_clean_dge %>%
   mutate(abs_diff = abs(mean_log2fc_diff)) %>%
   group_by(treatment, pathogen) %>%
   summarise(
@@ -169,7 +174,7 @@ stat_results <- df_clean %>%
   )
 
 #Plot
-difflog2fc_distribution_legs_plot = df_clean %>% 
+difflog2fc_distribution_legs_plot = gene_info_human_clean_dge %>% 
   inner_join(stat_results, by = c("treatment", "pathogen")) %>% 
   ggplot() +
   aes(
@@ -230,7 +235,7 @@ difflog2fc_distribution_legs_plot %>%
 
 ```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
 #Difference in means vs weight se
-df_clean %>% 
+gene_info_human_clean_dge %>% 
   ggplot() +
   aes(x = weight_se_inverse_combined,
       y = abs(mean_log2fc_diff),
@@ -253,7 +258,7 @@ df_clean %>%
 
 
 #### Difference in means vs. identity
-stats_df <- df_clean %>%
+stats_df <- gene_info_human_clean_dge %>%
   group_by(treatment, pathogen, status) %>%
   summarise(
     cor_res = list(cor.test(identity_human2mouse, abs(mean_log2fc_diff))),
@@ -282,7 +287,7 @@ stats_df <- df_clean %>%
     .groups = "drop"
   )
 
-alignments_human2mouse_legs_identity_log2fc_plot = df_clean %>% 
+alignments_human2mouse_legs_identity_log2fc_plot = gene_info_human_clean_dge %>% 
   inner_join(stats_df %>% select(treatment, pathogen, label_text),
              by = join_by(treatment, pathogen)) %>% 
   ggplot() +
@@ -3009,97 +3014,30 @@ ggmsa(seqs_to_plot,
 # Methodology: Codon-guided alignment & Li (1993) method for Ka/Ks
 ################################################################################
 
+dge_btm_process_genes_diff_bygene =
+  readRDS(here("tables", "human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune.rds"))
+
+gene_info_human_clean_dge = 
+  readRDS(here("tables", "human_mouse_gene_info_dge_clean.rds"))
+
+
+# Filter genes
+target_map <- ortholog_map %>% 
+  filter(external_gene_name %in% c(dge_btm_process_genes_diff_bygene %>% pull(human_symbol) %>% unique()))
+```
+
+
+```{r}
 # ---- 1. Prerequisites & Installation ----
 # Ensure all required packages are installed
-if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
-if (!requireNamespace("biomaRt", quietly = TRUE)) BiocManager::install("biomaRt")
-if (!requireNamespace("Biostrings", quietly = TRUE)) BiocManager::install("Biostrings")
-if (!requireNamespace("seqinr", quietly = TRUE)) install.packages("seqinr")
-if (!requireNamespace("tidyverse", quietly = TRUE)) install.packages("tidyverse")
-if (requireNamespace("pwalign", quietly = TRUE)) 
 
 library(biomaRt)
 library(Biostrings)
 library(seqinr)
 library(tidyverse)
 library(pwalign)
+library(ape)
 
-# ---- 2. Helper Functions for Codon Alignment ----
-
-#' Molecular distance
-calculate_pairwise_dna_distance <- function(human_cds, mouse_cds) {
-  # Clean sequence inputs (remove whitespace/newlines and convert to uppercase)
-  human_cds <- toupper(gsub("\\s+", "", human_cds))
-  mouse_cds <- toupper(gsub("\\s+", "", mouse_cds))
-  
-  # Validation: Ensure non-empty sequences
-  if (nchar(human_cds) == 0 || nchar(mouse_cds) == 0) {
-    return(tibble::tibble(
-      dist_jc69    = NA_real_,
-      dist_k80     = NA_real_,
-      status_dist  = "Empty sequence"
-    ))
-  }
-  
-  # Step 1: Global nucleotide alignment to guarantee matching length and gap positions
-  dna_align <- tryCatch({
-    pwalign::pairwiseAlignment(
-      Biostrings::DNAString(human_cds),
-      Biostrings::DNAString(mouse_cds),
-      type = "global"
-    )
-  }, error = function(e) { NULL })
-  
-  if (is.null(dna_align)) {
-    return(tibble::tibble(
-      dist_jc69    = NA_real_,
-      dist_k80     = NA_real_,
-      status_dist  = "Alignment failed"
-    ))
-  }
-  
-  # Step 2: Extract aligned sequence strings with gap characters ('-')
-  aligned_h <- as.character(pwalign::alignedPattern(dna_align))
-  aligned_m <- as.character(pwalign::alignedSubject(dna_align))
-  
-  # Step 3: Construct character matrix and convert via ape::as.alignment & ape::as.DNAbin
-  ab <- rbind(
-    unlist(strsplit(aligned_h, "")),
-    unlist(strsplit(aligned_m, ""))
-  )
-  
-  bin_dna <- tryCatch({
-    ape::as.DNAbin(ape::as.alignment(ab))
-  }, error = function(e) { NULL })
-  
-  if (is.null(bin_dna)) {
-    return(tibble::tibble(
-      dist_jc69    = NA_real_,
-      dist_k80     = NA_real_,
-      status_dist  = "DNAbin conversion failed"
-    ))
-  }
-  
-  # Step 4: Calculate distances using Jukes-Cantor (JC69) and Kimura (K80)
-  jc69_val <- tryCatch({
-    as.numeric(ape::dist.dna(bin_dna, model = "JC69")[1])
-  }, error = function(e) { NA_real_ })
-  
-  k80_val <- tryCatch({
-    as.numeric(ape::dist.dna(bin_dna, model = "K80")[1])
-  }, error = function(e) { NA_real_ })
-  
-  return(tibble::tibble(
-    dist_jc69   = jc69_val,
-    dist_k80    = k80_val,
-    status_dist = if (!is.na(jc69_val)) "Success" else "Distance calculation failed"
-  ))
-}
-
-```
-
-
-```{r}
 # ---- 3. Connect to Ensembl BioMart ----
 message("Connecting to Ensembl BioMart...")
 human_mart <- biomaRt::useEnsembl(
@@ -3130,30 +3068,76 @@ ortholog_map <- getBM(
   filter(mmusculus_homolog_orthology_type == "ortholog_one2one") %>%
   filter(mmusculus_homolog_ensembl_gene != "" & ensembl_gene_id != "")
 
-# # NOTE: For demonstration purposes, we sample 10 random genes to prevent 
-# # Remove the 'slice_sample' line to run the pipeline for your entire dataset.
-# target_map <- ortholog_map %>% 
-#   slice_sample(n = 10) 
-
-
 # ---- 5. Fetch Coding Sequences (CDS) from BioMart ----
-message("Downloading Human coding sequences...")
-human_cds_raw <- biomaRt::getSequence(
-  id      = ortholog_map$ensembl_gene_id,
-  type    = "ensembl_gene_id",
-  seqType = "coding",
-  mart    = human_mart
-) %>%
-  as_tibble()
+options(timeout = max(6000, getOption("timeout")))
+message("Downloading Human coding sequences in batches of 100 genes...")
 
-message("Downloading Mouse coding sequences...")
-mouse_cds_raw <- biomaRt::getSequence(
-  id = ortholog_map$mmusculus_homolog_ensembl_gene,
-  type = "ensembl_gene_id",
-  seqType = "coding",
-  mart = mouse_mart
-) %>% 
-  as_tibble()
+# Define chunk size and assign batch numbers to target gene IDs
+chunk_size <- 100
+
+target_map_chunked <- target_map %>%
+  dplyr::mutate(chunk = (dplyr::row_number() - 1) %/% chunk_size + 1)
+
+# Iterate over each chunk, download CDS sequences, and combine results
+human_cds_raw <- target_map_chunked %>%
+  dplyr::group_split(chunk) %>%
+  purrr::map_dfr(function(df_chunk) {
+    chunk_id <- df_chunk$chunk[1]
+    message(stringr::str_c("Fetching chunk ", chunk_id, " of ", max(target_map_chunked$chunk), "..."))
+    
+    biomaRt::getSequence(
+      id      = df_chunk$ensembl_gene_id,
+      type    = "ensembl_gene_id",
+      seqType = "coding",
+      mart    = human_mart
+    ) %>%
+      as_tibble()
+  })
+
+notify(
+  title = "Human CDS downloaded!",
+  msg = c("Check it out")
+)
+
+saveRDS(human_cds_raw, file = here::here("tables", "human_cds_raw_batch.rds"))
+
+#Download mouse sequences
+message("Downloading Mouse coding sequences in batches of 100 genes...")
+
+# Define chunk size and assign batch numbers to target gene IDs
+chunk_size <- 100
+
+target_map_mouse_chunked <- target_map %>%
+  dplyr::filter(!is.na(mmusculus_homolog_ensembl_gene) & mmusculus_homolog_ensembl_gene != "") %>%
+  dplyr::mutate(chunk = (dplyr::row_number() - 1) %/% chunk_size + 1)
+
+# Iterate over each chunk, download CDS sequences, and combine results
+mouse_cds_raw <- target_map_mouse_chunked %>%
+  dplyr::group_split(chunk) %>%
+  purrr::map_dfr(function(df_chunk) {
+    chunk_id  <- df_chunk$chunk[1]
+    total_chk <- max(target_map_mouse_chunked$chunk)
+    
+    message(stringr::str_c("Fetching Mouse CDS chunk ", chunk_id, " of ", total_chk, "..."))
+    
+    biomaRt::getSequence(
+      id      = df_chunk$mmusculus_homolog_ensembl_gene,
+      type    = "ensembl_gene_id",
+      seqType = "coding",
+      mart    = mouse_mart
+    ) %>%
+      as_tibble()
+  })
+# Save
+saveRDS(mouse_cds_raw, file = here::here("tables", "mouse_cds_raw_batch.rds"))
+
+# --------
+# Send completion notification
+# --------
+notify(
+  title = "Mouse CDS downloaded!",
+  msg   = c("Batch download of 100 genes completed successfully")
+)
 
 # ---- 6. Filter for Longest Canonical/Isoform CDS per Gene ----
 # BioMart returns multiple rows per gene due to alternative splicing transcripts.
@@ -3179,8 +3163,6 @@ pipeline_matrix <- ortholog_map %>%
   inner_join(human_cds_clean, by = "ensembl_gene_id") %>%
   inner_join(mouse_cds_clean, by = "mmusculus_homolog_ensembl_gene")
 
-library(ape)
-
 pipeline_matrix_distance <- pipeline_matrix %>%
   dplyr::mutate(
     dna_metrics = purrr::map2(
@@ -3191,7 +3173,7 @@ pipeline_matrix_distance <- pipeline_matrix %>%
   ) %>%
   tidyr::unnest(dna_metrics)
 
-final_distance_table <- pipeline_matrix_distance %>%
+human_mouse_cds_distance <- pipeline_matrix_distance %>%
   dplyr::select(
     hgnc_symbol    = external_gene_name,
     mgi_symbol = mmusculus_homolog_associated_gene_name,
@@ -3201,11 +3183,129 @@ final_distance_table <- pipeline_matrix_distance %>%
     dist_k80 
   )
 
-print(head(final_distance_table))
+print(head(human_mouse_cds_distance))
 
+notify(
+  title = "Alignment done",
+  msg = c("Check it out")
+)
 
-saveRDS(final_distance_table, file = here::here("tables", "human_mouse_dna_distances.rds"))
+#Save
+saveRDS(human_mouse_cds_distance, file = here::here("tables", "human_mouse_cds_distance.rds"))
 ```
+
+
+
+```{r}
+
+```
+
+Is LEG status explaned by the evolutionary distance in the CDS?
+
+```{r fig.height=3, fig.width=3}
+#Import
+gene_info_human_clean_dge = 
+   readRDS(here("tables", "human_mouse_gene_info_dge_clean.rds"))
+
+human_mouse_cds_distance = 
+  readRDS(file = here::here("tables", "human_mouse_cds_distance.rds"))
+
+#Merge
+human_mouse_cds_distance_dge = 
+  bind_rows(
+  human_mouse_cds_distance %>% 
+  inner_join(gene_info_human_clean_dge %>% rename(hgnc_symbol = gene),
+             by = "hgnc_symbol"),
+  human_mouse_cds_distance %>% 
+  inner_join(dge_btm_process_genes_diff_bygene %>% 
+               rename(hgnc_symbol = human_symbol) %>% 
+               mutate(status = "All"),
+             by = "hgnc_symbol")
+  )
+
+
+#Is LEG status explaned by the evolutionary distance in the CDS?
+human_mouse_cds_distance_dge %>%
+  ggplot2::ggplot() +
+  ggplot2::aes(
+    x     = status,
+    y     = dist_k80,
+    color = status,
+    fill  = status
+  ) +
+
+  geom_violin(alpha = 0, ) +
+  # Render boxplot layer without outliers
+  ggplot2::geom_boxplot(
+    width    = 0.3,
+    alpha    = 1,
+    outliers = FALSE,
+    color    = "black"
+  ) +
+  # geom_point(
+  #   alpha = 1,
+  #   size = 0.5,
+  #   position = position_jitterdodge(jitter.width = 0.3, dodge.width = 0.75),
+  # ) +
+  # Apply project custom palettes and labels
+  ggplot2::scale_fill_manual(values = colors$comparison) +
+  ggplot2::scale_color_manual(values = colors$comparison) +
+  ggplot2::labs(
+    x     = "Status",
+    y     = "Kimura distance",
+    color = "",
+    fill  = ""
+  ) +
+  # Set Y-axis view boundaries
+  ggplot2::coord_cartesian(ylim = c(0, NA)) +
+  theme_vaxgo() +
+  ggplot2::theme(
+    legend.position = "top",
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  ) +
+    # STATISTICAL TEST LAYER
+  stat_compare_means(
+    comparisons = list(c("Shared", "Not-shared")),
+    method = "wilcox.test",
+    label = "p.signif",
+    symnum.args = list(
+      cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+      symbols = c("***", "**", "*", "ns")
+    ),
+    vjust = 1.2,
+    label.y.np = "top",
+    hide.ns = F
+  ) 
+
+```
+
+
+```{r fig.height=3, fig.width=3}
+human_mouse_cds_distance_dge %>%
+  ggplot2::ggplot() +
+  ggplot2::aes(
+    x     = dist_k80,
+    y     = abs(mean_log2fc_diff),
+    color = status,
+    fill  = status
+  ) +
+  geom_point(alpha = 0.2,
+             size = 0.5) +
+  geom_smooth(method = "lm", se = T) +
+  scale_fill_manual(values = colors$comparison) +
+  scale_color_manual(values = colors$comparison) +
+  scale_x_continuous(expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
+  labs(x = "Kimura Distance",
+       y = expression("|" * Delta * "Log"[2] * "FC|"),
+       fill = "LEG",
+       color = "LEG") +
+  theme_vaxgo() +
+  theme(legend.position = "top")
+```
+
+
 
 
 
