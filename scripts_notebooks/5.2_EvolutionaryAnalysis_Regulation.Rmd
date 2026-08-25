@@ -303,7 +303,7 @@ homologous_cres <- read_tsv(
 
 ```
 
-
+Gene hancar
 ```{r import-data}
 # GENEHANCER ===================
 
@@ -379,7 +379,37 @@ cres_human_encode_genehancer %>%
 # cres_human_encode_genehancer_elite_notelite %>% 
 #   saveRDS(file = here("tables", "cres_human_encode_genehancer_elite_notelite.rds"))
 ```
-
+EPD 
+```{r}
+# # Download and import human EPDnew promoter database ==================
+# # Load required libraries
+# library(tidyverse)
+# library(rtracklayer)
+# library(GenomicRanges)
+# library(here)
+# 
+# # Download and import human EPDnew promoter database
+# epd_url <- "https://epd.expasy.org/epd/get_promoters.php"
+# 
+# # Download and parse promoter BED directly
+# epd_promoters <- rtracklayer::import(here("tables", "Genomic", "EPDnew_human_oXSGa_2026.bed"), format = "BED") %>% 
+#   as.data.frame() %>%
+#   separate(name, into = c("hgnc_symbol", "promoter_id")) %>% 
+#   dplyr::select(
+#     chrom = seqnames,
+#     hgnc_symbol,
+#     start,
+#     end,
+#     strand,
+#     promoter_id,
+#     score
+#   ) %>% 
+#   mutate(promoter_id = as.numeric(promoter_id)) %>% 
+#   group_by(hgnc_symbol) %>% 
+#   summarise(n_promoter = n())
+# 
+# print(epd_promoters)
+```
 
 
 
@@ -453,8 +483,12 @@ cres_homologous_1to1 <- cres_annotated %>% #856,415
 
 # Separate tables
 cres_homologous <- cres_annotated %>% dplyr::filter(is_homologous)
-cres_human_only <- cres_annotated %>% dplyr::filter(match_type == "human_only")
-cres_mouse_only <- cres_annotated %>% dplyr::filter(match_type == "mouse_only")
+cres_human_only <- cres_annotated %>% dplyr::filter(match_homology == "human_only") %>% 
+  filter(type_human %in% c("pELS", "dELS", "PLS"),
+         type_mouse %in% c("pELS", "dELS", "PLS"))
+cres_mouse_only <- cres_annotated %>% dplyr::filter(match_homology == "mouse_only") %>% 
+  filter(type_human %in% c("pELS", "dELS", "PLS"),
+         type_mouse %in% c("pELS", "dELS", "PLS"))
 
 #Summarize
 cres_homologous_1to1$type_human %>% unique()
@@ -504,37 +538,38 @@ cres_type_homology_comparison <- cres_annotated %>%
     type_mouse %in% c("pELS", "dELS", "PLS"),
     !is.na(hgnc_symbol) & hgnc_symbol != ""
   ) %>%
-  # Collapse granular match_homology into broad simplified categories
+  
+  # Step 1: Collapse granular match_homology into broad simplified categories
   dplyr::mutate(
     match_homology_group = dplyr::case_when(
-      match_homology == "1:1" ~ "1:1 Match",
-      match_homology %in% c("1:N", "N:1", "N:M") ~ "Complex Homology",
+      match_homology %in% c("1:1") ~ "Homologous",
+      match_homology %in% c("1:N", "N:1", "N:M") ~ "Complex homology",
       match_homology %in% c("human_only", "mouse_only") ~ "Species Specific",
       TRUE ~ "Other"
     ),
-    match_homology_group = factor(
-      match_homology_group, 
-      levels = c("1:1 Match", "Complex Homology", "Species Specific")
+    match_homology_group = forcats::fct_relevel(
+      match_homology_group, "Homologous", "Complex homology", "Species Specific"
     )
   ) %>%
-  select(-match_homology) %>% 
-  distinct() %>% 
-  # Step 1: Count occurrences per gene locus and annotation/homology stratum
+  tidyr::drop_na(match_homology_group) %>%
+  
+  # Step 2: Count occurrences per gene locus and annotation/homology stratum
   dplyr::group_by(
     hgnc_symbol, type_human, subtype_human, type_mouse, subtype_mouse,
     match_homology_group, match_cretype, match_cresubtype
   ) %>%
   dplyr::summarise(n_cres = dplyr::n(), .groups = "drop") %>%
   
-  # Step 2: Complete missing combinations with 0 to explicitly retain n = 0
+  # Step 3: Complete missing combinations with 0 to explicitly retain n = 0 per stratum
   tidyr::complete(
     hgnc_symbol,
     type_human = c("pELS", "dELS", "PLS"),
     subtype_human,
+    match_homology_group,
     fill = list(n_cres = 0)
   ) %>%
   
-  # Step 3: Compute relative percentage for each stratum over total locus cCREs
+  # Step 4: Compute relative percentage for each stratum over total locus cCREs
   dplyr::group_by(hgnc_symbol) %>%
   dplyr::mutate(
     n_total_cres_gene = sum(n_cres),
@@ -545,7 +580,7 @@ cres_type_homology_comparison <- cres_annotated %>%
     )
   ) %>%
   
-  # Step 4: Compute percentage relative to same Human Type
+  # Step 5: Compute percentage relative to same Human Type
   dplyr::group_by(hgnc_symbol, type_human) %>%
   dplyr::mutate(
     n_total_cre_type_human = sum(n_cres),
@@ -559,7 +594,7 @@ cres_type_homology_comparison <- cres_annotated %>%
     )
   ) %>%
   
-  # Step 5: Compute percentage relative to same Human Type & Subtype
+  # Step 6: Compute percentage relative to same Human Type & Subtype
   dplyr::group_by(hgnc_symbol, type_human, subtype_human) %>%
   dplyr::mutate(
     n_total_cre_subtype_human = sum(n_cres),
@@ -573,50 +608,51 @@ cres_type_homology_comparison <- cres_annotated %>%
     )
   ) %>%
   
-  # Step 6: Compute percentage relative to Homology Class per Gene
+  # Step 7: Compute homology percentage WITHIN each Human Type & Subtype stratum
   dplyr::group_by(hgnc_symbol, type_human, subtype_human, match_homology_group) %>%
   dplyr::mutate(
-    
-    n_total_homology = sum(n_cres),
-    pct_homology     = dplyr::if_else(
-      n_total_cres_gene > 0,
-      round(100 * n_total_homology / n_total_cres_gene, 2),
+    n_cres_homology = sum(n_cres, na.rm = TRUE)
+  ) %>%
+  dplyr::group_by(hgnc_symbol, type_human, subtype_human) %>%
+  dplyr::mutate(
+    pct_homology = dplyr::if_else(
+      n_total_cre_subtype_human > 0,
+      round(100 * n_cres_homology / n_total_cre_subtype_human, 2),
       0
     )
   ) %>%
-  
-  # Step 7: Categorize cCRE counts into unified frequency bins (n_cat)
-  dplyr::group_by(hgnc_symbol, type_human, subtype_human) %>%
+  ungroup() %>% 
+  # Step 8: Categorize cCRE counts into unified frequency bins (n_cat)
+  # dplyr::group_by(hgnc_symbol, type_human) %>%
   dplyr::mutate(
     n_cat = dplyr::case_when(
-      n_cres == 0 ~ "0",
-      n_cres == 1 ~ "1",
-      n_cres == 2 ~ "2",
-      n_cres == 3 ~ "3",
-      n_cres == 4 ~ "4",
-      n_cres >= 5 ~ ">5",
+      n_total_cre_type_human == 0 ~ "0",
+      n_total_cre_type_human == 1 ~ "1",
+      n_total_cre_type_human == 2 ~ "2",
+      n_total_cre_type_human == 3 ~ "3",
+      n_total_cre_type_human == 4 ~ "4",
+      n_total_cre_type_human >= 5 ~ ">=5",
       TRUE        ~ NA_character_
     ),
-    n_cat = factor(n_cat, levels = c("0", "1", "2", "3", "4", ">5"))
+    n_cat = factor(n_cat, levels = c("0", "1", "2", "3", "4", ">=5"))
   ) %>%
-  dplyr::ungroup() %>%
+  dplyr::ungroup() %>% 
   
-  # Step 8: Sort by locus and count, then set factor levels for plotting
-  dplyr::arrange(hgnc_symbol, dplyr::desc(n_cres)) %>%
+  # Step 9: Sort by locus and count, then set factor levels for plotting
+  dplyr::arrange(hgnc_symbol, dplyr::desc(n_total_cre_type_human)) %>%
   dplyr::mutate(
     type_human = factor(type_human, levels = c("PLS", "pELS", "dELS")),
     type_mouse = factor(type_mouse, levels = c("PLS", "pELS", "dELS"))
   )
-
+  
 #Print
-cres_type_homology_comparison
+cres_type_homology_comparison 
 
 #Save 
 cres_type_homology_comparison %>% 
   saveRDS(file = here("tables", "cres_type_homology_comparison.rds"))
 
-
-# Inner join with cross-species differential expression statistics
+# Inner join with cross-species differential expression statistics =============
 cres_type_homology_comparison_dge_legs_stats <- cres_type_homology_comparison %>%
     dplyr::inner_join(
     gene_info_human_log2fc_stats %>%
@@ -672,7 +708,7 @@ cres_type_matrix_pct <- cres_type_homology_comparison %>%
 #Heatmap
 cres_type_matrix_pct_mouse_human_plot = cres_type_matrix_pct %>% 
   #Filter out CREs that do not exist in mice
-  drop_na(type_mouse) %>% 
+  drop_na(type_mouse) %>%
   #Plot
   ggplot() +
     aes(x = subtype_mouse %>% str_replace(., "-", "\n") %>% fct_rev(),
@@ -704,8 +740,10 @@ cres_type_matrix_pct_mouse_human_plot = cres_type_matrix_pct %>%
   #     nrow           = 3,
   #     byrow          = TRUE)) 
 
+#Print
 cres_type_matrix_pct_mouse_human_plot
 
+#Save
 cres_type_matrix_pct_mouse_human_plot %>% 
   ggsave(filename = here("Figures", "all_human_mouse_regulation_cres_type_matrix_pct_plot.png"),
          width = 8, height = 6)
@@ -773,8 +811,8 @@ genes_cres_human_core_stats %>%
 #### Distribution of diffLog2FC, by CREs, by gene, by LEGs
 ```{r fig.height=8, fig.width=12}
 #Plot
-cres_type_homology_comparison_dge_legs_stats %>% 
-  # filter(type_human == "PLS") %>%
+cres_type_homology_comparison_dge_legs_stats %>%
+  filter(n_cat != "0") %>%
   ggplot() +
   aes(x = n_cat,
       y = mean_log2fc_human,
@@ -782,7 +820,7 @@ cres_type_homology_comparison_dge_legs_stats %>%
       fill =  status,
       color = status
       ) +
-  facet_nested_wrap(~fct_rev(type_human)+ 
+  facet_nested_wrap(~type_human+ 
                       # subtype_human + 
                       treatment+ pathogen, nrow = 3,
                     scales = "free") +
@@ -812,14 +850,14 @@ https://pubmed.ncbi.nlm.nih.gov/29180706/#&gid=article-figures&pid=figure-2-uid-
 ```{r fig.height=8, fig.width=12}
 #Plot
 cres_type_homology_comparison_dge_legs_stats %>% 
-  # filter(type_human == "PLS") %>% 
+  filter(n_cat != "0") %>%
   ggplot() +
   aes(x = n_cat,
       y = abs(mean_log2fc_diff),
       color = status,
       fill =  status,
       ) +
-  facet_nested_wrap(~fct_rev(type_human)+treatment+pathogen, 
+  facet_nested_wrap(~type_human+treatment+pathogen, 
                     nrow = 3, axes = "all", scales = "free") +
   geom_point(alpha = 0.2,
              size = 0.5,
@@ -897,7 +935,9 @@ cres_type_homology_comparison_dge_legs_stats %>%
 
 
 
-#### Regression
+
+
+#### Statistical modelling
 ```{r}
 # Load required core libraries
 # --------
@@ -910,65 +950,46 @@ library(here)
 # --------
 genes_features_master <- cres_type_homology_comparison_dge_legs_stats %>%
   # Filter missing identities to ensure clean modeling data
-  drop_na(identity_human2mouse, status) %>%
-  select(
-         hgnc_symbol, treatment, pathogen, status, identity_human2mouse, mean_log2fc_human, mean_log2fc_mouse, 
-         type_human, subtype_human, match_homology_group, 
-         n_cres, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology) %>% 
-  distinct() %>% 
+  tidyr::drop_na(identity_human2mouse, status, type_mouse) %>%
+  dplyr::select(
+    hgnc_symbol, treatment, pathogen, status,
+    type_human, subtype_human, match_homology_group, identity_human2mouse, mean_log2fc_diff,
+    n_total_cre_type_human, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology
+  ) %>%
+  dplyr::distinct() %>%
+  dplyr::arrange(hgnc_symbol, pathogen, type_human, subtype_human, match_homology_group) %>%
   
   # Step 1: Pivot all required features (counts and percentages) to wide format
-  group_by(hgnc_symbol, treatment, pathogen, status, identity_human2mouse) %>% 
   tidyr::pivot_wider(
-    id_cols     = c(hgnc_symbol, treatment, pathogen, status, identity_human2mouse, mean_log2fc_human, mean_log2fc_mouse),
-    names_from  = c(type_human, subtype_human, match_homology),
-    values_from = c(n_cres, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology),
-    names_sep   = "_",
-    # Corrected values_fill syntax passing explicit default scalar types
-    # values_fill = 0
-    ) %>%
+    id_cols     = c(hgnc_symbol, treatment, pathogen, status, identity_human2mouse, mean_log2fc_diff),
+    names_from  = c(type_human, subtype_human, match_homology_group),
+    values_from = c(n_total_cre_type_human, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology),
+    names_sep   = "_"
+  ) %>%
   janitor::clean_names() %>%
   
-  # Step 2: Define Target Variables for Logistic and Linear Regression
+  # Step 2: Fill post-pivot NAs with 0 for numeric features and "0" for n_cat categorical features
   dplyr::mutate(
-    # Target for Logistic Regression (1 = Shared, 0 = Not Shared)
-    status_bin = factor(dplyr::if_else(status == "Shared", "Shared", "Not_Shared"), levels = c("Shared", "Not_Shared")),
-    
-    # Target for Linear Regression (Absolute Log2FC divergence magnitude)
-    abs_log2fc_diff = abs(mean_log2fc_human - mean_log2fc_mouse)
-  )
-
-
-
-
-cres_type_homology_comparison_dge_legs_stats %>%
-  # Filter missing identities to ensure clean modeling data
-  drop_na(identity_human2mouse, status) %>%
-  filter(hgnc_symbol == "GNAI2") %>% 
-  select(
-         hgnc_symbol, treatment, pathogen, status, 
-         type_human, subtype_human, match_homology_group, identity_human2mouse, mean_log2fc_human, mean_log2fc_mouse, mean_log2fc_diff,
-         n_cres, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology) %>% 
-  distinct() %>% 
+    dplyr::across(
+      .cols = tidyselect::where(is.numeric) & !c(identity_human2mouse, mean_log2fc_diff),
+      .fns  = ~ tidyr::replace_na(., 0)
+    ),
+    dplyr::across(
+      .cols = tidyselect::contains("n_cat"),
+      .fns  = ~ tidyr::replace_na(as.character(.), "0")
+    )
+  ) %>%
   
-  # Step 1: Pivot all required features (counts and percentages) to wide format
-  tidyr::pivot_wider(
-    id_cols     = c(hgnc_symbol, treatment, pathogen, status, identity_human2mouse, mean_log2fc_human, mean_log2fc_mouse, mean_log2fc_diff),
-    names_from  = c(type_human, subtype_human, match_homology_group),
-    values_from = c(n_cres, 
-                    # n_cat, 
-                    pct_same_cre_type, pct_same_cre_subtype, pct_homology),
-    names_sep   = "_", 
-    values_fn = median
-    ) %>% 
-  # Step 2: Define Target Variables for Logistic and Linear Regression
+  # Step 3: Define Target Variables for Logistic and Linear Regression
   dplyr::mutate(
     # Target for Logistic Regression (1 = Shared, 0 = Not Shared)
     status_bin = factor(dplyr::if_else(status == "Shared", "Shared", "Not_Shared"), levels = c("Shared", "Not_Shared")),
-    
     # Target for Linear Regression (Absolute Log2FC divergence magnitude)
     abs_log2fc_diff = abs(mean_log2fc_diff)
   )
+
+
+
 
 ```
 
@@ -982,12 +1003,13 @@ cres_type_homology_comparison_dge_legs_stats %>%
 # Configure logistic regression specification and recipe
 # --------
 logistic_spec <- logistic_reg() %>%
-  set_engine("glm") %>%
-  set_mode("classification")
+  parsnip::set_engine("glm") %>%
+  parsnip::set_mode("classification")
 
 logistic_recipe <- recipes::recipe(status_bin ~ ., data = genes_features_master) %>%
   # Preserve metadata columns by assigning them to an "id" role (they won't be used as predictors)
-  recipes::update_role(hgnc_symbol, treatment, pathogen, status, mean_log2fc_human, mean_log2fc_mouse, abs_log2fc_diff, new_role = "id") %>%
+  recipes::update_role(hgnc_symbol, treatment, pathogen, status, abs_log2fc_diff, 
+                       new_role = "id") %>%
   # Convert n_cat categorical variables into dummy binaries for glm
   recipes::step_dummy(recipes::all_nominal_predictors()) %>%
   # Remove zero-variance predictors
@@ -998,13 +1020,13 @@ logistic_recipe <- recipes::recipe(status_bin ~ ., data = genes_features_master)
 # --------
 # Fit logistic workflow and extract engine
 # --------
-logistic_fit <- tidymodels::workflow() %>%
-  tidymodels::add_recipe(logistic_recipe) %>%
-  tidymodels::add_model(logistic_spec) %>%
-  tidymodels::fit(data = genes_features_master)
+logistic_fit <- workflows::workflow() %>%
+  workflows::add_recipe(logistic_recipe) %>%
+  workflows::add_model(logistic_spec) %>%
+  workflows::fit(data = genes_features_master)
 
 # Extract native GLM object for direct diagnostics
-logistic_glm_engine <- tidymodels::extract_fit_engine(logistic_fit)
+logistic_glm_engine <- extract_fit_engine(logistic_fit)
 
 # -> Example direct analysis via pROC
 genes_features_master$prob_shared <- predict(logistic_glm_engine, type = "response")
@@ -1012,7 +1034,8 @@ roc_obj <- pROC::roc(genes_features_master$status_bin, genes_features_master$pro
 cat("Logistic AUC:", round(pROC::auc(roc_obj), 3), "\n")
 
 # -> Example direct analysis via broom
-logistic_or_table <- broom::tidy(logistic_glm_engine, exponentiate = TRUE, conf.int = TRUE)
+logistic_or_table <- broom::tidy(logistic_glm_engine, 
+                                 exponentiate = TRUE, conf.int = TRUE)
 ```
 
 
@@ -1177,7 +1200,7 @@ cres_annotated <- cres_annotated %>%
 
 ------------------------------------------------------------------------
 
-###  Sequence extraction
+####  Sequence extraction
 
 The HOXD55 matrix (originally derived by Chiaromonte et al., 2002, and deeply analyzed in Blanchette et al., 2004) defines nucleotide matches and mismatches using large integers to maximize sensitivity when calculating neutral substitution rates in mammalian alignments:Match: $+91$Mismatch: $-114$Because a single mismatch penalizes the score by $-114$, the gap penalties must be scaled proportionally. If you used a standard gap opening penalty of $-10$, the alignment algorithm would erroneously introduce hundreds of micro-gaps instead of accepting a single nucleotide mismatch, completely ruining the biological alignment of your cis-regulatory elements (CREs).
 
@@ -1254,7 +1277,7 @@ cres_to_align %>%
 
 ```
 
-###  Alignment of proximal TSS windows
+####  Alignment of proximal TSS windows
 
 ```{r}
 tx_human <- transcripts(TxDb.Hsapiens.UCSC.hg38.knownGene)
@@ -1275,7 +1298,7 @@ tss_mouse_w3000 <- promoters(TxDb.Mmusculus.UCSC.mm10.knownGene, upstream = 3000
 aln_global <- pairwiseAlignment(seq_human_gene, seq_mouse_gene, type = "global", substitutionMatrix = matriz_hoxd55)
 ```
 
-###  Annotate conservation and TEs
+####  Annotate conservation and TEs
 
 ```{r}
 ah <- AnnotationHub()
@@ -1359,6 +1382,7 @@ message("All outputs saved to tables/")
 
 
 
+#======================
 
 ## Transcription factors
 Annotate with gene regulation - TF Identify conserved Transcription
