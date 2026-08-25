@@ -2997,3 +2997,215 @@ ggmsa(seqs_to_plot,
 
 ```
 
+
+
+
+
+## Evolution of protein sequence
+```{r}
+################################################################################
+# PIPELINE: De Novo Pairwise dN/dS Calculation via biomaRt and Sequence Alignment
+# Target Species: Homo sapiens (Human) vs Mus musculus (Mouse)
+# Methodology: Codon-guided alignment & Li (1993) method for Ka/Ks
+################################################################################
+
+# ---- 1. Prerequisites & Installation ----
+# Ensure all required packages are installed
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+if (!requireNamespace("biomaRt", quietly = TRUE)) BiocManager::install("biomaRt")
+if (!requireNamespace("Biostrings", quietly = TRUE)) BiocManager::install("Biostrings")
+if (!requireNamespace("seqinr", quietly = TRUE)) install.packages("seqinr")
+if (!requireNamespace("tidyverse", quietly = TRUE)) install.packages("tidyverse")
+if (requireNamespace("pwalign", quietly = TRUE)) 
+
+library(biomaRt)
+library(Biostrings)
+library(seqinr)
+library(tidyverse)
+library(pwalign)
+
+# ---- 2. Helper Functions for Codon Alignment ----
+
+#' Molecular distance
+calculate_pairwise_dna_distance <- function(human_cds, mouse_cds) {
+  # Clean sequence inputs (remove whitespace/newlines and convert to uppercase)
+  human_cds <- toupper(gsub("\\s+", "", human_cds))
+  mouse_cds <- toupper(gsub("\\s+", "", mouse_cds))
+  
+  # Validation: Ensure non-empty sequences
+  if (nchar(human_cds) == 0 || nchar(mouse_cds) == 0) {
+    return(tibble::tibble(
+      dist_jc69    = NA_real_,
+      dist_k80     = NA_real_,
+      status_dist  = "Empty sequence"
+    ))
+  }
+  
+  # Step 1: Global nucleotide alignment to guarantee matching length and gap positions
+  dna_align <- tryCatch({
+    pwalign::pairwiseAlignment(
+      Biostrings::DNAString(human_cds),
+      Biostrings::DNAString(mouse_cds),
+      type = "global"
+    )
+  }, error = function(e) { NULL })
+  
+  if (is.null(dna_align)) {
+    return(tibble::tibble(
+      dist_jc69    = NA_real_,
+      dist_k80     = NA_real_,
+      status_dist  = "Alignment failed"
+    ))
+  }
+  
+  # Step 2: Extract aligned sequence strings with gap characters ('-')
+  aligned_h <- as.character(pwalign::alignedPattern(dna_align))
+  aligned_m <- as.character(pwalign::alignedSubject(dna_align))
+  
+  # Step 3: Construct character matrix and convert via ape::as.alignment & ape::as.DNAbin
+  ab <- rbind(
+    unlist(strsplit(aligned_h, "")),
+    unlist(strsplit(aligned_m, ""))
+  )
+  
+  bin_dna <- tryCatch({
+    ape::as.DNAbin(ape::as.alignment(ab))
+  }, error = function(e) { NULL })
+  
+  if (is.null(bin_dna)) {
+    return(tibble::tibble(
+      dist_jc69    = NA_real_,
+      dist_k80     = NA_real_,
+      status_dist  = "DNAbin conversion failed"
+    ))
+  }
+  
+  # Step 4: Calculate distances using Jukes-Cantor (JC69) and Kimura (K80)
+  jc69_val <- tryCatch({
+    as.numeric(ape::dist.dna(bin_dna, model = "JC69")[1])
+  }, error = function(e) { NA_real_ })
+  
+  k80_val <- tryCatch({
+    as.numeric(ape::dist.dna(bin_dna, model = "K80")[1])
+  }, error = function(e) { NA_real_ })
+  
+  return(tibble::tibble(
+    dist_jc69   = jc69_val,
+    dist_k80    = k80_val,
+    status_dist = if (!is.na(jc69_val)) "Success" else "Distance calculation failed"
+  ))
+}
+
+```
+
+
+```{r}
+# ---- 3. Connect to Ensembl BioMart ----
+message("Connecting to Ensembl BioMart...")
+human_mart <- biomaRt::useEnsembl(
+  biomart = "genes",
+  dataset = "hsapiens_gene_ensembl",
+  mirror  = "useast" 
+)
+mouse_mart <- biomaRt::useEnsembl(
+  biomart = "genes",
+  dataset = "mmusculus_gene_ensembl",
+  mirror  = "useast" 
+)
+
+
+# listAttributes(human_mart) %>% view()
+
+# ---- 4. Retrieve Human-Mouse 1:1 Orthologs Map ----
+message("Fetching orthology mapping...")
+ortholog_map <- getBM(
+  attributes = c("ensembl_gene_id", 
+                 "external_gene_name", 
+                 "mmusculus_homolog_ensembl_gene", 
+                 "mmusculus_homolog_associated_gene_name",
+                 "mmusculus_homolog_orthology_type"),
+  mart = human_mart
+) %>% 
+  as_tibble() %>%
+  filter(mmusculus_homolog_orthology_type == "ortholog_one2one") %>%
+  filter(mmusculus_homolog_ensembl_gene != "" & ensembl_gene_id != "")
+
+# # NOTE: For demonstration purposes, we sample 10 random genes to prevent 
+# # Remove the 'slice_sample' line to run the pipeline for your entire dataset.
+# target_map <- ortholog_map %>% 
+#   slice_sample(n = 10) 
+
+
+# ---- 5. Fetch Coding Sequences (CDS) from BioMart ----
+message("Downloading Human coding sequences...")
+human_cds_raw <- biomaRt::getSequence(
+  id      = ortholog_map$ensembl_gene_id,
+  type    = "ensembl_gene_id",
+  seqType = "coding",
+  mart    = human_mart
+) %>%
+  as_tibble()
+
+message("Downloading Mouse coding sequences...")
+mouse_cds_raw <- biomaRt::getSequence(
+  id = ortholog_map$mmusculus_homolog_ensembl_gene,
+  type = "ensembl_gene_id",
+  seqType = "coding",
+  mart = mouse_mart
+) %>% 
+  as_tibble()
+
+# ---- 6. Filter for Longest Canonical/Isoform CDS per Gene ----
+# BioMart returns multiple rows per gene due to alternative splicing transcripts.
+# We pick the longest sequence per stable gene ID to avoid truncation artifacts.
+human_cds_clean <- human_cds_raw %>%
+  filter(coding != "Sequence unavailable") %>%
+  mutate(seq_len = nchar(coding)) %>%
+  group_by(ensembl_gene_id) %>%
+  slice_max(seq_len, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(ensembl_gene_id, human_cds = coding)
+
+mouse_cds_clean <- mouse_cds_raw %>%
+  filter(coding != "Sequence unavailable") %>%
+  mutate(seq_len = nchar(coding)) %>%
+  group_by(ensembl_gene_id) %>%
+  slice_max(seq_len, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(mmusculus_homolog_ensembl_gene = ensembl_gene_id, mouse_cds = coding)
+
+# ---- 7. Build the Master Sequence Matrix ----
+pipeline_matrix <- ortholog_map %>%
+  inner_join(human_cds_clean, by = "ensembl_gene_id") %>%
+  inner_join(mouse_cds_clean, by = "mmusculus_homolog_ensembl_gene")
+
+library(ape)
+
+pipeline_matrix_distance <- pipeline_matrix %>%
+  dplyr::mutate(
+    dna_metrics = purrr::map2(
+      human_cds, 
+      mouse_cds, 
+      ~ calculate_pairwise_dna_distance(.x, .y)
+    )
+  ) %>%
+  tidyr::unnest(dna_metrics)
+
+final_distance_table <- pipeline_matrix_distance %>%
+  dplyr::select(
+    hgnc_symbol    = external_gene_name,
+    mgi_symbol = mmusculus_homolog_associated_gene_name,
+    human_ensembl  = ensembl_gene_id,
+    mouse_ensembl  = mmusculus_homolog_ensembl_gene,
+    dist_jc69,
+    dist_k80 
+  )
+
+print(head(final_distance_table))
+
+
+saveRDS(final_distance_table, file = here::here("tables", "human_mouse_dna_distances.rds"))
+```
+
+
+

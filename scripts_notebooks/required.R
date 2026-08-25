@@ -11,8 +11,8 @@ cran_pkgs <- c(
   "see", "Matrix", "RColorBrewer", "ggrepel", "plotly", "corrr", "ggcorrplot", 
   "beepr", "FactoMineR", "factoextra", "esquisse", "gghighlight", "ggh4x", 
   "readxl", "gt", "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", 
-  "ggpp", "corto", "Hmisc", "patchwork", "tidymodels", "TidyDensity", "forcats", 
-  "GGally", "ggbeeswarm", "geomtextpath", "ggfx", "rstatix", "matrixTests",
+  "ggpp", "corto", "Hmisc", "patchwork", "tidymodels", "TidyDensity", "forcats", "deeptime",
+  "GGally", "ggbeeswarm", "geomtextpath", "ggfx", "rstatix", "matrixTests",  "seqinr", "ape",
   "pkgconfig", "wCorr", "weights", "ggpubr", "rstatix", "emmeans", "effectsize", "coin", "ggtext"
 )
 
@@ -96,6 +96,8 @@ colors = list(organism = c("FIT" = "#4361ee",
                              "Not-shared" = "gray50",
                              "Not core" = "gray90",
                              "Not\ncore" = "gray90",
+                             "Not\nLEG" = "gray90",
+                             "Not LEG" = "gray90",
                              "BTMs" = "#4361ee",
                              "Immune BTMs" = "#4361ee",
                              "Immune\nBTMs" = "#4361ee",
@@ -183,7 +185,11 @@ colors = list(organism = c("FIT" = "#4361ee",
                            "S. aureus" = "#669bbc",
                            "E. coli" = "#669bbc",
                            "Trauma" = "#3C5488FF",
-                           "Burn" = "#184e77"))
+                           "Burn" = "#184e77"),
+              treatment = c("Vaccination" = "#b9dbf4",
+                            "Infection" = "#317ec2",
+                            "Injury" = "#155289")
+              )
 
 
 #Gene sets
