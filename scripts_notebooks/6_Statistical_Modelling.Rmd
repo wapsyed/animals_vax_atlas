@@ -9,65 +9,150 @@ output: html_document
 library(here)
 source(here("scripts_notebooks", "required.R"))
 
-
-library(TxDb.Hsapiens.UCSC.hg38.knownGene)
-library(TxDb.Mmusculus.UCSC.mm10.knownGene)
-library(GenomeInfoDb)
-library(GenomicRanges)
-library(IRanges)
-library(rtracklayer)
-library(org.Hs.eg.db)
-library(pwalign)
-library(biomaRt)
+library(tidyverse)
+library(tidymodels)
 ```
 
 
 # Statistical modelling
 ```{r}
+# Gene expression
+dge_btm_process_genes_diff_bygene = readRDS(here("tables", "human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune.rds"))
+dge_btm_process_genes_diff_bygene_clean = dge_btm_process_genes_diff_bygene %>% 
+  filter(gene_set == "All genes", comparison == "Human vs. Mouse") %>% 
+  filter(pathogen_mouse != "DMD") %>% 
+  select(treatment = treatment_human, pathogen = pathogen_human, timepoint_comparison, hgnc_symbol = human_symbol, 
+         mean_log2fc_diff, weight_se_inverse_combined) %>% 
+  
+
+#LEGs
+all_human_mouse_gsea_btm_results_core_joined = readRDS(file = here("tables", "all_human_mouse_gsea_btm_results_core_joined.rds"))
+gsea_btm_legs_clean =
+  all_human_mouse_gsea_btm_results_core_joined %>%
+  distinct() %>% 
+  select(pathogen, timepoint_comparison, hgnc_symbol = gene, status) %>% 
+  distinct()
+
+#Merge gene expression with LEGs classification
+gsea_btm_legs_dge_stats = gsea_btm_legs_clean %>% 
+  full_join(dge_btm_process_genes_diff_bygene_clean,
+            by = join_by(pathogen, timepoint_comparison, hgnc_symbol)) %>% 
+  mutate(status = if_else(is.na(status), "Not LEG", status))
+
+#Filter timepoints
+dge_btm_process_genes_diff_bygene_clean_filtered = 
+  dge_btm_process_genes_diff_bygene_clean %>% 
+  inner_join(
+    gsea_btm_legs_clean %>%
+      select(pathogen, timepoint_comparison) %>% distinct(),
+    by = join_by(pathogen, timepoint_comparison)
+  )
+
+
+#Protein identity
+alignments_human2mouse_all = readRDS(file = here("tables", "alignments_human2mouse_all.rds"))
+
 #Distance
-gene_cds_distance = readRDS(file = here::here("tables", "human_mouse_dna_distances.rds"))
+human_mouse_cds_distance = readRDS(file = here::here("tables", "human_mouse_cds_distance.rds"))
 
 #Transcription factors
-gene_tf_shared_unique =
-  readRDS(file = here("tables", "gene_tf_shared_unique.rds"))
+gene_tf_shared_unique = readRDS(file = here("tables", "gene_tf_shared_unique.rds"))
 
-#CREs
-cres_type_homology_comparison =  
-  readRDS(file = here("tables", "cres_type_homology_comparison.rds"))
+#GOs
+gene_info_human = readRDS(file = here("tables", "gene_info_human.rds"))
 
-cres_type_homology_comparison_dge_legs_stats =  
-  readRDS(file = here("tables", "cres_type_homology_comparison_dge_legs_stats.rds"))
+gene_info_human_clean_dge %>% 
+  select(treatment, pathogen, timepoint_comparison, hgnc_symbol = gene, status, identity_human2mouse) 
+
+#BTMs annotation
+btm_annotation_genes <- read_csv(here("tables", "btm_annotation_genes.csv")) %>% 
+  select(hgnc_symbol = symbol, process, group, subgroup) %>% 
+  distinct()
+
+#CREs for LEGs and not-LEGS, with gene expression stats and protein AA identity%
+cres_type_homology_comparison_dge_legs_stats = readRDS(file = here("tables", "cres_type_homology_comparison_dge_legs_stats.rds"))
 
 
-# Load required core libraries
-# --------
-library(tidyverse)
-library(tidymodels)
-library(here)
 
-# --------
+# #CREs (all genes)
+cres_type_homology_comparison = readRDS(file = here("tables", "cres_type_homology_comparison.rds"))
+
+
+#Merge
+human_mouse_parameters_values = 
+  #Annotate with CDS distance (Kimura)
+  human_mouse_cds_distance %>% select(hgnc_symbol, dist_k80) %>% 
+  #Annotate with AA identity %
+  inner_join(alignments_human2mouse_all,
+             by = join_by("hgnc_symbol" == "gene")) %>% 
+  #Annotate with BTMs 
+  inner_join(btm_annotation_genes,
+             by = "hgnc_symbol") %>% 
+  #Annotate with TFs
+  inner_join(gene_tf_shared_unique,
+             by = join_by("hgnc_symbol" == "gene")) %>% 
+  #Annotate with CRES
+  inner_join(cres_type_homology_comparison,
+             by = join_by(hgnc_symbol)) %>% 
+  #Annotate with gene expression
+  inner_join(dge_btm_process_genes_diff_bygene_clean_filtered,
+             by = join_by(hgnc_symbol))
+  
+
+#Save
+human_mouse_parameters_values %>% 
+  saveRDS(file = here("tables", "human_mouse_statsmodelling_parameters_values.rds"))
+
+
+human_mouse_parameters_values %>% 
+  glimpse()
+
+```
+
+```{r}
 # Prepare master wide features dataset per gene locus
-# --------
-genes_features_master <- cres_type_homology_comparison_dge_legs_stats %>%
+human_mouse_parameters_values %>%
   # Filter missing identities to ensure clean modeling data
   tidyr::drop_na(identity_human2mouse, status, type_mouse) %>%
   dplyr::select(
-    hgnc_symbol, treatment, pathogen, status,
-    type_human, subtype_human, match_homology_group, identity_human2mouse, mean_log2fc_diff,
-    n_total_cre_type_human, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology
+    #Experiment
+    hgnc_symbol, treatment, pathogen,
+    #CDS and AA protein sequence
+    dist_k80, identity_human2mouse,
+    #Transcription factors
+    n_tf_unique, pct_tf_unique, n_tf_shared, pct_tf_shared, 
+    #CREs variables,
+    type_human, subtype_human, match_homology_group, n_total_cre_type_human, 
+    n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology,
+    #GSEA
+    # status,
+    #Functional annotation
+    process, group, subgroup,
+    #Gene expression
+    mean_log2fc_diff, weight_se_inverse_combined
+    
   ) %>%
   dplyr::distinct() %>%
-  dplyr::arrange(hgnc_symbol, pathogen, type_human, subtype_human, match_homology_group) %>%
-  
+  dplyr::arrange(hgnc_symbol, pathogen) %>%
+
   # Step 1: Pivot all required features (counts and percentages) to wide format
   tidyr::pivot_wider(
-    id_cols     = c(hgnc_symbol, treatment, pathogen, status, identity_human2mouse, mean_log2fc_diff),
-    names_from  = c(type_human, subtype_human, match_homology_group),
+    id_cols     = c(#Uniques per gene and pathogen
+                    hgnc_symbol, treatment, pathogen, 
+                    # status, 
+                    dist_k80, identity_human2mouse, 
+                    mean_log2fc_diff, weight_se_inverse_combined,
+                    n_tf_shared, pct_tf_shared),
+    names_from  = c(
+                    #CREs
+                    type_human, subtype_human, match_homology_group,
+                    #BTMs
+                    process, group, subgroup),
     values_from = c(n_total_cre_type_human, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology),
     names_sep   = "_"
   ) %>%
   janitor::clean_names() %>%
-  
+
   # Step 2: Fill post-pivot NAs with 0 for numeric features and "0" for n_cat categorical features
   dplyr::mutate(
     dplyr::across(
@@ -79,7 +164,7 @@ genes_features_master <- cres_type_homology_comparison_dge_legs_stats %>%
       .fns  = ~ tidyr::replace_na(as.character(.), "0")
     )
   ) %>%
-  
+
   # Step 3: Define Target Variables for Logistic and Linear Regression
   dplyr::mutate(
     # Target for Logistic Regression (1 = Shared, 0 = Not Shared)
@@ -87,6 +172,54 @@ genes_features_master <- cres_type_homology_comparison_dge_legs_stats %>%
     # Target for Linear Regression (Absolute Log2FC divergence magnitude)
     abs_log2fc_diff = abs(mean_log2fc_diff)
   )
+```
+
+
+
+
+
+```{r}
+####################### OPTION WITH STATUS
+# Prepare master wide features dataset per gene locus
+# genes_features_master <- human_mouse_parameters_values %>%
+#   # Filter missing identities to ensure clean modeling data
+#   tidyr::drop_na(identity_human2mouse, status, type_mouse) %>%
+#   dplyr::select(
+#     hgnc_symbol, treatment, pathogen, status,
+#     type_human, subtype_human, match_homology_group, identity_human2mouse, mean_log2fc_diff,
+#     n_total_cre_type_human, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology
+#   ) %>%
+#   dplyr::distinct() %>%
+#   dplyr::arrange(hgnc_symbol, pathogen, type_human, subtype_human, match_homology_group) %>%
+#   
+#   # Step 1: Pivot all required features (counts and percentages) to wide format
+#   tidyr::pivot_wider(
+#     id_cols     = c(hgnc_symbol, treatment, pathogen, status, identity_human2mouse, mean_log2fc_diff),
+#     names_from  = c(type_human, subtype_human, match_homology_group),
+#     values_from = c(n_total_cre_type_human, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology),
+#     names_sep   = "_"
+#   ) %>%
+#   janitor::clean_names() %>%
+#   
+#   # Step 2: Fill post-pivot NAs with 0 for numeric features and "0" for n_cat categorical features
+#   dplyr::mutate(
+#     dplyr::across(
+#       .cols = tidyselect::where(is.numeric) & !c(identity_human2mouse, mean_log2fc_diff),
+#       .fns  = ~ tidyr::replace_na(., 0)
+#     ),
+#     dplyr::across(
+#       .cols = tidyselect::contains("n_cat"),
+#       .fns  = ~ tidyr::replace_na(as.character(.), "0")
+#     )
+#   ) %>%
+#   
+#   # Step 3: Define Target Variables for Logistic and Linear Regression
+#   dplyr::mutate(
+#     # Target for Logistic Regression (1 = Shared, 0 = Not Shared)
+#     status_bin = factor(dplyr::if_else(status == "Shared", "Shared", "Not_Shared"), levels = c("Shared", "Not_Shared")),
+#     # Target for Linear Regression (Absolute Log2FC divergence magnitude)
+#     abs_log2fc_diff = abs(mean_log2fc_diff)
+#   )
 
 
 
