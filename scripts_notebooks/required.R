@@ -13,7 +13,8 @@ cran_pkgs <- c(
   "readxl", "gt", "pracma", "ggnewscale", "ggprism", "ggtext", "devtools", 
   "ggpp", "corto", "Hmisc", "patchwork", "tidymodels", "TidyDensity", "forcats", "deeptime",
   "GGally", "ggbeeswarm", "geomtextpath", "ggfx", "rstatix", "matrixTests",  "seqinr", "ape",
-  "pkgconfig", "wCorr", "weights", "ggpubr", "rstatix", "emmeans", "effectsize", "coin", "ggtext"
+  "pkgconfig", "wCorr", "weights", "ggpubr", "rstatix", "emmeans", "effectsize", "coin", "ggtext",
+  "ranger"
 )
 
 bioc_pkgs <- c(

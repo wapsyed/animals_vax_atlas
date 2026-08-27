@@ -22,7 +22,10 @@ dge_btm_process_genes_diff_bygene_clean = dge_btm_process_genes_diff_bygene %>%
   filter(gene_set == "All genes", comparison == "Human vs. Mouse") %>% 
   filter(pathogen_mouse != "DMD") %>% 
   select(treatment = treatment_human, pathogen = pathogen_human, timepoint_comparison, hgnc_symbol = human_symbol, 
-         mean_log2fc_diff, weight_se_inverse_combined) %>% 
+         mean_log2fc_diff, se_mouse) %>% 
+  mutate(inverse_se_mouse = 1/se_mouse,
+         abs_log2fc_diff = abs(mean_log2fc_diff)) %>% 
+  select(-se_mouse, -mean_log2fc_diff)
   
 
 #LEGs
@@ -82,9 +85,6 @@ btm_annotation_genes_wide = btm_annotation_genes %>%
 ```{r}
 # #CREs for LEGs and not-LEGS, with gene expression stats and protein AA identity%
 # cres_type_homology_comparison_dge_legs_stats = readRDS(file = here("tables", "cres_type_homology_comparison_dge_legs_stats.rds"))
-
-
-
 # #CREs (all genes)
 cres_type_homology_comparison = readRDS(file = here("tables", "cres_type_homology_comparison.rds")) %>% 
   mutate(type_mouse = if_else(is.na(type_mouse), "Unknown", type_mouse),
@@ -119,12 +119,11 @@ cres_type_homology_comparison_clean_wide =
   as.data.frame() %>% 
   rownames_to_column("hgnc_symbol")
 
-
 ```
 
 
 ```{r}
-#Merge
+#Merge features
 human_mouse_parameters_values = 
   #Annotate with CDS distance (Kimura)
   human_mouse_cds_distance %>% select(hgnc_symbol, dist_k80) %>% 
@@ -143,163 +142,278 @@ human_mouse_parameters_values =
   #Annotate with gene expression
   inner_join(dge_btm_process_genes_diff_bygene_clean_filtered,
              by = join_by(hgnc_symbol)) %>% 
-  # Step 3: Define Target Variables for Logistic and Linear Regression
+  #Annotate with LEG classification
+  left_join(gsea_btm_legs_clean, 
+             by = join_by(hgnc_symbol, pathogen, timepoint_comparison)) 
+
+human_mouse_parameters_values_regression = human_mouse_parameters_values %>% 
+  select(-status) %>% 
+  distinct() %>% 
+  select(treatment:abs_log2fc_diff,inverse_se_mouse, hgnc_symbol, everything())
+
+human_mouse_parameters_values_classification_legs = human_mouse_parameters_values %>% 
+  drop_na(status) %>% 
   dplyr::mutate(
-  # # Target for Logistic Regression (1 = Shared, 0 = Not Shared)
-  # status_bin = factor(dplyr::if_else(status == "Shared", "Shared", "Not_Shared"), levels = c("Shared", "Not_Shared")),
-  # Target for Linear Regression (Absolute Log2FC divergence magnitude)
-  abs_log2fc_diff = abs(mean_log2fc_diff)
-) %>% 
-  select(treatment:abs_log2fc_diff, hgnc_symbol, everything(),
-         -mean_log2fc_diff)
+  status_bin = factor(dplyr::if_else(status == "Shared", "Shared", "Not_Shared"), levels = c("Shared", "Not_Shared"))
+  ) %>% 
+  select(treatment:inverse_se_mouse, inverse_se_mouse, hgnc_symbol, status_bin, everything())
   
+
+human_mouse_parameters_values 
 
 #Save
 human_mouse_parameters_values %>% 
   saveRDS(file = here("tables", "human_mouse_statsmodelling_parameters_values.rds"))
+```
 
 
-human_mouse_parameters_values
+```{r}
+# Create a feature dictionary
+#BTMs
+btm_feature_names = btm_annotation_genes_wide %>%
+  colnames() %>% 
+  as.data.frame() %>% 
+  mutate(feature_type = "BTMs") %>% 
+  rename(feature_name = ".") %>% 
+  filter(feature_name != "hgnc_symbol")
 
+#CREs
+cre_feature_names <- cres_type_homology_comparison_clean_wide %>%
+  dplyr::select(-hgnc_symbol) %>%
+  colnames()
+
+annotated_cre_variables_df <- tibble(feature_name_original = cre_feature_names) %>%
+  tidyr::extract(
+    col     = feature_name_original,
+    into    = c("variable", "type_human", "subtype_human", "match_cretype", "match_cresubtype"),
+    regex   = "^(n_total_cre_type_human|n_total_cre_subtype_human|pct_same_cre_type|pct_same_cre_subtype)_(PLS|pELS|dELS)_(CTCF|not-CTCF)_(Same|Different|Unknown)_(Same|Different|Unknown)$",
+    remove  = FALSE
+  ) %>% 
+  mutate(feature_type = paste0("CREs | ", type_human, ", ", subtype_human),
+         feature_name = paste0("Match Type: ", match_cretype, ", Match Subtype: ", match_cresubtype, " (", variable, ")")) %>% 
+  arrange(type_human, subtype_human, match_cretype, match_cresubtype) %>% 
+  mutate(feature_name = fct_inorder(feature_name))
+
+
+
+#Feature dictionary
+feature_dictionary =  
+  human_mouse_parameters_values %>% 
+  names() %>% 
+  as.data.frame() %>% 
+  rename(feature_name_original = ".") %>% 
+  mutate(feature_type = case_when(feature_name_original %in% c("inverse_se_mouse") ~ "Gene expression",
+                                  feature_name_original %in% c("dist_k80", "identity_human2mouse") ~ "Sequence evolution",
+                                  feature_name_original %in% c("n_tf_unique", "pct_tf_unique", "n_tf_shared", "pct_tf_shared") ~ "Transcription Factor",
+                                  T ~ NA),
+         feature_name = case_when(feature_name_original %in% c("inverse_se_mouse") ~ "1/SE",
+                                  feature_name_original %in% c("identity_human2mouse") ~ "%Protein AA identity",
+                                  feature_name_original %in% c("dist_k80") ~ "Kimura distance",
+                                  feature_name_original %in% c("n_tf_unique") ~ "nUnique",
+                                  feature_name_original %in% c("pct_tf_unique") ~ "%Unique",
+                                  feature_name_original %in% c("n_tf_shared") ~ "nShared",
+                                  feature_name_original %in% c("pct_tf_shared") ~ "%Shared",
+                                  T ~ feature_name_original)) %>% 
+  drop_na(feature_type) %>% 
+  bind_rows(
+    #BTMs
+    btm_feature_names %>% mutate(feature_name_original = feature_name),
+    #CREs
+    annotated_cre_variables_df %>% 
+              select(feature_name, feature_name_original, feature_type)) %>% 
+  mutate(feature_type = fct_relevel(feature_type, "Gene expression", "Sequence evolution", "Transcription Factor", 
+                                    "BTMs",
+                                    "CREs | PLS, CTCF", "CREs | PLS, not-CTCF",
+                                    "CREs | pELS, CTCF", "CREs | pELS, not-CTCF",
+                                    "CREs | dELS, CTCF", "CREs | dELS, not-CTCF"))
+
+feature_dictionary
 ```
 
 
 
 
-Option with status
+
+
+## Logistic regression (Classify Shared vs Not-Shared LEGs)
 ```{r}
-####################### OPTION WITH STATUS
-# Prepare master wide features dataset per gene locus
-genes_features_master = human_mouse_parameters_values %>%
-  # Filter missing identities to ensure clean modeling data
-  tidyr::drop_na(identity_human2mouse, status, type_mouse) %>%
-  dplyr::select(
-    hgnc_symbol, treatment, pathogen, status,
-    type_human, subtype_human, match_homology_group, identity_human2mouse, mean_log2fc_diff,
-    n_total_cre_type_human, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology
-  ) %>%
-  dplyr::distinct() %>%
-  dplyr::arrange(hgnc_symbol, pathogen, type_human, subtype_human, match_homology_group) %>%
-
-  # Step 1: Pivot all required features (counts and percentages) to wide format
-  tidyr::pivot_wider(
-    id_cols     = c(hgnc_symbol, treatment, pathogen, status, identity_human2mouse, mean_log2fc_diff),
-    names_from  = c(type_human, subtype_human, match_homology_group),
-    values_from = c(n_total_cre_type_human, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology),
-    names_sep   = "_"
-  ) %>%
-  janitor::clean_names() %>%
-
-  # Step 2: Fill post-pivot NAs with 0 for numeric features and "0" for n_cat categorical features
-  dplyr::mutate(
-    dplyr::across(
-      .cols = tidyselect::where(is.numeric) & !c(identity_human2mouse, mean_log2fc_diff),
-      .fns  = ~ tidyr::replace_na(., 0)
-    ),
-    dplyr::across(
-      .cols = tidyselect::contains("n_cat"),
-      .fns  = ~ tidyr::replace_na(as.character(.), "0")
-    )
-  ) %>%
-
-  # Step 3: Define Target Variables for Logistic and Linear Regression
-  dplyr::mutate(
-    # Target for Logistic Regression (1 = Shared, 0 = Not Shared)
-    status_bin = factor(dplyr::if_else(status == "Shared", "Shared", "Not_Shared"), levels = c("Shared", "Not_Shared")),
-    # Target for Linear Regression (Absolute Log2FC divergence magnitude)
-    abs_log2fc_diff = abs(mean_log2fc_diff)
-  )
-
-
-genes_features_master 
-
-
-human_mouse_parameters_values %>%
-  # Filter missing identities to ensure clean modeling data
-  tidyr::drop_na(identity_human2mouse, type_mouse) %>%
-  dplyr::select(
-    hgnc_symbol, treatment, pathogen,
-    type_human, subtype_human, match_homology_group, identity_human2mouse, mean_log2fc_diff,
-    n_total_cre_type_human, n_cat, pct_same_cre_type, pct_same_cre_subtype, pct_homology
-  ) %>%
-  dplyr::distinct() %>%
-  dplyr::arrange(hgnc_symbol, pathogen, type_human, subtype_human, match_homology_group) %>%
-
-  # Step 1: Pivot all required features (counts and percentages) to wide format
-  tidyr::pivot_wider(
-    id_cols     = c(hgnc_symbol, treatment, pathogen,  identity_human2mouse, mean_log2fc_diff),
-    names_from  = c(type_human, subtype_human, match_homology_group),
-    values_from = c(n_total_cre_type_human, pct_same_cre_type, pct_same_cre_subtype, pct_homology),
-    names_sep   = "_"
-  ) %>%
-  janitor::clean_names() %>%
-
-  # Step 2: Fill post-pivot NAs with 0 for numeric features and "0" for n_cat categorical features
-  dplyr::mutate(
-    dplyr::across(
-      .cols = tidyselect::where(is.numeric) & !c(identity_human2mouse, mean_log2fc_diff),
-      .fns  = ~ tidyr::replace_na(., 0)
-    ),
-    dplyr::across(
-      .cols = tidyselect::contains("n_cat"),
-      .fns  = ~ tidyr::replace_na(as.character(.), "0")
-    )
-  ) %>%
-
-  # Step 3: Define Target Variables for Logistic and Linear Regression
-  dplyr::mutate(
-    # Target for Linear Regression (Absolute Log2FC divergence magnitude)
-    abs_log2fc_diff = abs(mean_log2fc_diff)
-  )
-
-```
-
-# PIPELINE 1: LOGISTIC REGRESSION (Classify Shared vs Not-Shared LEGs)
-```{r}
-# ==============================================================================
-# PIPELINE 1: LOGISTIC REGRESSION (Classify Shared vs Not-Shared LEGs)
-# ==============================================================================
+# --------
+# Load required core libraries
+# --------
+library(tidyverse)
+library(tidymodels)
+library(ranger)
+library(pROC)
+library(here)
 
 # --------
-# Configure logistic regression specification and recipe
+# Step 1: Define Common Classification Recipe and Cross-Validation
+# --------
+classification_recipe <- recipes::recipe(status_bin ~ ., data = human_mouse_parameters_values_classification_legs) %>%
+  recipes::update_role(hgnc_symbol, treatment, pathogen, timepoint_comparison, new_role = "id") %>%
+  recipes::step_dummy(recipes::all_nominal_predictors()) %>%
+  recipes::step_zv(recipes::all_predictors()) %>%
+  recipes::step_normalize(recipes::all_numeric_predictors())
+
+set.seed(123)
+cv_folds <- vfold_cv(human_mouse_parameters_values_classification_legs, v = 5, strata = status_bin)
+
+# ==========================================
+# APPROACH 1: LOGISTIC REGRESSION (ODDS RATIOS)
+# ==========================================
+
+# --------
+# Step 2A: Fit Logistic Regression Model
 # --------
 logistic_spec <- logistic_reg() %>%
   parsnip::set_engine("glm") %>%
   parsnip::set_mode("classification")
 
-logistic_recipe <- recipes::recipe(status_bin ~ ., data = genes_features_master) %>%
-  # Preserve metadata columns by assigning them to an "id" role (they won't be used as predictors)
-  recipes::update_role(hgnc_symbol, treatment, pathogen, status, abs_log2fc_diff, 
-                       new_role = "id") %>%
-  # Convert n_cat categorical variables into dummy binaries for glm
-  recipes::step_dummy(recipes::all_nominal_predictors()) %>%
-  # Remove zero-variance predictors
-  recipes::step_zv(recipes::all_predictors()) %>%
-  # Scale and center all numeric predictor metrics (percentages and raw counts)
-  recipes::step_normalize(recipes::all_numeric_predictors())
+logistic_workflow <- workflows::workflow() %>%
+  workflows::add_recipe(classification_recipe) %>%
+  workflows::add_model(logistic_spec)
+
+logistic_fit <- workflows::fit(logistic_workflow, data = human_mouse_parameters_values_classification_legs)
+logistic_engine <- workflows::extract_fit_engine(logistic_fit)
+
+# Extract tidy Odds Ratios (OR) and 95% Confidence Intervals
+logistic_coefficients <- broom::tidy(logistic_engine, exponentiate = TRUE, conf.int = TRUE) %>%
+  dplyr::filter(term != "(Intercept)") %>%
+  dplyr::rename(feature_name_original = term) %>%
+  dplyr::mutate(
+    feature_name_original = stringr::str_replace_all(feature_name_original, "`", "")
+  ) %>%
+  dplyr::inner_join(
+    feature_dictionary,
+    by = dplyr::join_by("feature_name_original")
+  )
+
+# Compute out-of-sample/in-sample ROC AUC for Logistic Regression
+legs_prob_logistic <- stats::predict(logistic_engine, type = "response")
+roc_obj_logistic <- pROC::roc(
+  human_mouse_parameters_values_classification_legs$status_bin, 
+  legs_prob_logistic, 
+  levels = c("Not_Shared", "Shared")
+)
+
+# ==========================================
+# APPROACH 2: RANDOM FOREST CLASSIFIER (GINI IMPORTANCE)
+# ==========================================
 
 # --------
-# Fit logistic workflow and extract engine
+# Step 2B: Tune and Fit Random Forest Classifier
 # --------
-logistic_fit <- workflows::workflow() %>%
-  workflows::add_recipe(logistic_recipe) %>%
-  workflows::add_model(logistic_spec) %>%
-  workflows::fit(data = genes_features_master)
+rf_cls_spec <- rand_forest(
+  trees = 1000,
+  mtry  = tune(),
+  min_n = tune()
+) %>%
+  parsnip::set_engine("ranger", importance = "impurity") %>%
+  parsnip::set_mode("classification")
 
-# Extract native GLM object for direct diagnostics
-logistic_glm_engine <- extract_fit_engine(logistic_fit)
+rf_cls_workflow <- workflows::workflow() %>%
+  workflows::add_recipe(classification_recipe) %>%
+  workflows::add_model(rf_cls_spec)
 
-# -> Example direct analysis via pROC
-genes_features_master$prob_shared <- predict(logistic_glm_engine, type = "response")
-roc_obj <- pROC::roc(genes_features_master$status_bin, genes_features_master$prob_shared, levels = c("Not_Shared", "Shared"))
-cat("Logistic AUC:", round(pROC::auc(roc_obj), 3), "\n")
+rf_cls_grid <- dials::grid_regular(
+  dials::mtry(range = c(2, 10)),
+  dials::min_n(range = c(5, 20)),
+  levels = 4
+)
 
-# -> Example direct analysis via broom
-logistic_or_table <- broom::tidy(logistic_glm_engine, 
-                                 exponentiate = TRUE, conf.int = TRUE)
+rf_cls_tune <- tune_grid(
+  rf_cls_workflow,
+  resamples = cv_folds,
+  grid      = rf_cls_grid,
+  metrics   = yardstick::metric_set(yardstick::roc_auc, yardstick::pr_auc)
+)
+
+best_rf_cls_params <- tune::select_best(rf_cls_tune, metric = "roc_auc")
+
+final_rf_cls_fit <- rf_cls_workflow %>%
+  workflows::finalize_workflow(best_rf_cls_params) %>%
+  workflows::fit(data = human_mouse_parameters_values_classification_legs)
+
+rf_cls_engine <- workflows::extract_fit_engine(final_rf_cls_fit)
+
+# Extract Gini Impurity feature importance metric
+rf_cls_importance <- tibble::tibble(
+  feature_name_original = names(rf_cls_engine$variable.importance),
+  importance            = as.numeric(rf_cls_engine$variable.importance)
+) %>%
+  dplyr::inner_join(
+    feature_dictionary,
+    by = dplyr::join_by("feature_name_original")
+  )
+
+# ==========================================
+# VISUALIZATION & FEATURE SELECTION PLOTS
+# ==========================================
+
+# --------
+# Step 3A: Render Forest Plot for Logistic Regression (Odds Ratios)
+# --------
+p_logistic_forest <- logistic_coefficients %>%
+  dplyr::mutate(
+    feature_name_clean = forcats::fct_reorder(feature_name_original, estimate)
+  ) %>%
+  ggplot2::ggplot() +
+  ggplot2::aes(
+    x    = estimate,
+    y    = feature_name_clean,
+    xmin = conf.low,
+    xmax = conf.high,
+    color = p.value <= 0.05
+  ) +
+  ggplot2::geom_vline(xintercept = 1, linetype = "dashed", color = "gray50", linewidth = 0.6) +
+  ggplot2::geom_errorbarh(height = 0.2, linewidth = 0.6) +
+  ggplot2::geom_point(size = 2) +
+  ggplot2::scale_x_log10() +
+  ggplot2::scale_color_manual(
+    values = c("TRUE" = "#E64B35FF", "FALSE" = "gray60"),
+    labels = c("TRUE" = "p <= 0.05", "FALSE" = "p > 0.05")
+  ) +
+  ggplot2::labs(
+    x     = "Odds Ratio (OR, log10 scale)",
+    y     = "Feature Predictor",
+    color = "Significance",
+    title = paste0("Logistic Regression: Predictors of Shared Status (AUC = ", round(pROC::auc(roc_obj_logistic), 3), ")")
+  ) +
+  theme_vaxgo() +
+  ggplot2::theme(legend.position = "top")
+
+# --------
+# Step 3B: Render Variable Importance Plot for Random Forest Classifier
+# --------
+p_rf_cls_importance <- rf_cls_importance %>%
+  dplyr::slice_max(importance, n = 20) %>%
+  dplyr::mutate(
+    feature_clean = forcats::fct_reorder(feature_name_original, importance)
+  ) %>%
+  ggplot2::ggplot() +
+  ggplot2::aes(x = importance, y = feature_clean, fill = feature_type) +
+  ggplot2::geom_col(width = 0.6) +
+  ggplot2::labs(
+    x     = "Variable Importance (Gini Impurity Reduction)",
+    y     = "Feature Predictor",
+    fill  = "Feature Category",
+    title = "Random Forest Classifier: Top 20 Predictors of Shared Status"
+  ) +
+  theme_vaxgo() +
+  ggplot2::theme(legend.position = "top")
+
+# Print evaluation plots
+print(p_logistic_forest)
+print(p_rf_cls_importance)
 ```
 
-# PIPELINE 2: LINEAR REGRESSION (Predict Log2FC Divergence Magnitude)
+
+
+
+
+
+## Predict Log2FC Divergence Magnitude
+### Linear regression
 ```{r}
 # ==============================================================================
 # PIPELINE 2: LINEAR REGRESSION (Predict Log2FC Divergence Magnitude)
@@ -312,7 +426,7 @@ linear_spec <- linear_reg() %>%
   set_engine("lm") %>%
   set_mode("regression")
 
-linear_recipe <- recipes::recipe(abs_log2fc_diff ~ ., data = human_mouse_parameters_values) %>%
+regression_recipe <- recipes::recipe(abs_log2fc_diff ~ ., data = human_mouse_parameters_values_regression) %>%
   recipes::update_role(hgnc_symbol, treatment, pathogen, timepoint_comparison, new_role = "id") %>%
   recipes::step_dummy(recipes::all_nominal_predictors()) %>%
   recipes::step_zv(recipes::all_predictors()) %>%
@@ -322,26 +436,20 @@ linear_recipe <- recipes::recipe(abs_log2fc_diff ~ ., data = human_mouse_paramet
 # Fit linear workflow and extract engine
 # --------
 linear_fit <- workflow() %>%
-  add_recipe(linear_recipe) %>%
+  add_recipe(regression_recipe) %>%
   add_model(linear_spec) %>%
-  fit(data = human_mouse_parameters_values)
+  fit(data = human_mouse_parameters_values_regression)
 
 # Extract native LM object for direct diagnostics
 linear_lm_engine <- extract_fit_engine(linear_fit)
 
 # Example direct analysis via broom
-linear_coefficients <- broom::tidy(linear_lm_engine, conf.int = TRUE, conf.level = 0.95) %>%
+linear_coefficients <- broom::tidy(linear_lm_engine, conf.int = TRUE) %>%
   filter(term != "(Intercept)") %>%
-  mutate(
-    # Format term names for publication readiness
-    term_clean = term %>%
-      stringr::str_replace_all("^n_total_cre_type_human_", "Count: ") %>%
-      stringr::str_replace_all("^pct_same_cre_type_", "% Same Type: ") %>%
-      stringr::str_replace_all("^pct_same_cre_subtype_", "% Same Subtype: ") %>%
-      stringr::str_replace_all("^pct_homology_", "% Homology: ") %>%
-      stringr::str_replace_all("_", " ")
-  ) %>% 
-  arrange(-estimate)
+  rename(feature_name_original = term) %>%
+  mutate(feature_name_original = str_replace_all(feature_name_original, "`", "")) %>% 
+  inner_join(feature_dictionary,
+             by = join_by("feature_name_original"))
 
 # Save
 saveRDS(linear_lm_engine, file = here::here("tables", "linear_lm_engine.rds"))
@@ -349,31 +457,26 @@ saveRDS(linear_coefficients, file = here::here("tables", "linear_lm_engine_coeff
 ```
 
 
-
+```{r fig.height=20, fig.width=12}
 ### Assess
-
-```{r fig.height=20, fig.width=10}
-
-
-
-forest_plot_linear <- linear_coefficients %>%
-  mutate(term_clean = fct_inorder(term_clean)) %>% 
+linear_coefficients %>%
+  mutate(feature_name = fct_inorder(feature_name)) %>% 
   ggplot() +
   aes(
     x    = estimate,
-    y    = term_clean,
+    y    = feature_name,
     xmin = conf.low,
     xmax = conf.high
   ) +
+  facet_grid(feature_type~., space = "free",
+             scales = "free_y") +
   # Reference line at zero effect
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.6) +
   # Confidence intervals (horizontal error bars)
   geom_errorbarh(height = 0.2, color = "black", linewidth = 0.6) +
-  # Estimate point markers
   geom_point(aes(color = p.value <= 0.05), size = 2.5) +
-  # Custom colors for statistical significance
   scale_color_manual(
-    values = c("TRUE" = "#E64B35FF", "FALSE" = "gray60"),
+    values = c("TRUE" = "#4DBBD5FF", "FALSE" = "gray60"),
     labels = c("TRUE" = "p <= 0.05", "FALSE" = "p > 0.05")
   ) +
   labs(
@@ -385,16 +488,210 @@ forest_plot_linear <- linear_coefficients %>%
   theme_vaxgo() +
   theme(
     legend.position = "top",
-    axis.text.y     = element_text(size = 9)
+    axis.text.y     = element_text(size = 9),
+    strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)
   )
-
-# Render plot output
-print(forest_plot_linear)
 
 ```
 
 
 
+
+
+```{r}
+# Set 5-fold cross-validation scheme
+set.seed(123)
+cv_folds <- vfold_cv(human_mouse_parameters_values_regression, v = 5)
+
+# ==========================================
+# MODEL 1: GLM GAMMA (LOG-LINK REGRESSION)
+# ==========================================
+
+# --------
+# Step 2A: Configure GLM Gamma Specification & Workflow
+# --------
+gamma_spec <- linear_reg() %>%
+  set_engine("glm", family = Gamma(link = "log")) %>%
+  set_mode("regression")
+
+gamma_workflow <- workflow() %>%
+  add_recipe(regression_recipe) %>%
+  add_model(gamma_spec)
+
+# Fit GLM Gamma model on full dataset
+gamma_fit <- fit(gamma_workflow, data = human_mouse_parameters_values_regression)
+gamma_engine <- extract_fit_engine(gamma_fit)
+
+# Extract tidy coefficients (multiplicative effect on log scale)
+gamma_coefficients <- broom::tidy(gamma_fit) %>%
+  filter(term != "(Intercept)") %>%
+  rename(feature_name_original = term) %>%
+  mutate(feature_name_original = str_replace_all(feature_name_original, "`", "")) %>%
+  inner_join(
+    feature_dictionary,
+    by = join_by("feature_name_original")
+  )
+
+# ==========================================
+# MODEL 2: RANDOM FOREST (RANGER ENSEMBLE)
+# ==========================================
+
+# --------
+# Step 2B: Configure Random Forest Specification & Workflow
+# --------
+rf_spec <- rand_forest(
+  trees = 1000,
+  mtry  = tune(),
+  min_n = tune()
+) %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("regression")
+
+rf_workflow <- workflow() %>%
+  add_recipe(regression_recipe) %>%
+  add_model(rf_spec)
+
+# Tune Random Forest hyperparameters across cross-validation folds
+rf_grid <- grid_regular(
+  mtry(range = c(2, 10)),
+  min_n(range = c(5, 20)),
+  levels = 4
+)
+
+rf_tune <- tune_grid(
+  rf_workflow,
+  resamples = cv_folds,
+  grid      = rf_grid,
+  metrics   = metric_set(rmse, rsq)
+)
+
+# Select optimal hyperparameters and fit final Random Forest model
+best_rf_params <- select_best(rf_tune, metric = "rmse")
+
+final_rf_fit <- rf_workflow %>%
+  finalize_workflow(best_rf_params) %>%
+  fit(data = human_mouse_parameters_values)
+
+rf_engine <- extract_fit_engine(final_rf_fit)
+
+# Extract Gini Impurity feature importance metric
+rf_importance <- tibble(
+  feature_name_original = names(rf_engine$variable.importance),
+  importance            = as.numeric(rf_engine$variable.importance)
+) %>%
+  inner_join(
+    feature_dictionary,
+    by = join_by("feature_name_original")
+  )
+```
+
+
+```{r}
+# ==========================================
+# EVALUATION & MODEL COMPARISON
+# ==========================================
+
+# --------
+# Step 3: Compute Out-of-Sample Predictions and Metrics
+# --------
+# Generate predictions for GLM Gamma and Random Forest
+eval_table <- human_mouse_parameters_values %>%
+  select(abs_log2fc_diff) %>%
+  bind_cols(
+    predict(gamma_fit, new_data = human_mouse_parameters_values) %>% rename(pred_gamma = .pred),
+    predict(final_rf_fit, new_data = human_mouse_parameters_values) %>% rename(pred_rf = .pred)
+  )
+
+# Performance Metrics: Gamma
+metrics_gamma <- metric_set(rmse, rsq)(eval_table, truth = abs_log2fc_diff, estimate = pred_gamma) %>%
+  mutate(model = "GLM Gamma")
+
+# Performance Metrics: Random Forest
+metrics_rf <- metric_set(rmse, rsq)(eval_table, truth = abs_log2fc_diff, estimate = pred_rf) %>%
+  mutate(model = "Random Forest")
+
+model_comparison_metrics <- bind_rows(metrics_gamma, metrics_rf)
+print(model_comparison_metrics)
+```
+
+```{r}
+# --------
+# Plot Pearson residuals vs. fitted values for GLM Gamma
+# --------
+gamma_residuals_df <- tibble(
+  fitted    = predict(gamma_fit, new_data = human_mouse_parameters_values)$.pred,
+  actual    = human_mouse_parameters_values$abs_log2fc_diff
+) %>%
+  mutate(
+    # Compute raw and standardized Pearson residuals for Gamma GLM
+    residual_raw     = actual - fitted,
+    residual_pearson = residual_raw / fitted
+  )
+
+p_residuals_gamma <- ggplot(gamma_residuals_df) +
+  aes(x = fitted, y = residual_pearson) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red", linewidth = 0.6) +
+  geom_point(alpha = 0.3, color = "gray30") +
+  geom_smooth(method = "loess", color = "#4DBBD5FF", se = FALSE, linewidth = 0.8) +
+  labs(
+    x     = expression("Fitted Values (" * hat(Y) * ")"),
+    y     = "Pearson Standardized Residuals",
+    title = "GLM Gamma: Residuals vs Fitted Diagnostics"
+  ) +
+  theme_vaxgo()
+
+print(p_residuals_gamma)
+
+# --------
+# Plot Observed vs Predicted values across models
+# --------
+p_obs_vs_pred <- eval_table %>%
+  pivot_longer(
+    cols      = c(pred_gamma, pred_rf),
+    names_to  = "model",
+    values_to = "predicted"
+  ) %>%
+  mutate(
+    model = if_else(model == "pred_gamma", "GLM Gamma", "Random Forest")
+  ) %>%
+  ggplot() +
+  aes(x = abs_log2fc_diff, y = predicted, color = model) +
+  # Identity line (perfect prediction)
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point(alpha = 0.2, size = 1) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 0.8) +
+  facet_wrap(~ model) +
+  coord_obs_pred() +
+  labs(
+    x     = expression("Observed Divergence (" * "|" * Delta * "Log"[2] * "FC|" * ")"),
+    y     = expression("Predicted Divergence (" * hat(Y) * ")"),
+    title = "Model Calibration: Observed vs. Predicted"
+  ) +
+  theme_vaxgo() +
+  theme(legend.position = "none")
+
+print(p_obs_vs_pred)
+
+# --------
+# Render Random Forest Variable Importance Plot (Top 20 Features)
+# --------
+p_rf_importance <- rf_importance %>%
+  slice_max(importance, n = 20) %>%
+  mutate(feature_clean = forcats::fct_reorder(feature_name_original, importance)) %>%
+  ggplot() +
+  aes(x = importance, y = feature_clean, fill = feature_type) +
+  geom_col(width = 0.6) +
+  labs(
+    x     = "Variable Importance (Gini Impurity Reduction)",
+    y     = "Feature Predictor",
+    fill  = "Feature Category",
+    title = "Random Forest: Top 20 Predictors of Expression Divergence"
+  ) +
+  theme_vaxgo() +
+  theme(legend.position = "top")
+
+print(p_rf_importance)
+```
 
 
 
