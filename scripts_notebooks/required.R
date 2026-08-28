@@ -14,7 +14,7 @@ cran_pkgs <- c(
   "ggpp", "corto", "Hmisc", "patchwork", "tidymodels", "TidyDensity", "forcats", "deeptime",
   "GGally", "ggbeeswarm", "geomtextpath", "ggfx", "rstatix", "matrixTests",  "seqinr", "ape",
   "pkgconfig", "wCorr", "weights", "ggpubr", "rstatix", "emmeans", "effectsize", "coin", "ggtext",
-  "ranger"
+  "ranger", "gghalves"
 )
 
 bioc_pkgs <- c(
@@ -25,7 +25,7 @@ bioc_pkgs <- c(
   "limma", "fgsea"
 )
 
-
+# devtools::install_github('erocoar/gghalves')
 # install.packages("https://cran.r-project.org/src/contrib/Archive/notifier/notifier_1.0.0.tar.gz")
 
 
@@ -116,6 +116,8 @@ colors = list(organism = c("FIT" = "#4361ee",
                                    "Not-shared" = "white",
                                    "Shared" = "black",
                                    "BTMs" = "black",
+                                   "All" = "white",
+                                   "All genes" = "white",
                                    "Immune BTMs" = "black",
                                    "Immune\nBTMs" = "black",
                                    "Non-Immune BTMs" = "black",

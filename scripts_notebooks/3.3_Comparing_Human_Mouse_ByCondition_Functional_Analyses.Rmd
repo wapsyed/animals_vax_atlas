@@ -2283,3 +2283,183 @@ leading_edges_plots_short %>%
 
 
 
+
+##### Unite LEGs with DGE for future analyses
+```{r}
+# Gene expression
+dge_btm_process_genes_diff_bygene = readRDS(here("tables", "human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune.rds"))
+dge_btm_process_genes_diff_bygene_clean = dge_btm_process_genes_diff_bygene %>% 
+  filter(gene_set == "All genes", comparison == "Human vs. Mouse") %>% 
+  filter(pathogen_mouse != "DMD") %>% 
+  select(treatment = treatment_human, pathogen = pathogen_human, timepoint_comparison, hgnc_symbol = human_symbol, 
+         mean_log2fc_diff, se_mouse) %>% 
+  mutate(inverse_se_mouse = 1/se_mouse,
+         abs_log2fc_diff = abs(mean_log2fc_diff)) %>% 
+  select(-se_mouse, -mean_log2fc_diff)
+  
+
+#LEGs
+all_human_mouse_gsea_btm_results_core_joined = readRDS(file = here("tables", "all_human_mouse_gsea_btm_results_core_joined.rds"))
+gsea_btm_legs_clean =
+  all_human_mouse_gsea_btm_results_core_joined %>%
+  distinct() %>% 
+  select(pathogen, timepoint_comparison, hgnc_symbol = gene, status) %>% 
+  distinct() %>% 
+  mutate(status_original = status) %>% 
+  mutate(status = if_else(status == "Shared", "Shared", "Not-shared"))
+
+
+#Filter timepoints
+dge_btm_process_genes_diff_bygene_clean_filtered = 
+  bind_rows(
+    
+  #LEGs categorized
+  dge_btm_process_genes_diff_bygene_clean %>% 
+  left_join(
+    gsea_btm_legs_clean %>%
+      select(pathogen, status, timepoint_comparison) %>% distinct(),
+    by = join_by(pathogen, timepoint_comparison)
+  ) %>% 
+  mutate(status = if_else(is.na(status), "Not LEG", status)),
+  
+  dge_btm_process_genes_diff_bygene_clean %>% 
+  left_join(
+    gsea_btm_legs_clean %>%
+      select(pathogen, status, timepoint_comparison) %>% distinct(),
+    by = join_by(pathogen, timepoint_comparison)
+  ) %>% 
+  mutate(status = "All genes") 
+  )
+
+dge_btm_process_genes_diff_bygene_clean_filtered %>% dplyr::count(status)
+
+#Save
+dge_btm_process_genes_diff_bygene_clean_filtered %>% 
+  saveRDS(file = here("tables", "dge_btm_process_genes_diff_bygene_clean_filtered.rds"))
+
+
+
+```
+
+
+##### Are LEGs shared and not-shared between species different gene expression?
+
+
+```{r fig.height=2, fig.width=8}
+# Gene expression
+
+legs_divergence_plot = dge_btm_process_genes_diff_bygene_clean_filtered %>% 
+  filter(status %in% c("Shared", "Not-shared"),
+         treatment %in% c("Infection", "Injury")) %>%
+  ggplot() +
+  aes(x = status,
+      y = abs_log2fc_diff,
+      color = status,
+      fill =  status,
+      ) +
+  facet_nested_wrap(~treatment+pathogen,
+                    nrow = 1, axes = "all", scales = "free") +
+    geom_point(alpha = 0.2,
+             size = 0.5,
+            position = position_jitterdodge(jitter.width = 0.3, 
+                                    dodge.width = 0.75),) +
+  geom_boxplot(width = 0.3,
+               alpha = 1,
+               color = "black",
+               outliers = F) +
+  scale_y_continuous(limits = c(0, 3), expand = c(0.01, 0.01)) +
+  # STATISTICAL TEST LAYER
+  stat_compare_means(
+    comparisons = list(c("Shared", "Not-shared")),
+    method = "wilcox.test",
+    label = "p.signif",
+    symnum.args = list(
+      cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+      symbols = c("***", "**", "*", "ns")
+    ),
+    label.y.np = "top",
+    label.y = 2.2,       
+    hide.ns = F, step.increase = 0,
+    size = 2.5, tip.length = 0,
+  ) +
+  scale_fill_manual(values = colors$comparison) +
+  scale_color_manual(values = colors$comparison) +
+  labs(x = "N",
+       y = expression("|" * Delta * "Log"[2] * "FC|"),
+       fill = "",
+       color = "") +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        axis.title.x = element_blank(), 
+        axis.text.x = element_blank())
+
+legs_divergence_plot
+
+legs_divergence_plot %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_legs_divergence_plot.png"),
+         height = 2, width = 8)
+
+```
+
+
+
+```{r fig.height=2, fig.width=8}
+# Gene expression
+
+legs_error_plot = dge_btm_process_genes_diff_bygene_clean_filtered %>% 
+  filter(status %in% c("Shared", "Not-shared"),
+         treatment %in% c("Infection", "Injury")) %>%
+  ggplot() +
+  aes(x = status,
+      y = inverse_se_mouse,
+      color = status,
+      fill =  status,
+      ) +
+  facet_nested_wrap(~treatment+pathogen,
+                    nrow = 1, axes = "all") +
+  
+   geom_violin(alpha = 1, 
+              width = 1,
+              color = NA) +
+  
+  # Boxplot centered on each status
+  geom_boxplot(
+    width = 0.3,
+    alpha = 1,
+    outliers = FALSE
+  ) +
+  scale_y_continuous(limits = c(0, 3), expand = c(0.01, 0.01)) +
+  # STATISTICAL TEST LAYER
+  stat_compare_means(
+    comparisons = list(c("Shared", "Not-shared")),
+    method = "wilcox.test",
+    label = "p.signif",
+    symnum.args = list(
+      cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+      symbols = c("***", "**", "*", "ns")
+    ),
+    label.y.np = "top",
+    label.y = 2.2,       
+    hide.ns = F, step.increase = 0,
+    size = 2.5, tip.length = 0,
+  ) +
+  scale_fill_manual(values = colors$comparison) +
+  scale_color_manual(values = colors$comparison_color) +
+  labs(x = "N",
+       y = expression("|" * Delta * "Log"[2] * "FC|"),
+       fill = "",
+       color = "") +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        axis.title.x = element_blank(), 
+        axis.text.x = element_blank())
+
+legs_error_plot
+
+legs_divergence_plot %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_legs_divergence_plot.png"),
+         height = 2, width = 8)
+
+```
+
+

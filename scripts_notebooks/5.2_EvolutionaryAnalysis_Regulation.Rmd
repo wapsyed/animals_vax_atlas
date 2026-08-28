@@ -132,7 +132,7 @@ cres_human_pls <- read_tsv(
 ) %>%
   rename_with(~paste0(., "_human")) %>% 
   mutate(type_original_human = type_human,
-         subtype_human = "not-CTCF") 
+         ctcf_human = "not-CTCF") 
 
 #pELS-dELS
 cres_human_pelsdels <- read_tsv(
@@ -142,7 +142,7 @@ cres_human_pelsdels <- read_tsv(
 ) %>%
   rename_with(~paste0(., "_human")) %>% 
   mutate(type_original_human = type_human,
-         subtype_human = "not-CTCF") 
+         ctcf_human = "not-CTCF") 
 
 #CTCF BOUND
 cres_human_ctcfbound <- read_tsv(
@@ -152,7 +152,7 @@ cres_human_ctcfbound <- read_tsv(
 ) %>%
   rename_with(~paste0(., "_human")) %>% 
   mutate(type_human = str_remove(type_original_human, ",CTCF-bound"),
-         subtype_human = "CTCF")
+         ctcf_human = "CTCF-bound")
 
 # Load ENCODE comprehensive gene-CRE association table
 genes_cres_human_original <- read_tsv(
@@ -195,26 +195,27 @@ cres_human = bind_rows(cres_human_pls_clean,
 
 
 #Annotate Human symbol ===========
+library(org.Hs.eg.db)
 
-library(biomaRt)
-human_mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-listAttributes(human_mart) %>% view()
+hgnc_symbol <- AnnotationDbi::mapIds(
+  x         = org.Hs.eg.db,
+  keys      = unique(genes_cres_human_original$gene_id_clean),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+) %>%
+  tibble::enframe(name = "ensembl_gene_id", value = "hgnc_symbol") %>%
+  dplyr::filter(!is.na(hgnc_symbol) & hgnc_symbol != "")
 
-hgnc_symbol <- getBM(
-  attributes = c("ensembl_gene_id", "hgnc_symbol"),
-  filters    = "ensembl_gene_id",
-  values     = unique(genes_cres_human_original$gene_id_clean),
-  mart       = human_mart
-)
 
 # Join HGNC symbols to gene table
 genes_cres_human <- genes_cres_human_original %>%
   left_join(hgnc_symbol, by = c("gene_id_clean" = "ensembl_gene_id")) %>% 
   rename(chrom_human = chrom_cre, start_human = start_cre, end_human = end_cre,
          id_ccre_human = id_ccre, id_dhs_human = id_dhs) %>% 
-  #Add CRE subtype
+  #Add CRE ctcf
   inner_join(cres_human %>% #1,958,107
-               select(chrom_human, start_human, end_human, id_dhs_human, id_ccre_human, type_human, subtype_human),
+               select(chrom_human, start_human, end_human, id_dhs_human, id_ccre_human, type_human, ctcf_human),
              by = join_by(chrom_human, start_human, end_human, id_dhs_human, id_ccre_human)) %>% #2,214,457
   select(-type_cre)
 
@@ -229,7 +230,7 @@ cres_mouse_pls <- read_tsv(
 ) %>%
   rename_with(~paste0(., "_mouse")) %>% 
   mutate(type_original_mouse = type_mouse,
-         subtype_mouse = "not-CTCF") 
+         ctcf_mouse = "not-CTCF") 
 
 #pELS-dELS
 cres_mouse_pelsdels <- read_tsv(
@@ -239,7 +240,7 @@ cres_mouse_pelsdels <- read_tsv(
 ) %>%
   rename_with(~paste0(., "_mouse")) %>% 
   mutate(type_original_mouse = type_mouse,
-         subtype_mouse = "not-CTCF")
+         ctcf_mouse = "not-CTCF")
 
 #CTCF BOUND
 cres_mouse_ctcfbound <- read_tsv(
@@ -249,7 +250,7 @@ cres_mouse_ctcfbound <- read_tsv(
 ) %>%
   rename_with(~paste0(., "_mouse")) %>% 
   mutate(type_mouse = str_remove(type_original_mouse, ",CTCF-bound"),
-         subtype_mouse = "CTCF")
+         ctcf_mouse = "CTCF-bound")
 
 
 #Check overlaps and remove CTCF-bound cCREs that are not annotated accordingly =====
@@ -289,78 +290,6 @@ homologous_cres <- read_tsv(
   show_col_types = FALSE
 ) #537,822
 
-# # GENEHANCER ===================
-# #Gene interactions with enhancers (ELITE)
-# genehancer_interactions_doubleelite = read_tsv(here("tables", "Genomic", "GeneHancer_Chr1-22_ChrX_Interactions_DoubleElite_hgTables.txt")) %>% 
-#   separate(name, into = c("hgnc_symbol", "genehancer_id")) %>%
-#   filter(chromEnd >= chromStart) %>% 
-#   rename(geneScore = score,
-#          geneValue = value,)
-#                                                
-# #Enhancers                                              
-# genehancer_enhancers_doubleelite = read_tsv(here("tables", "Genomic", "GeneHancer_Chr1-22_ChrX_Enhancers_DoubleElite_hgTables.txt")) %>%
-#   filter(chromEnd >= chromStart)
-# 
-# 
-# # Get overlap between ENCODE4 and Genehancer =========
-# library(GenomicRanges)
-# #Convert to GRanges
-# genehancer_enhancers_doubleelite_ranges = makeGRangesFromDataFrame(genehancer_enhancers_doubleelite, 
-#                                   keep.extra.columns = TRUE,
-#                                   seqnames.field = "chrom",
-#                                   start.field = "chromStart",
-#                                   end.field = "chromEnd", 
-#                                   na.rm = T)
-# 
-# #Convert to GRanges
-# cres_human_ranges = makeGRangesFromDataFrame(genes_cres_human, 
-#                                   keep.extra.columns = TRUE,
-#                                   seqnames.field = "chrom_human",
-#                                   start.field = "start_human",
-#                                   end.field = "end_human", 
-#                                   na.rm = T)
-# # Find overlaps
-# distances_ranges <- distanceToNearest(genehancer_enhancers_doubleelite_ranges, 
-#                      cres_human_ranges) %>% 
-#   as.data.frame()
-# 
-# #Annotate Genehancer ids (ELITE) with ENCODE4 ids
-# cres_human_encode_genehancer <- data.frame(
-#   genehancer_enhancers_doubleelite_ranges[distances_ranges$queryHits], 
-#   cres_human_ranges[distances_ranges$subjectHits],
-#   distance = distances_ranges$distance
-# ) %>% 
-#   rename_with(
-#     ~ str_replace(., "\\.1$", "_encode4"), 
-#     ends_with(".1")                        
-#   ) %>% 
-#   rename(chrom = seqnames,
-#          chromStart = start,
-#          chromEnd = end,
-#          genehancer_id = name) %>%
-#   
-#   #Merge gene interaction scores
-#   full_join(genehancer_interactions_doubleelite,
-#              by = join_by("genehancer_id", "hgnc_symbol", "chrom", "chromStart", "chromEnd")
-#              )
-# 
-# #Check
-# cres_human_encode_genehancer %>% 
-#   glimpse()
-# 
-# #Save ===========
-# cres_human_encode_genehancer %>% 
-#   saveRDS(file = here("tables", "cres_human_encode_genehancer.rds"))
-
-# 
-# #Add more metadata (eliteness) =========
-# cres_human_encode_genehancer_elite_notelite = genes_cres_human %>% 
-#   full_join(cres_human_encode_genehancer %>% 
-#              select(id_dhs_human, id_ccre_human, genehancer_id, evidenceSources, eliteness)  ,
-#             join_by(id_dhs_human, id_ccre_human))
-# #Save
-# cres_human_encode_genehancer_elite_notelite %>% 
-#   saveRDS(file = here("tables", "cres_human_encode_genehancer_elite_notelite.rds"))
 ```
 
 ### Summarize data 
@@ -372,25 +301,14 @@ Count how many mouse CREs each human CRE maps to (and vice versa)
 #Per gene
 genes_cres_human %>% 
   filter(type_human %in% c("pELS", "dELS", "PLS")) %>% 
-  group_by(hgnc_symbol, type_human, subtype_human) %>% 
+  group_by(hgnc_symbol, type_human, ctcf_human) %>% 
   dplyr::summarise(n = n()) %>%
   arrange(hgnc_symbol) %>% 
   dplyr::mutate(pct = round(100 * n / sum(n), 1)) %>%
   dplyr::arrange(type_human, desc(n))
 
 cres_mouse %>% 
-  dplyr::count(type_mouse, subtype_mouse) %>%
-  dplyr::mutate(pct = round(100 * n / sum(n), 1)) %>%
-  dplyr::arrange(type_mouse, desc(n))
-
-
-cres_human_encode_genehancer %>% 
-  dplyr::count(type_human, subtype_human) %>%
-  dplyr::mutate(pct = round(100 * n / sum(n), 1)) %>%
-  dplyr::arrange(type_human, desc(n))
-
-cres_mouse %>% 
-  dplyr::count(type_mouse, subtype_mouse) %>%
+  dplyr::count(type_mouse, ctcf_mouse) %>%
   dplyr::mutate(pct = round(100 * n / sum(n), 1)) %>%
   dplyr::arrange(type_mouse, desc(n))
 
@@ -405,8 +323,14 @@ mouse_counts <- homologous_cres %>%
 cres_annotated <- homologous_cres %>%
   left_join(human_counts, by = "human_enhancer") %>%
   left_join(mouse_counts, by = "mouse_enhancer") %>%
+  #Annotate with human gene
   full_join(genes_cres_human, by = join_by(human_enhancer == id_ccre_human)) %>%
+  #Annotate mouse enhancer with other info
   full_join(cres_mouse, by = join_by(mouse_enhancer == id_ccre_mouse)) %>%
+  mutate(type_mouse = case_when(!type_mouse %in% c("PLS", "pELS", "dELS") ~ "Other",
+                                T ~ type_mouse)) %>% 
+  #Filter out enhancers without mouse annotation
+  drop_na(chrom_mouse, hgnc_symbol) %>% 
   mutate(
     is_homologous = !is.na(human_enhancer) & !is.na(mouse_enhancer),
     match_homology = case_when(
@@ -418,11 +342,14 @@ cres_annotated <- homologous_cres %>%
       TRUE                                             ~ "N:M"
     ),
     match_cretype = if_else(type_human == type_mouse, "Same", "Different"),
-    match_cresubtype = if_else(subtype_human == subtype_mouse, "Same", "Different")
+    match_ctcf = if_else(ctcf_human == ctcf_mouse, "Same", "Different")
   ) 
+#Print
+cres_annotated
 
 #Save
 cres_annotated %>% saveRDS(file = here("tables", "cres_homologous_annotated.rds"))
+
 
 ```
 
@@ -435,18 +362,26 @@ cres_annotated = readRDS(file = here("tables", "cres_homologous_annotated.rds"))
 #Compare classes of CREs between species
 #======================================
 
-# Calculate cCRE type, subtype, and homology percentages per locus
+# Calculate cCRE type, ctcf, and homology percentages per locus
 
-cres_type_homology_comparison <- cres_annotated %>%
-  # Filter target cCRE types and valid gene symbols
+cres_type_homology_comparison <- cres_annotated %>% #453,679
+  
+  # Step 1: Filter target human cCRE types and valid gene symbols
+  # Note: We do not filter type_mouse here so we don't lose 'Species Specific' cCREs
   dplyr::filter(
     type_human %in% c("pELS", "dELS", "PLS"),
-    type_mouse %in% c("pELS", "dELS", "PLS"),
     !is.na(hgnc_symbol) & hgnc_symbol != ""
-  ) %>%
+  ) %>% #442,995
   
-  # Step 1: Collapse granular match_homology into broad simplified categories
+  # Step 2: Handle NAs BEFORE grouping and calculations
   dplyr::mutate(
+    type_original_mouse       = dplyr::if_else(is.na(type_original_mouse), "Unknown", as.character(type_original_mouse)),
+    type_mouse       = dplyr::if_else(is.na(type_mouse), "Unknown", as.character(type_mouse)),
+    ctcf_mouse    = dplyr::if_else(is.na(ctcf_mouse), "Unknown", as.character(ctcf_mouse)),
+    match_cretype    = dplyr::if_else(is.na(match_cretype), "Unknown", as.character(match_cretype)),
+    match_ctcf = dplyr::if_else(is.na(match_ctcf), "Unknown", as.character(match_ctcf)),
+    
+    # Collapse granular match_homology into broad simplified categories
     match_homology_group = dplyr::case_when(
       match_homology %in% c("1:1") ~ "Homologous",
       match_homology %in% c("1:N", "N:1", "N:M") ~ "Complex homology",
@@ -459,105 +394,81 @@ cres_type_homology_comparison <- cres_annotated %>%
   ) %>%
   tidyr::drop_na(match_homology_group) %>%
   
-  # Step 2: Count occurrences per gene locus and annotation/homology stratum
+  # Step 3: Count occurrences per gene locus and annotation/homology stratum
   dplyr::group_by(
-    hgnc_symbol, type_human, subtype_human, type_mouse, subtype_mouse,
-    match_homology_group, match_cretype, match_cresubtype
+    hgnc_symbol, type_human, ctcf_human, type_mouse, ctcf_mouse,
+    match_cretype, match_ctcf, match_homology_group
   ) %>%
   dplyr::summarise(n_cres = dplyr::n(), .groups = "drop") %>%
   
-  # Step 3: Complete missing combinations with 0 to explicitly retain n = 0 per stratum
-  tidyr::complete(
-    hgnc_symbol,
-    type_human = c("pELS", "dELS", "PLS"),
-    subtype_human,
-    match_homology_group,
-    fill = list(n_cres = 0)
-  ) %>%
-  
-  # Step 4: Compute relative percentage for each stratum over total locus cCREs
+  # # Step 4: Complete missing combinations with 0 to explicitly retain n = 0 per stratum
+  # tidyr::complete(
+  #   hgnc_symbol,
+  #   type_human = c("pELS", "dELS", "PLS"),
+  #   ctcf_human,
+  #   match_homology_group,
+  #   fill = list(n_cres = 0)
+  # ) %>%
+  # 
+  # Step 5: Compute total locus cCREs
   dplyr::group_by(hgnc_symbol) %>%
   dplyr::mutate(
-    n_total_cres_gene = sum(n_cres),
-    pct_cres_gene     = dplyr::if_else(
-      n_total_cres_gene > 0, 
-      round(100 * n_cres / n_total_cres_gene, 2), 
-      0
-    )
+    n_total_cres_gene = sum(n_cres, na.rm = TRUE)
   ) %>%
   
-  # Step 5: Compute percentage relative to same Human Type
+  # Step 6: Compute counts and percentage matching relative to the same Human Type
   dplyr::group_by(hgnc_symbol, type_human) %>%
   dplyr::mutate(
-    n_total_cre_type_human = sum(n_cres),
-    pct_same_cre_type      = dplyr::if_else(
-      n_total_cre_type_human > 0,
-      round(
-        100 * sum(n_cres[match_cretype == "Same" | match_cretype == TRUE], na.rm = TRUE) / n_total_cre_type_human, 
-        2
-      ),
-      0
-    )
+    n_type         = sum(n_cres, na.rm = TRUE),
+    # Using %in% safely ignores NAs introduced by tidyr::complete
+    n_match_type   = sum(n_cres[match_cretype %in% c("Same", "TRUE", TRUE)], na.rm = TRUE),
+    pct_match_type = dplyr::if_else(n_type > 0, round(100 * n_match_type / n_type, 2), 0)
   ) %>%
   
-  # Step 6: Compute percentage relative to same Human Type & Subtype
-  dplyr::group_by(hgnc_symbol, type_human, subtype_human) %>%
+  # Step 7: Compute counts and percentage matching relative to Human Type & ctcf
+  dplyr::group_by(hgnc_symbol, type_human, ctcf_human) %>%
   dplyr::mutate(
-    n_total_cre_subtype_human = sum(n_cres),
-    pct_same_cre_subtype      = dplyr::if_else(
-      n_total_cre_subtype_human > 0,
-      round(
-        100 * sum(n_cres[match_cresubtype == "Same" | match_cresubtype == TRUE], na.rm = TRUE) / n_total_cre_subtype_human, 
-        2
-      ),
-      0
-    )
+    n_ctcf         = sum(n_cres, na.rm = TRUE),
+    n_match_ctcf   = sum(n_cres[match_ctcf %in% c("Same", "TRUE", TRUE)], na.rm = TRUE),
+    pct_match_ctcf = dplyr::if_else(n_ctcf > 0, round(100 * n_match_ctcf / n_ctcf, 2), 0)
   ) %>%
   
-  # Step 7: Compute homology percentage WITHIN each Human Type & Subtype stratum
-  dplyr::group_by(hgnc_symbol, type_human, subtype_human, match_homology_group) %>%
+  # Step 8: Compute homology counts and percentage WITHIN each Human Type & ctcf stratum
+  dplyr::group_by(hgnc_symbol, type_human, ctcf_human, match_homology_group) %>%
   dplyr::mutate(
-    n_cres_homology = sum(n_cres, na.rm = TRUE)
+    n_homology   = sum(n_cres, na.rm = TRUE),
+    pct_homology = dplyr::if_else(n_ctcf > 0, round(100 * n_homology / n_ctcf, 2), 0)
   ) %>%
-  dplyr::group_by(hgnc_symbol, type_human, subtype_human) %>%
+  dplyr::ungroup() %>%
+  
+  # Step 9: Categorize cCRE counts into unified frequency bins (n_type_cat)
   dplyr::mutate(
-    pct_homology = dplyr::if_else(
-      n_total_cre_subtype_human > 0,
-      round(100 * n_cres_homology / n_total_cre_subtype_human, 2),
-      0
-    )
-  ) %>%
-  ungroup() %>% 
-  # Step 8: Categorize cCRE counts into unified frequency bins (n_cat)
-  # dplyr::group_by(hgnc_symbol, type_human) %>%
-  dplyr::mutate(
-    n_cat = dplyr::case_when(
-      n_total_cre_type_human == 0 ~ "0",
-      n_total_cre_type_human == 1 ~ "1",
-      n_total_cre_type_human == 2 ~ "2",
-      n_total_cre_type_human == 3 ~ "3",
-      n_total_cre_type_human == 4 ~ "4",
-      n_total_cre_type_human >= 5 ~ ">=5",
-      TRUE        ~ NA_character_
+    n_type_cat = dplyr::case_when(
+      type_human == "PLS" & n_type >= 5 ~ ">=5",
+      type_human %in% c("pELS", "dELS") & n_type >= 20 ~ ">=20",
+      TRUE ~ as.character(n_type)
     ),
-    n_cat = factor(n_cat, levels = c("0", "1", "2", "3", "4", ">=5"))
+      n_type_cat = factor(
+      n_type_cat, 
+      levels = c(
+        as.character(0:4), ">=5",      
+        as.character(5:19), ">=20"  
+      )
+    )
   ) %>%
-  dplyr::ungroup() %>% 
   
-  # Step 9: Sort by locus and count, then set factor levels for plotting
-  dplyr::arrange(hgnc_symbol, dplyr::desc(n_total_cre_type_human)) %>%
+  # Step 10: Set factor levels for plotting and sort by locus and count
   dplyr::mutate(
-    type_human = factor(type_human, levels = c("PLS", "pELS", "dELS")),
-    type_mouse = factor(type_mouse, levels = c("PLS", "pELS", "dELS"))
+    type_mouse       = dplyr::if_else(is.na(type_mouse), "Unknown", as.character(type_mouse)),
+    ctcf_mouse    = dplyr::if_else(is.na(ctcf_mouse), "Unknown", as.character(ctcf_mouse)),
+    match_cretype    = dplyr::if_else(is.na(match_cretype), "Unknown", as.character(match_cretype)),
+    match_ctcf = dplyr::if_else(is.na(match_ctcf), "Unknown", as.character(match_ctcf)),
+    type_human = fct_relevel(type_human, "PLS", "pELS", "dELS"),
+    type_mouse = fct_relevel(type_mouse, "PLS", "pELS", "dELS")
   ) %>% 
-  #NAs in homologous CREs mean that they are not described in mice yet
-  mutate(type_mouse = if_else(is.na(type_mouse), "Unknown", type_mouse),
-         subtype_mouse = if_else(is.na(subtype_mouse), "Unknown", subtype_mouse),
-         match_cretype = if_else(is.na(match_cretype), "Unknown", match_cretype),
-         match_cresubtype = if_else(is.na(match_cresubtype), "Unknown", match_cresubtype)) %>% 
-  group_by(hgnc_symbol, type_human) %>% 
-  mutate(n_cat = if_else(n_cat == 0, NA, n_cat)) %>% 
-  fill(n_cat, .direction = "downup")
+  dplyr::arrange(hgnc_symbol, dplyr::desc(n_type))
+
+ 
   
 #Print
 cres_type_homology_comparison 
@@ -566,26 +477,7 @@ cres_type_homology_comparison
 cres_type_homology_comparison %>% 
   saveRDS(file = here("tables", "cres_type_homology_comparison.rds"))
 
-# Inner join with cross-species differential expression statistics =============
-cres_type_homology_comparison_dge_legs_stats <- cres_type_homology_comparison %>%
-    dplyr::inner_join(
-    gene_info_human_log2fc_stats %>%
-      dplyr::select(
-        treatment, pathogen, status,
-        hgnc_symbol = gene, identity_human2mouse,
-        mean_log2fc_human:weight_se_inverse_combined
-      ) %>%
-      dplyr::distinct() %>%
-      dplyr::arrange(hgnc_symbol),
-    by = dplyr::join_by(hgnc_symbol)
-  )
 
-#Print
-cres_type_homology_comparison_dge_legs_stats
-
-#Save
-cres_type_homology_comparison_dge_legs_stats %>% 
-  saveRDS(file = here("tables", "cres_type_homology_comparison_dge_legs_stats.rds"))
 
 ```
 
@@ -598,17 +490,17 @@ cres_type_homology_comparison_dge_legs_stats =
 cres_type_homology_comparison =  
   readRDS(file = here("tables", "cres_type_homology_comparison.rds"))
 
-# Calculate shared cCRE type and subtype proportions across species ======
+# Calculate shared cCRE type and ctcf proportions across species ======
 cres_type_matrix_pct <- cres_type_homology_comparison %>%
   
-  # Step 1: Aggregate total cCRE counts per Human & Mouse type/subtype combination
-  dplyr::group_by(type_human, subtype_human, type_mouse, subtype_mouse) %>%
-  dplyr::summarise(n_pair_cres = sum(n_cres), .groups = "drop") %>%
+  # Step 1: Aggregate total cCRE counts per Human & Mouse type/ctcf combination
+  dplyr::group_by(type_human, ctcf_human, type_mouse, ctcf_mouse) %>%
+  dplyr::summarise(n_pair_cres = sum(n_cres, na.rm = T), .groups = "drop") %>%
   
   # Step 2: Compute relative percentage relative to total human cCREs in that stratum
-  dplyr::group_by(type_human, subtype_human) %>%
+  dplyr::group_by(type_human, ctcf_human) %>%
   dplyr::mutate(
-    n_human_stratum = sum(n_pair_cres),
+    n_human_stratum = sum(n_pair_cres, na.rm = T),
     pct             = dplyr::if_else(
       n_human_stratum > 0, 
       round(100 * n_pair_cres / n_human_stratum, 1), 
@@ -619,9 +511,15 @@ cres_type_matrix_pct <- cres_type_homology_comparison %>%
   
   # Step 3: Order factor levels for heatmaps
   dplyr::mutate(
-    type_human = factor(type_human, levels = c("PLS", "pELS", "dELS")),
-    type_mouse = factor(type_mouse, levels = c("PLS", "pELS", "dELS"))
-  )
+    type_human = fct_relevel(type_human, "PLS", "pELS", "dELS"),
+    type_mouse = fct_relevel(type_mouse, "PLS", "pELS", "dELS", "CA-H3K4", "CA-CTCF", "TF"),
+    facet_human = paste0("Human ", type_human),
+    facet_mouse = paste0("Mouse ", type_mouse),
+  ) %>% 
+  arrange(type_mouse) %>% 
+  mutate(facet_mouse = fct_inorder(facet_mouse)) %>% 
+  arrange(type_human) %>% 
+  mutate(facet_human = fct_inorder(facet_human))
 
 #Heatmap
 cres_type_matrix_pct_mouse_human_plot = cres_type_matrix_pct %>% 
@@ -629,9 +527,9 @@ cres_type_matrix_pct_mouse_human_plot = cres_type_matrix_pct %>%
   drop_na(type_mouse) %>%
   #Plot
   ggplot() +
-    aes(x = subtype_mouse %>% str_replace(., "-", "\n") %>% fct_rev(),
-         y = subtype_human %>% str_replace(., "-", "\n")%>% fct_rev()) +
-  facet_grid(~paste0("Mouse ", type_mouse) %>% fct_rev()~paste0("Human ", type_human) %>% fct_rev()) +
+    aes(x = ctcf_mouse %>% str_replace(., "-", "\n") %>% fct_rev(),
+         y = ctcf_human %>% str_replace(., "-", "\n")%>% fct_rev()) +
+  facet_grid(~facet_mouse~facet_human) +
   # geom_tile(aes(fill = pct), color = "black", linewidth = 0.4) +
   geom_point(aes(fill = pct, size = n_pair_cres), 
              color = "black",
@@ -642,21 +540,19 @@ cres_type_matrix_pct_mouse_human_plot = cres_type_matrix_pct %>%
 
   scale_fill_gradient2(low = "white",
                        high = "#4DBBD5FF",
-                       guide = guide_colorbar(barwidth = unit(2, "cm"))) +
+                       guide = guide_colorbar(barwidth = unit(1, "cm"))) +
   scale_size_continuous(range = c(4, 12)) +
   theme_vaxgo() +
   theme(axis.text.x = element_text(angle = 0,
                                    # vjust = 0,
                                    hjust = 0.5),
-        legend.position = "right"
+        legend.position = "right",
+        strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)
         ) +
   labs(x = "Mouse",
        y = "Human",
-       fill = "%Shared, from human",
+       fill = "%Shared,\nfrom human",
        size = "CRE pairs") 
-  # guides(size = guide_legend(
-  #     nrow           = 3,
-  #     byrow          = TRUE)) 
 
 #Print
 cres_type_matrix_pct_mouse_human_plot
@@ -669,23 +565,264 @@ cres_type_matrix_pct_mouse_human_plot %>%
 ```
 
 
+#### Annotate with gene expression and LEGs
+
+```{r}
+#### Annotate with gene expression and LEGs
+
+# Gene expression
+dge_btm_process_genes_diff_bygene_clean_filtered =  readRDS(file = here("tables", "dge_btm_process_genes_diff_bygene_clean_filtered.rds"))
+
+  
+  
+  # Inner join with cross-species differential expression statistics =============
+cres_type_homology_comparison_dge_legs_stats <- 
+  
+  bind_rows( cres_type_homology_comparison %>%
+   #Annotate with gene expression
+  inner_join(dge_btm_process_genes_diff_bygene_clean_filtered,
+             by = join_by(hgnc_symbol)) %>% 
+  #Annotate with LEG classification
+  left_join(gsea_btm_legs_clean, 
+             by = join_by(hgnc_symbol, pathogen, timepoint_comparison)) %>% 
+  mutate(status = case_when(is.na(status)~"Not LEG", 
+                            status %in% c("Human only", "Mouse only") ~ "Not-shared",
+                            T~status)),
+  #All genes
+  cres_type_homology_comparison %>%
+  inner_join(dge_btm_process_genes_diff_bygene_clean_filtered,
+             by = join_by(hgnc_symbol)) %>% 
+  mutate(status = "All genes")
+    )
+
+  
+#Print
+cres_type_homology_comparison_dge_legs_stats
+
+
+cres_type_homology_comparison_dge_legs_stats %>% dplyr::count(status)
+
+#Save
+cres_type_homology_comparison_dge_legs_stats %>% 
+  saveRDS(file = here("tables", "cres_type_homology_comparison_dge_legs_stats.rds"))
+```
+
+
+#### Distribution of CREs by gene vs Divergence in Log2FC
+
+```{r fig.height=3, fig.width=8}
+#Plot
+cres_type_divergence_pooled_plot = cres_type_homology_comparison_dge_legs_stats %>% 
+  distinct() %>% 
+  filter(status != "Not LEG") %>% 
+  ggplot() +
+  aes(x = n_type,
+      y = abs_log2fc_diff,
+      color = status,
+      fill = status) +
+  
+  facet_wrap(~type_human, scales = "free_x") +
+  #By LEG
+  geom_smooth(method = "lm",
+              mapping = aes(color = status,
+                            fill = status),
+              se = T) +
+  scale_x_continuous(expand = c(0.01, 0.01), limits = c(0, NA)) +
+  scale_fill_manual(values = colors$comparison) +
+  scale_color_manual(values = colors$comparison) +
+  labs(
+       x = "N CREs",
+       y = "|ΔMean Log2FC|",
+       fill = "LEG status") +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        panel.spacing = grid::unit(0.7, "cm"),
+        plot.margin          = ggplot2::margin(0.1, 0.5, 0.1, 0.1, "cm")) +
+  guides(
+    color = "none",
+    fill  = guide_legend(title.position = "left", 
+                         byrow = T, nrow = 1,
+                         override.aes = list(shape = 22, alpha = 1, size = 3,
+                                             linetype = 0)))
+
+cres_type_inverseSE_pooled_plot
+
+#Print
+cres_type_divergence_pooled_marginal = cres_type_divergence_pooled_plot +
+  # 1. TOP SIDE: Boxplot horizontal no limite superior do eixo Y
+  geom_boxplot(
+    data = . %>% 
+      group_by(type_human) %>% 
+      mutate(
+        max_y = max(abs_log2fc_diff, na.rm = TRUE),
+      ),
+    mapping = aes(
+      x = n_type,         # Variável contínua no eixo X
+      y = 3,             # Posição fixa no topo do eixo Y
+      fill = status,
+      group = interaction(status, type_human),
+      width = box_height           # Controla a espessura no eio Y
+    ),
+    outliers = FALSE,
+    outlier.shape = NA,
+    alpha = 0.5,
+    width = 0.5,
+    show.legend = FALSE
+  ) +
+  #Right side
+  geom_boxplot(
+    data = . %>%
+      group_by(type_human) %>%
+      mutate(
+          max_x = max(n_type, na.rm = TRUE),
+        box_width = max_x * 0.15 
+      ),
+    mapping = aes(
+      x = max_x,
+      y = abs_log2fc_diff,
+      fill = status,
+      group = interaction(status, type_human),
+      width = box_width
+    ),
+    outliers = F,
+    outlier.shape = NA,
+    alpha = 0.5,
+    show.legend = FALSE
+  ) 
+
+
+# Display composite plot
+print(cres_type_divergence_pooled_marginal)
+
+#Save
+cres_type_divergence_pooled_marginal %>%
+  ggsave(filename = here("Figures", "all_human_mouse_dge_degs_cretype_divergence_pooled.png"),
+         width = 8,
+         height = 3)
+
+```
+
+
+
+```{r fig.height=3, fig.width=12}
+#Plot
+cres_type_ctcf_divergence_pooled_plot = cres_type_homology_comparison_dge_legs_stats %>% 
+  distinct() %>% 
+  filter(status != "Not LEG") %>% 
+  ggplot() +
+  aes(x = n_type,
+      y = abs_log2fc_diff,
+      color = status,
+      fill = status) +
+  
+  facet_nested_wrap(~type_human+ctcf_human, scales = "free_x", nrow = 1) +
+  #By LEG
+  geom_smooth(method = "lm",
+              mapping = aes(color = status,
+                            fill = status),
+              se = T) +
+  scale_x_continuous(expand = c(0.01, 0.01), limits = c(0, NA)) +
+  scale_fill_manual(values = colors$comparison) +
+  scale_color_manual(values = colors$comparison) +
+  labs(
+       x = "N CREs",
+       y = "|ΔMean Log2FC|",
+       fill = "LEG status") +
+  theme_vaxgo() +
+  theme(legend.position = "top",
+        panel.spacing = grid::unit(0.7, "cm"),
+        # plot.margin          = ggplot2::margin(0.1, 0.5, 0.1, 0.1, "cm")
+        ) +
+  guides(
+    color = "none",
+    fill  = guide_legend(title.position = "left", 
+                         byrow = T, nrow = 1,
+                         override.aes = list(shape = 22, alpha = 1, size = 3,
+                                             linetype = 0)))
+
+cres_type_ctcf_divergence_pooled_plot
+
+#Print
+cres_type_ctcf_divergence_pooled_plot_marginal = cres_type_ctcf_divergence_pooled_plot +
+  # 1. TOP SIDE: Boxplot horizontal no limite superior do eixo Y
+  geom_boxplot(
+    data = . %>% 
+      group_by(type_human, ctcf_human) %>% 
+      mutate(
+        max_y = max(abs_log2fc_diff, na.rm = TRUE),
+      ),
+    mapping = aes(
+      x = n_type,         # Variável contínua no eixo X
+      y = 3,             # Posição fixa no topo do eixo Y
+      fill = status,
+      group = interaction(status, type_human, ctcf_human),
+      width = box_height           # Controla a espessura no eio Y
+    ),
+    outliers = FALSE,
+    outlier.shape = NA,
+    alpha = 0.5,
+    width = 0.5,
+    show.legend = FALSE
+  ) +
+  #Right side
+  geom_boxplot(
+    data = . %>%
+      group_by(type_human, ctcf_human) %>%
+      mutate(
+          max_x = max(n_type, na.rm = TRUE),
+        box_width = max_x * 0.15 
+      ),
+    mapping = aes(
+      x = max_x,
+      y = abs_log2fc_diff,
+      fill = status,
+      group = interaction(status, type_human, ctcf_human),
+      width = box_width
+    ),
+    outliers = F,
+    outlier.shape = NA,
+    alpha = 0.5,
+    show.legend = FALSE
+  ) 
+
+
+# Display composite plot
+print(cres_type_ctcf_divergence_pooled_plot_marginal)
+
+#Save
+cres_type_ctcf_divergence_pooled_plot_marginal %>%
+  ggsave(filename = here("Figures", "all_human_mouse_dge_degs_cretype_ctcf_human_pooled.png"),
+         width = 8,
+         height = 2.5)
+
+```
+
+
+
+
+
+
+
+
+
+
 
 
 #### Distribution of CREs by gene, by LEGs
 https://pubmed.ncbi.nlm.nih.gov/29180706/#&gid=article-figures&pid=figure-2-uid-1
 
-```{r fig.height=3, fig.width=12}
+```{r fig.height=3, fig.width=16}
 #Plot
-cres_type_homology_comparison_dge_legs_stats %>% 
-  filter(n_cat != "0") %>%
+cres_type_categorization_pooled_plot = cres_type_homology_comparison_dge_legs_stats %>% 
+  filter(n_type_cat != "0") %>%
   filter(status %in% c("Shared", "Not-shared")) %>%
   ggplot() +
-  aes(x = n_cat,
-      y = abs(mean_log2fc_diff),
+  aes(x = n_type_cat,
+      y = abs_log2fc_diff,
       color = status,
       fill =  status,
       ) +
-  facet_nested_wrap(~fct_rev(type_human), 
+  facet_wrap(~type_human, space = "free_x",
                     nrow = 1, axes = "all", scales = "free") +
     geom_point(alpha = 0.2,
              size = 0.5,
@@ -713,10 +850,19 @@ cres_type_homology_comparison_dge_legs_stats %>%
   scale_color_manual(values = colors$comparison) +
   labs(x = "N",
        y = expression("|" * Delta * "Log"[2] * "FC|"),
-       color = "",
-       fill = "") +
+       color = "LEGs",
+       fill = "LEGs",
+       title = "Pooled gene expression conditions") +
   theme_vaxgo() +
   theme(legend.position = "top")
+
+#Print
+cres_type_categorization_pooled_plot
+
+#Save
+cres_type_categorization_pooled_plot %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_cres_type_categorization_pooled_plot.png"),
+         height = 3, width = 16)
 
 ```
 
@@ -725,7 +871,7 @@ cres_type_homology_comparison_dge_legs_stats %>%
 
 cres_stat_results <- cres_type_homology_comparison_dge_legs_stats %>%
   dplyr::filter(
-    n_cat != "0",
+    n_type_cat != "0",
     status %in% c("Shared", "Not-shared")
   ) %>%
   dplyr::group_by(type_human) %>%
@@ -752,10 +898,12 @@ cres_stat_results <- cres_type_homology_comparison_dge_legs_stats %>%
     # Construct clean label for facet headers
     facet_label    = stringr::str_c(type_human, "\n(p = ", fdr_wilcox_sci, ")")
   )
+
+
 #Plot
 cres_type_comparison_plot <- cres_type_homology_comparison_dge_legs_stats %>%
   dplyr::filter(
-    n_cat != "0",
+    n_type_cat != "0",
     status %in% c("Shared", "Not-shared")
   ) %>%
   # Attach pre-calculated p-value labels
@@ -809,14 +957,14 @@ cres_type_comparison_plot <- cres_type_homology_comparison_dge_legs_stats %>%
 cres_type_comparison_plot
 ```
 
-CRE subtype
+CRE ctcf
 ```{r fig.height=3, fig.width=12}
-cres_subtype_stat_results <- cres_type_homology_comparison_dge_legs_stats %>%
+cres_ctcf_stat_results <- cres_type_homology_comparison_dge_legs_stats %>%
   dplyr::filter(
-    n_cat != "0",
+    n_type_cat != "0",
     status %in% c("Shared", "Not-shared")
   ) %>%
-  dplyr::group_by(type_human, subtype_human) %>%
+  dplyr::group_by(type_human, ctcf_human) %>%
   dplyr::summarise(
     n_shared     = sum(status == "Shared", na.rm = TRUE),
     n_not_shared = sum(status == "Not-shared", na.rm = TRUE),
@@ -838,18 +986,18 @@ cres_subtype_stat_results <- cres_type_homology_comparison_dge_legs_stats %>%
     fdr_wilcox_sci = sprintf("%.2e", fdr_p_val),
     
     # Construct clean label for facet headers
-    facet_label    = stringr::str_c(type_human, ", ", subtype_human, "\n(p = ", fdr_wilcox_sci, ")")
+    facet_label    = stringr::str_c(type_human, ", ", ctcf_human, "\n(p = ", fdr_wilcox_sci, ")")
   )
 #Plot
-cres_subtype_comparison_plot <- cres_type_homology_comparison_dge_legs_stats %>%
+cres_ctcf_comparison_plot <- cres_type_homology_comparison_dge_legs_stats %>%
   dplyr::filter(
-    n_cat != "0",
+    n_type_cat != "0",
     status %in% c("Shared", "Not-shared")
   ) %>%
   # Attach pre-calculated p-value labels
   dplyr::inner_join(
-    cres_subtype_stat_results %>% dplyr::select(type_human, subtype_human, facet_label),
-    by = join_by(type_human, subtype_human)
+    cres_ctcf_stat_results %>% dplyr::select(type_human, ctcf_human, facet_label),
+    by = join_by(type_human, ctcf_human)
   ) %>%
   dplyr::mutate(
     status      = factor(status, levels = c("Shared", "Not-shared")),
@@ -894,7 +1042,7 @@ cres_subtype_comparison_plot <- cres_type_homology_comparison_dge_legs_stats %>%
   )
 
 
-cres_subtype_comparison_plot
+cres_ctcf_comparison_plot
 
 ```
 
@@ -903,7 +1051,7 @@ CRE type per pathogen
 # Step 1: Pre-calculate statistical p-values per pathogen and human cCRE type
 cres_stat_results_pathogen <- cres_type_homology_comparison_dge_legs_stats %>%
   dplyr::filter(
-    n_cat != "0",
+    n_type_cat != "0",
     status %in% c("Shared", "Not-shared")
   ) %>%
   dplyr::group_by(pathogen, type_human) %>%
@@ -936,7 +1084,7 @@ cres_stat_results_pathogen <- cres_type_homology_comparison_dge_legs_stats %>%
 # --------
 cres_type_comparison_plot_pathogen <- cres_type_homology_comparison_dge_legs_stats %>%
   dplyr::filter(
-    n_cat != "0",
+    n_type_cat != "0",
     status %in% c("Shared", "Not-shared")
   ) %>%
   # Attach pre-calculated p-value labels
@@ -987,15 +1135,15 @@ print(cres_type_comparison_plot_pathogen)
 ```
 
 
-CRE subtypetype per pathogen
+CRE ctcftype per pathogen
 ```{r fig.height=8, fig.width=8}
 # Step 1: Pre-calculate statistical p-values per pathogen and human cCRE type
-cres_subtype_stat_results_pathogen <- cres_type_homology_comparison_dge_legs_stats %>%
+cres_ctcf_stat_results_pathogen <- cres_type_homology_comparison_dge_legs_stats %>%
   dplyr::filter(
-    n_cat != "0",
+    n_type_cat != "0",
     status %in% c("Shared", "Not-shared")
   ) %>%
-  dplyr::group_by(pathogen, type_human, subtype_human) %>%
+  dplyr::group_by(pathogen, type_human, ctcf_human) %>%
   dplyr::summarise(
     n_shared     = sum(status == "Shared", na.rm = TRUE),
     n_not_shared = sum(status == "Not-shared", na.rm = TRUE),
@@ -1021,15 +1169,15 @@ cres_subtype_stat_results_pathogen <- cres_type_homology_comparison_dge_legs_sta
   )
 
 # Step 2: Render boxplot comparison plot with p-values in nested facet titles
-cres_type_comparison_subtype_plot_pathogen <- cres_type_homology_comparison_dge_legs_stats %>%
+cres_type_comparison_ctcf_plot_pathogen <- cres_type_homology_comparison_dge_legs_stats %>%
   dplyr::filter(
-    n_cat != "0",
+    n_type_cat != "0",
     status %in% c("Shared", "Not-shared")
   ) %>%
   # Attach pre-calculated p-value labels
   dplyr::inner_join(
-    cres_subtype_stat_results_pathogen %>% dplyr::select(pathogen, type_human, subtype_human, facet_label),
-    by = c("pathogen", "type_human", "subtype_human")
+    cres_ctcf_stat_results_pathogen %>% dplyr::select(pathogen, type_human, ctcf_human, facet_label),
+    by = c("pathogen", "type_human", "ctcf_human")
   ) %>%
   dplyr::mutate(
     status      = factor(status, levels = c("Shared", "Not-shared")),
@@ -1043,7 +1191,7 @@ cres_type_comparison_subtype_plot_pathogen <- cres_type_homology_comparison_dge_
     fill  = status
   ) +
   ggh4x::facet_nested_wrap(
-    ~ treatment+ pathogen + type_human + subtype_human + facet_label,
+    ~ treatment+ pathogen + type_human + ctcf_human + facet_label,
     nrow   = 4,
     scales = "free_y",
     axes = "all"
@@ -1070,7 +1218,7 @@ cres_type_comparison_subtype_plot_pathogen <- cres_type_homology_comparison_dge_
   )
 
 # Render plot output
-print(cres_type_comparison_subtype_plot_pathogen)
+print(cres_type_comparison_ctcf_plot_pathogen)
 
 ```
 
@@ -1080,17 +1228,17 @@ Distribution of diffLog2FC, by CREs, by gene, by LEGs
 ```{r fig.height=8, fig.width=12}
 # #Plot
 # cres_type_homology_comparison_dge_legs_stats %>%
-#   filter(n_cat != "0") %>%
+#   filter(n_type_cat != "0") %>%
 # filter(status %in% c("Shared", "Not-shared")) %>%
 #   ggplot() +
-#   aes(x = n_cat,
+#   aes(x = n_type_cat,
 #       y = mean_log2fc_human,
 #       # label = hgnc_symbol,
 #       fill =  status,
 #       color = status
 #       ) +
 #   facet_nested_wrap(~type_human+ 
-#                       # subtype_human + 
+#                       # ctcf_human + 
 #                       treatment+ pathogen, nrow = 3,
 #                     scales = "free") +
 #   geom_hline(yintercept = 0, color = "black", linetype = 2) +
@@ -1119,10 +1267,10 @@ https://pubmed.ncbi.nlm.nih.gov/29180706/#&gid=article-figures&pid=figure-2-uid-
 ```{r fig.height=8, fig.width=12}
 #Plot
 cres_type_homology_comparison_dge_legs_stats %>% 
-  filter(n_cat != "0") %>%
+  filter(n_type_cat != "0") %>%
   filter(status %in% c("Shared", "Not-shared")) %>%
   ggplot() +
-  aes(x = n_cat,
+  aes(x = n_type_cat,
       y = abs(mean_log2fc_diff),
       color = status,
       fill =  status,
@@ -1165,7 +1313,7 @@ cres_type_homology_comparison_dge_legs_stats %>%
 #Plot
 #Plot
 cres_type_homology_comparison_dge_legs_stats %>% 
-  filter(n_cat != "0") %>%
+  filter(n_type_cat != "0") %>%
   filter(status %in% c("Shared", "Not-shared")) %>%
   # Remove os 10% maiores valores do eixo Y
   filter(n_total_cre_type_human <= quantile(n_total_cre_type_human, 0.9, na.rm = TRUE)) %>%
@@ -1186,7 +1334,7 @@ cres_type_homology_comparison_dge_legs_stats %>%
                 # Remove os 10% maiores valores do eixo Y
                 filter(n_total_cre_type_human <= quantile(n_total_cre_type_human, 0.95, na.rm = TRUE)) %>%
                 mutate(status = "All") %>% 
-                filter(n_cat != "0")) +
+                filter(n_type_cat != "0")) +
   geom_smooth(method = "lm", se = T) +
   scale_fill_manual(values = colors$comparison) +
   scale_color_manual(values = colors$comparison) +
@@ -1210,17 +1358,17 @@ cres_type_homology_comparison_dge_legs_stats %>%
 ```{r fig.height=3, fig.width=12}
 #Plot
 cres_type_homology_comparison_dge_legs_stats %>% 
-  filter(n_cat != "0") %>%
+  filter(n_type_cat != "0") %>%
   filter(status %in% c("Shared", "Not-shared")) %>%
   # Remove os 10% maiores valores do eixo Y
-  # filter(n_total_cre_subtype_human <= quantile(n_total_cre_subtype_human, 0.90, na.rm = TRUE)) %>%
+  # filter(n_total_cre_ctcf_human <= quantile(n_total_cre_ctcf_human, 0.90, na.rm = TRUE)) %>%
   ggplot() +
-  aes(x = n_total_cre_subtype_human,
+  aes(x = n_total_cre_ctcf_human,
       y = abs(mean_log2fc_diff),
       color = status,
       fill =  status,
       ) +
-  facet_nested_wrap(~type_human+subtype_human, 
+  facet_nested_wrap(~type_human+ctcf_human, 
                     nrow = 1, axes = "all", scales = "free") +
   geom_point(alpha = 0.2,
              size = 0.5,
@@ -1228,13 +1376,13 @@ cres_type_homology_comparison_dge_legs_stats %>%
                                     dodge.width = 0.75),) +
     geom_smooth(method = "lm", se = T, 
               inherit.aes = F,
-              mapping = aes(x = n_total_cre_subtype_human, 
+              mapping = aes(x = n_total_cre_ctcf_human, 
                             y = abs(mean_log2fc_diff)),
               data = cres_type_homology_comparison_dge_legs_stats %>% 
                 # Remove os 10% maiores valores do eixo Y
-  # filter(n_total_cre_subtype_human <= quantile(n_total_cre_subtype_human, 0.90, na.rm = TRUE)) %>%
+  # filter(n_total_cre_ctcf_human <= quantile(n_total_cre_ctcf_human, 0.90, na.rm = TRUE)) %>%
                 mutate(status = "All") %>% 
-                filter(n_cat != "0"),
+                filter(n_type_cat != "0"),
       color = "black",
       fill = "black") +
   geom_smooth(method = "lm", se = T) +
@@ -1258,7 +1406,7 @@ cres_type_homology_comparison_dge_legs_stats %>%
 ```{r fig.height=4, fig.width=12}
 #Plot
 cres_type_homology_comparison_dge_legs_stats %>% 
-  filter(n_cat != "0") %>%
+  filter(n_type_cat != "0") %>%
   filter(status %in% c("Shared", "Not-shared"),
          treatment != "Vaccination") %>%
   ggplot() +
@@ -1276,7 +1424,7 @@ cres_type_homology_comparison_dge_legs_stats %>%
               data = cres_type_homology_comparison_dge_legs_stats %>% 
                 filter(treatment != "Vaccination") %>% 
                 mutate(status = "All") %>% 
-                filter(n_cat != "0"),
+                filter(n_type_cat != "0"),
       color = "black",
       fill = "black") +
   geom_smooth(method = "lm", se = T) +
@@ -1303,27 +1451,27 @@ cres_type_homology_comparison_dge_legs_stats %>%
 ```{r fig.height=8, fig.width=10}
 #Plot
 cres_type_homology_comparison_dge_legs_stats %>% 
-  filter(n_cat != "0") %>%
+  filter(n_type_cat != "0") %>%
   filter(status %in% c("Shared", "Not-shared"),
          treatment != "Vaccination") %>%
   # Remove os 10% maiores valores do eixo Y
-  # filter(n_total_cre_subtype_human <= quantile(n_total_cre_subtype_human, 0.90, na.rm = TRUE)) %>%
+  # filter(n_total_cre_ctcf_human <= quantile(n_total_cre_ctcf_human, 0.90, na.rm = TRUE)) %>%
   ggplot() +
-  aes(x = n_total_cre_subtype_human,
+  aes(x = n_total_cre_ctcf_human,
       y = abs(mean_log2fc_diff),
       color = status,
       fill =  status,
       ) +
-  facet_nested_wrap(~treatment + pathogen+type_human+subtype_human, 
+  facet_nested_wrap(~treatment + pathogen+type_human+ctcf_human, 
                     nrow = 4, axes = "all", scales = "free") +
     geom_smooth(method = "lm", se = T, 
               inherit.aes = F,
-              mapping = aes(x = n_total_cre_subtype_human, 
+              mapping = aes(x = n_total_cre_ctcf_human, 
                             y = abs(mean_log2fc_diff)),
               data = cres_type_homology_comparison_dge_legs_stats %>% 
                 filter(treatment != "Vaccination") %>% 
                 mutate(status = "All") %>% 
-                filter(n_cat != "0"),
+                filter(n_type_cat != "0"),
       color = "black",
       fill = "black") +
   geom_smooth(method = "lm", se = T) +
@@ -1345,62 +1493,6 @@ cres_type_homology_comparison_dge_legs_stats %>%
 
 
 ```
-
-
-
-#### nCREs vs. Identity
-```{r fig.height=6, fig.width=8}
-cres_type_homology_comparison_dge_legs_stats %>% 
-  ggplot(aes(
-    x = abs(mean_log2fc_diff),
-    y = identity_human2mouse,
-    color = status,
-    fill = status
-  )) +
-  # Sub-divide facets by both cCRE class and n_cat bin
-  facet_nested_wrap(
-    ~ fct_rev(type_human) + n_cat, 
-    axes = "all", 
-    scales = "free_x",
-    ncol = 6
-  ) +
-  geom_point(
-    alpha = 0.25,
-    size = 0.6
-  ) +
-  # Linear regression line calculated per status inside each n_cat bin
-  stat_smooth(
-    method = "lm",
-    se = TRUE,          # Shading for 95% Confidence Interval
-    linewidth = 1,
-    alpha = 0.2
-  ) +
-  scale_fill_manual(values = colors$comparison) +
-  scale_color_manual(values = colors$comparison) +
-  labs(
-    x = expression("|" * Delta * "Log"[2] * "FC|"),
-    y = "% Protein Identity",
-    fill = "",
-    color = ""
-  ) +
-  theme_vaxgo() +
-  theme(legend.position = "top")
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1647,11 +1739,6 @@ Factors (TFs) regulating specific genes in both Humans and Mice
 # Clean and parse the ChEA3 transcription factor–target gene matrix
 gene_attribute_chea <- read_tsv(here("tables", "gene_attribute_matrix.txt"))
 
-#Import gene info with log2fc stats
-gene_info_human_log2fc_stats = readRDS(file = here("tables", "gene_info_human_log2fc_stats.rds")) %>% 
-  select(gene:identity_human2mouse, pathogen:timepoint_comparison, status:weight_se_inverse_combined) %>% 
-  distinct()
-
 # Transform the wide ChEA matrix into long format, keeping only positive scores
 gene_attribute_chea_clean <- gene_attribute_chea %>%
   rename(gene = Gene) %>%
@@ -1754,77 +1841,283 @@ coloured by classification (Shared vs All). A diagonal line indicates
 equal TF counts between species.
 
 ```{r fig.height=3, fig.width=6}
-# Compare total unique TF counts per gene between human and mouse
-regulation_tfs_total_plot = gene_attribute_tf_count_log2fc_stats %>%
-  ggplot() +
-  aes(x = n_tf_total,
-      y = abs(mean_log2fc_diff),
-      fill = status,
-      color = status) +
-  geom_point(alpha = 0.2,
-             stroke = 0,
-             pch = 21)+
-  geom_smooth(method = "lm") +
-  # geom_smooth(method = "lm", mapping = aes(x = n_tf_total,
-  #     y = abs(mean_log2fc_diff)), 
-  #     inherit.aes = F,
-  #     color = "black") +
-  scale_fill_manual(values = colors$comparison) +
-  scale_color_manual(values = colors$comparison) +
-  labs(x = "n Shared TFs",
-       y = expression("|" * Delta * "Log"[2] * "FC|"),
-       color = "",
-       fill = "") +
-  theme_vaxgo() +
-  theme(legend.position = "top")
-
-regulation_tfs_total_plot
-
-
-regulation_tfs_pct_plot =  gene_attribute_tf_count_log2fc_stats %>%
-  ggplot() +
-  aes(x = pct_tf_shared,
-      y = abs(mean_log2fc_diff),
-      fill = status,
-      color = status) +
-  geom_point(alpha = 0.2,
-             stroke = 0,
-             pch = 21)+
-  geom_smooth(method = "lm") +
-  # Add regression equations and R2 values per status group
-  ggpubr::stat_regline_equation(
-    ggplot2::aes(
-      label = stringr::str_c(after_stat(eq.label), "~~", after_stat(rr.label))
-    ),
-    label.x.npc = 0.05,
-    label.y.npc = c(0.95, 0.88),
-    size        = 3.5
-  ) +
-  scale_fill_manual(values = colors$comparison) +
-  scale_color_manual(values = colors$comparison) +
-  labs(x = "%Shared TFs",
-       y = expression("|" * Delta * "Log"[2] * "FC|"),
-       color = "",
-       fill = "") +
-  theme_vaxgo() +
-  theme(legend.position = "top")
-
-regulation_tfs_plots = regulation_tfs_pct_plot + regulation_tfs_total_plot +
-  plot_layout(guides = "collect", 
-              # axes = "collect",
-              # axis_titles = "collect"
-              ) +
-  plot_annotation(theme = theme(legend.position = "top"))
+#Import
+#### Annotate with gene expression and LEGs
+#TFs
+gene_attribute_tf_count <- readRDS(file = here("tables", "regulation_gene_tf_count.rds"))
+gene_tf_shared_unique = readRDS(file = here("tables", "gene_tf_shared_unique.rds"))
+dge_btm_process_genes_diff_bygene_clean_filtered =  readRDS(file = here("tables", "dge_btm_process_genes_diff_bygene_clean_filtered.rds"))
   
-regulation_tfs_plots
+  
+  # Inner join with cross-species differential expression statistics =============
+gene_attribute_tf_count_log2fc_stats <- 
+  
+  bind_rows( 
+    
+  gene_tf_shared_unique %>%
+               rename(hgnc_symbol = gene) %>% 
+   #Annotate with gene expression
+  inner_join(dge_btm_process_genes_diff_bygene_clean_filtered,
+             by = join_by(hgnc_symbol)) %>% 
+  #Annotate with LEG classification
+  left_join(gsea_btm_legs_clean, 
+             by = join_by(hgnc_symbol, pathogen, timepoint_comparison)) %>% 
+  mutate(status = case_when(is.na(status)~"Not LEG", 
+                            status %in% c("Human only", "Mouse only") ~ "Not-shared",
+                            T~status)),
+  
+  #All genes
+  gene_tf_shared_unique %>%
+    rename(hgnc_symbol = gene) %>% 
+  inner_join(dge_btm_process_genes_diff_bygene_clean_filtered,
+             by = join_by(hgnc_symbol)) %>% 
+  mutate(status = "All genes")
+    )
+```
+
+
+```{r fig.height=3, fig.width=8}
+# Compare total unique TF counts per gene between human and mouse
+#Plot
+# Custom labels for the facet headers
+variable_names <- c(
+  "pct_tf_shared" = "Shared TFs (%)",
+  "n_tf_shared"   = "N of Shared TFs",
+  "n_tf_total"    = "Total TFs"
+)
+
+gene_attribute_tf_divergence_pooled_plot = gene_attribute_tf_count_log2fc_stats %>% 
+  select(hgnc_symbol, pathogen, treatment, status, abs_log2fc_diff, pct_tf_shared, n_tf_shared, n_tf_total) %>% 
+  pivot_longer(
+    cols = c(pct_tf_shared, n_tf_shared, n_tf_total),
+    names_to = "variable", 
+    values_to = "value"
+  ) %>% 
+  mutate(variable = fct_relevel(variable, "n_tf_total", "n_tf_shared", "pct_tf_shared")) %>% 
+  # filter(status %in% c("Shared", "Not-shared")) %>%
+  
+  ggplot(aes(x = value, y = abs_log2fc_diff, 
+             color = status, fill = status)) +
+  
+  # Relabel facets cleanly
+  facet_wrap(
+    ~variable, 
+    scales = "free", 
+    nrow = 1,
+    labeller = labeller(variable = variable_names)
+  ) +
+  geom_smooth(method = "lm") +
+  scale_fill_manual(values = colors$comparison) +
+  scale_color_manual(values = colors$comparison) +
+  scale_y_continuous(limits = c(0, NA), expand = c(0.01, 0.01)) +
+  scale_x_continuous(expand = c(0.01, 0.01)) +
+  
+  labs(
+    x = NULL,
+    y = "|ΔMean Log2FC|",
+    color = "LEGs",
+    fill = "LEGs",
+    title = "Pooled gene expression conditions"
+  ) +
+  theme_vaxgo() +
+  theme(
+    legend.position = "top",
+    strip.text = element_text(size = 10) 
+  )
+
+#Print
+gene_attribute_tf_divergence_pooled_plot_marginal = gene_attribute_tf_divergence_pooled_plot +
+      # 1. TOP SIDE: Boxplot horizontal no limite superior do eixo Y
+  geom_boxplot(
+    data = . %>% 
+      group_by(variable) %>% 
+      mutate(
+        max_y = max(abs_log2fc_diff, na.rm = TRUE),
+      ),
+    mapping = aes(
+      x = value,         # Variável contínua no eixo X
+      y = 3,             # Posição fixa no topo do eixo Y
+      fill = status,
+      group = interaction(status, variable),
+      width = box_height           # Controla a espessura no eio Y
+    ),
+    outliers = FALSE, 
+    outlier.shape = NA,
+    alpha = 0.7,
+    linewidth = 0.3,
+    width = 0.5,
+    color = "black",
+    show.legend = FALSE
+  ) +
+  #Right side
+  geom_boxplot(
+    data = . %>%
+      group_by(variable) %>%
+      mutate(
+          max_x = max(value, na.rm = TRUE),
+        box_width = max_x * 0.2 
+      ),
+    mapping = aes(
+      x = max_x,
+      y = abs_log2fc_diff,
+      fill = status,
+      group = interaction(status, variable),
+      width = box_width
+    ),
+    outliers = F,
+    color = "black",
+    outlier.shape = NA,
+        alpha = 0.7,
+    linewidth = 0.3,
+    show.legend = FALSE
+  ) +
+    guides(
+    color = "none",
+    fill  = guide_legend(title.position = "left", 
+                         byrow = T, nrow = 1,
+                         override.aes = list(shape = 22, alpha = 1, size = 3,
+                                             linetype = 0)))
 
 
 # Save complete regulation figure
-ggsave(regulation_tfs_plots,
-       filename = here("Figures", "all_human_mouse_regulation_tfs_plots.png"),
-       width = 6, height = 3)
+ggsave(gene_attribute_tf_divergence_pooled_plot_marginal,
+       filename = here("Figures", "all_human_mouse_regulation_tfs_divergence_plots.png"),
+       width = 8, height = 3)
   
 ```
+
+
+
+
+
+
+
+
+
+
+
+```{r fig.height=3, fig.width=8}
+#Plot
+# Custom labels for the facet headers
+variable_names <- c(
+  "pct_tf_shared" = "Shared TFs (%)",
+  "n_tf_shared"   = "N of Shared TFs",
+  "n_tf_total"    = "Total TFs"
+)
+
+gene_attribute_tf_count_legs_pooled_plot = gene_attribute_tf_count_log2fc_stats %>% 
+  select(hgnc_symbol, pathogen, treatment, status, abs_log2fc_diff, pct_tf_shared, n_tf_shared, n_tf_total) %>% 
+  pivot_longer(
+    cols = c(pct_tf_shared, n_tf_shared, n_tf_total),
+    names_to = "variable", 
+    values_to = "value"
+  ) %>% 
+  mutate(variable = fct_relevel(variable, "n_tf_total", "n_tf_shared", "pct_tf_shared")) %>% 
+  filter(status %in% c("Shared", "Not-shared", "All genes")) %>%
+  
+  ggplot(aes(x = status, y = value, color = status, fill = status)) +
+  
+  # Relabel facets cleanly
+  facet_wrap(
+    ~variable, 
+    scales = "free_y", 
+    nrow = 1,
+    labeller = labeller(variable = variable_names)
+  ) +
+  
+  geom_violin(alpha = 1, 
+              width = 1,
+              color = NA) +
+  
+  # Boxplot centered on each status
+  geom_boxplot(
+    width = 0.3,
+    alpha = 1,
+    outliers = FALSE
+  ) +
+  
+  ggpubr::stat_compare_means(
+    comparisons = list(c("Shared", "Not-shared"),
+                       c("Shared", "All genes")),
+    method = "wilcox.test",
+    label = "p.signif",
+    symnum.args = list(
+      cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+      symbols = c("***", "**", "*", "ns")
+    ),
+    size = 3,
+    vjust = 0.3,
+    hide.ns = F, 
+    tip.length = 0.01, 
+  ) +
+
+  
+  scale_fill_manual(values = colors$comparison) +
+  scale_color_manual(values = colors$comparison_color) +
+  
+  labs(
+    x = "Status",
+    y = NULL, 
+    color = "LEGs",
+    fill = "LEGs",
+    title = "Pooled gene expression conditions"
+  ) +
+  theme_vaxgo() +
+  theme(
+    legend.position = "top", axis.ticks.x = element_blank(),
+    axis.text.x = element_blank(),
+    strip.text = element_text(size = 10) 
+  )
+
+#Print
+gene_attribute_tf_count_legs_pooled_plot
+    
+
+#Save
+gene_attribute_tf_count_legs_pooled_plot %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_gene_attribute_tf_count_legs_pooled_plot.png"),
+         height = 3, width = 8)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
