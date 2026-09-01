@@ -557,9 +557,13 @@ print(p_rf_cls_importance)
 ### Predict Log2FC Divergence Magnitude
 
 ```{r}
-# REGRESSION (Predict Log2FC Divergence Magnitude) ==============
+library(mgcv)     # For GAM engine
+library(vip)      # For Permutation Importance
 
-#Recipe
+# ==============================================================================
+# 1. RECIPE DEFINITION
+# ==============================================================================
+
 regression_recipe <- recipes::recipe(abs_log2fc_diff ~ ., data = human_mouse_features_regression) %>%
   recipes::update_role(hgnc_symbol, treatment, pathogen, timepoint_comparison, new_role = "id") %>%
   recipes::step_dummy(recipes::all_nominal_predictors()) %>%
@@ -567,9 +571,11 @@ regression_recipe <- recipes::recipe(abs_log2fc_diff ~ ., data = human_mouse_fea
   recipes::step_normalize(recipes::all_numeric_predictors())
 
 
+# ==============================================================================
+# 2. MODEL SPECIFICATIONS & FITTING
+# ==============================================================================
 
-# MODEL 1: Linear regression =================
-# Configure linear regression specification and recipe
+# MODEL 1: Linear Regression (LM) ----------------------------------------------
 linear_spec <- linear_reg() %>%
   set_engine("lm") %>%
   set_mode("regression")
@@ -579,108 +585,119 @@ linear_fit <- workflow() %>%
   add_model(linear_spec) %>%
   fit(data = human_mouse_features_regression)
 
-# Extract native LM object for direct diagnostics
 linear_lm_engine <- extract_fit_engine(linear_fit)
 
-# Example direct analysis via broom
 linear_coefficients <- broom::tidy(linear_lm_engine, conf.int = TRUE) %>%
   filter(term != "(Intercept)") %>%
   rename(feature_name_original = term) %>%
   mutate(feature_name_original = str_replace_all(feature_name_original, "`", "")) %>% 
-  inner_join(feature_dictionary,
-             by = join_by("feature_name_original"))
-
-# # Save
-# saveRDS(linear_lm_engine, file = here::here("tables", "linear_lm_engine.rds"))
-# saveRDS(linear_coefficients, file = here::here("tables", "linear_lm_engine_coefficients.rds"))
+  inner_join(feature_dictionary, by = join_by("feature_name_original"))
 
 
-# MODEL 2: RANDOM FOREST  ==================
-# Define Random Forest specification with fixed hyperparameters (no tuning grid)
+# MODEL 2: Generalized Linear Model (GLM - Gamma / Log Link for skewed |Log2FC|)
+# Note: For non-negative continuous outcomes like |ΔLog2FC|, Gamma GLM is ideal.
+glm_spec <- linear_reg() %>%
+  set_engine("glm", family = stats::gaussian(link = "identity")) %>% # Change family/link as needed
+  set_mode("regression")
+
+glm_fit <- workflow() %>%
+  add_recipe(regression_recipe) %>%
+  add_model(glm_spec) %>%
+  fit(data = human_mouse_features_regression)
+
+glm_engine <- extract_fit_engine(glm_fit)
+
+glm_coefficients <- broom::tidy(glm_engine, conf.int = TRUE) %>%
+  filter(term != "(Intercept)") %>%
+  rename(feature_name_original = term) %>%
+  mutate(feature_name_original = str_replace_all(feature_name_original, "`", "")) %>% 
+  inner_join(feature_dictionary, by = join_by("feature_name_original"))
+
+
+# MODEL : Random Forest (RF) --------------------------------------------------
 rf_spec <- rand_forest(
   trees = 1000,
-  mtry  = 8,       # Fixed number of predictors sampled at each split
-  min_n = 5        # Fixed minimum node size
+  mtry  = 8,       
+  min_n = 5        
 ) %>%
   set_engine("ranger", importance = "impurity") %>%
   set_mode("regression")
 
-# Assemble workflow
 rf_workflow <- workflow() %>%
   add_recipe(regression_recipe) %>%
   add_model(rf_spec)
 
-# Fit Random Forest 
 final_rf_fit <- fit(rf_workflow, data = human_mouse_features_regression)
-
-# Extract native ranger engine
 rf_engine <- extract_fit_engine(final_rf_fit)
 
-# Extract Gini Impurity feature importance metric
 rf_importance <- tibble(
   feature_name_original = names(rf_engine$variable.importance),
   importance            = as.numeric(rf_engine$variable.importance)
 ) %>%
-  inner_join(
-    feature_dictionary,
-    by = join_by("feature_name_original")
-  )
-
-# Save
-# saveRDS(final_rf_fit, file = here::here("tables", "final_rf_fit.rds"))
-# saveRDS(rf_importance, file = here::here("tables", "rf_importance.rds"))
+  inner_join(feature_dictionary, by = join_by("feature_name_original"))
 ```
 
 
 
 ```{r fig.height=20, fig.width=12}
-# EVALUATION & MODEL COMPARISON
+# ==============================================================================
+# 3. PERMUTATION FEATURE IMPORTANCE (UNIFIED FOR EXPLANATORY COMPARISON)
+# ==============================================================================
 
-# Compute Out-of-Sample Predictions and Metrics
+# Calculate permutation importance Random Forest (Standardized metric)
+# Custom prediction wrapper to bridge vip (newdata) with tidymodels (new_data)
+predict_wrapper <- function(object, newdata) {
+  predict(object, new_data = newdata)$.pred
+}
+# 2. Permutation Importance for Random Forest
+rf_perm_imp <- vip::vi_permute(
+  object = final_rf_fit,
+  target = "abs_log2fc_diff",
+  metric = "rmse",
+  pred_wrapper = predict_wrapper,
+  train = human_mouse_features_regression,
+  nsim = 5
+) %>%
+  rename(feature_name_original = Variable, importance_rf = Importance)
 
-# Generate predictions
+# ==============================================================================
+# 4. EVALUATION & MODEL COMPARISON METRICS
+# ==============================================================================
+
 eval_table <- human_mouse_features_regression %>%
   select(abs_log2fc_diff) %>%
   bind_cols(
-    predict(final_rf_fit, new_data = human_mouse_features_regression) %>% rename(pred_rf = .pred),
-    predict(linear_fit, new_data = human_mouse_features_regression) %>% rename(pred_linear = .pred)
+    predict(linear_fit, new_data = human_mouse_features_regression) %>% rename(pred_linear = .pred),
+    predict(glm_fit, new_data = human_mouse_features_regression)    %>% rename(pred_glm = .pred),
+    predict(final_rf_fit, new_data = human_mouse_features_regression) %>% rename(pred_rf = .pred)
   )
 
-# Performance Metrics: lm
-metrics_lm <- metric_set(rmse, rsq)(eval_table, truth = abs_log2fc_diff, estimate = pred_linear) %>%
-  mutate(model = "Linear")
+# Calculate RMSE and R2 across all 4 models
+metrics_lm  <- metric_set(rmse, rsq)(eval_table, truth = abs_log2fc_diff, estimate = pred_linear) %>% mutate(model = "Linear (LM)")
+metrics_glm <- metric_set(rmse, rsq)(eval_table, truth = abs_log2fc_diff, estimate = pred_glm)    %>% mutate(model = "GLM")
+metrics_rf  <- metric_set(rmse, rsq)(eval_table, truth = abs_log2fc_diff, estimate = pred_rf)     %>% mutate(model = "Random Forest")
 
-# Performance Metrics: Random Forest
-metrics_rf <- metric_set(rmse, rsq)(eval_table, truth = abs_log2fc_diff, estimate = pred_rf) %>%
-  mutate(model = "Random Forest")
-
-model_comparison_metrics <- bind_rows(metrics_lm, metrics_rf)
+model_comparison_metrics <- bind_rows(metrics_lm, metrics_glm, metrics_rf)
 print(model_comparison_metrics)
 
-name_order = rf_importance %>%
+# Preserve your exact factor level ordering logic
+name_order <- rf_importance %>%
   arrange(importance) %>% 
   mutate(feature_name = fct_inorder(feature_name))
 ```
 
 
-```{r fig.height=20, fig.width=12}
-### Assess
-linear_coefficients_forest_plot = linear_coefficients %>%
-  dplyr::mutate(
-    feature_name = factor(feature_name, levels = levels(name_order$feature_name))
-  ) %>%
-  ggplot() +
-  aes(
-    x    = estimate,
-    y    = feature_name,
-    xmin = conf.low,
-    xmax = conf.high
-  ) +
-  facet_grid(feature_type~., space = "free",
-             scales = "free_y") +
-  # Reference line at zero effect
+```{r fig.height=12, fig.width=16}
+# ==============================================================================
+# 5. VISUALIZATIONS
+# ==============================================================================
+
+# 1. LM Forest Plot
+linear_coefficients_forest_plot <- linear_coefficients %>%
+  mutate(feature_name = factor(feature_name, levels = levels(name_order$feature_name))) %>%
+  ggplot(aes(x = estimate, y = feature_name, xmin = conf.low, xmax = conf.high)) +
+  facet_grid(feature_type ~ ., space = "free", scales = "free_y") +
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.6) +
-  # Confidence intervals (horizontal error bars)
   geom_errorbarh(height = 0.2, color = "black", linewidth = 0.6) +
   geom_point(aes(color = p.value <= 0.05), size = 2.5) +
   scale_color_manual(
@@ -688,66 +705,69 @@ linear_coefficients_forest_plot = linear_coefficients %>%
     labels = c("TRUE" = "p <= 0.05", "FALSE" = "p > 0.05")
   ) +
   labs(
-    x     = expression("Standardized Effect Size (" * beta * ")"),
-    y     = "Predictor Variable",
+    x     = "Standardized Effect Size",
+    y     = "Feature Predictor",
     color = "Significance",
-    title = "Linear Regression: Predictors of |ΔLog2FC|"
+    title = paste0("Linear Regression (R² = ", round(metrics_lm$ .estimate[metrics_lm$.metric == "rsq"], 3), ")")
   ) +
   theme_vaxgo() +
-  theme(
-    legend.position = "right",
-    axis.text.y     = element_text(size = 9),
-    strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)
-  )
+  theme(legend.position = "right", strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5))
 
-linear_coefficients_forest_plot
-```
-
-```{r fig.height=20, fig.width=10}
-
-# Render Random Forest Variable Importance Plot (Top 20 Features)
-p_rf_importance <- rf_importance %>%
-  dplyr::mutate(
-    feature_name = factor(feature_name, levels = levels(name_order$feature_name))
-  ) %>%
-  ggplot() +
-  aes(x = importance + 1, y = feature_name, fill = feature_type) +
-    facet_grid(feature_type~., space = "free",
-             scales = "free_y") +
-  geom_col(width = 0.6) +
-  scale_fill_manual(values = colors_all$blues) +
-  # Use log10 scale (offsetting +1 to handle 0 values safely)
-  ggplot2::scale_x_log10(
-    breaks = c(1, 10, 50, 100, 250),
-    labels = c("0", "10", "50", "100", "250")
+# 2. GLM Forest Plot
+glm_coefficients_forest_plot <- glm_coefficients %>%
+  mutate(feature_name = factor(feature_name, levels = levels(name_order$feature_name))) %>%
+  ggplot(aes(x = estimate, y = feature_name, xmin = conf.low, xmax = conf.high)) +
+  facet_grid(feature_type ~ ., space = "free", scales = "free_y") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.6) +
+  geom_errorbarh(height = 0.2, color = "black", linewidth = 0.6) +
+  geom_point(aes(color = p.value <= 0.05), size = 2.5) +
+  scale_color_manual(
+    values = c("TRUE" = "#4DBBD5FF", "FALSE" = "gray60"),
+    labels = c("TRUE" = "p <= 0.05", "FALSE" = "p > 0.05")
   ) +
   labs(
-    x     = "Variable Importance (Gini Impurity Reduction)",
+    x     = "Standardized Effect Size",
     y     = "Feature Predictor",
-    fill  = "Feature Category",
-    title = "Random Forest: Predictors of Expression Divergence (R² = 0.554)"
+    color = "Significance",
+    title = paste0("GLM (R² = ", round(metrics_glm$.estimate[metrics_glm$.metric == "rsq"], 3), ")")
   ) +
   theme_vaxgo() +
-  theme(
-    legend.position = "right",
-    axis.text.y     = element_text(size = 9),
-    strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)
-  )
+  theme(legend.position = "right", strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5))
 
-print(p_rf_importance)
+# 3. Random Forest Gini Importance Plot
+p_rf_importance <- rf_importance %>%
+  mutate(feature_name = factor(feature_name, levels = levels(name_order$feature_name))) %>%
+  ggplot(aes(x = importance + 1, y = feature_name, fill = feature_type)) +
+  facet_grid(feature_type ~ ., space = "free", scales = "free_y") +
+  geom_col(width = 0.6) +
+  scale_fill_manual(values = colors_all$blues) +
+  scale_x_log10(
+    breaks = c(1, 10, 50, 100, 250, 1000),
+    labels = c("0", "10", "50", "100", "250", "1000")
+  ) +
+  labs(
+    x     = "Variable Importance (Gini)",
+    y     = "Feature Predictor",
+    fill  = "Feature Category",
+    title = paste0("Random Forest (R² = ", round(metrics_rf$.estimate[metrics_rf$.metric == "rsq"], 3), ")")
+  ) +
+  theme_vaxgo() +
+  theme(legend.position = "right", strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5))
+
+
+# 4. Composite 3-Panel Plot (LM vs GLM vs RF)
+(linear_coefficients_forest_plot + theme(strip.text.y = element_blank())) +
+  (glm_coefficients_forest_plot + theme(strip.text.y = element_blank())) +
+  p_rf_importance +
+  plot_layout(widths = c(0.33, 0.33, 0.34), guides = "collect", axes = "collect")
 ```
 
 
-```{r fig.height=20, fig.width=18}
-(linear_coefficients_forest_plot + theme(strip.text.y = element_blank())) + p_rf_importance +
-  plot_layout(widths = c(0.5, 0.5),
-              guides = "collect", axes = "collect") 
-```
+
 
 ```{r fig.height=6, fig.width=3}
 
 # Plot Observed vs Predicted values across models
-
 p_obs_vs_pred <- eval_table %>%
   pivot_longer(
     cols      = c( pred_rf, pred_linear),
@@ -755,8 +775,8 @@ p_obs_vs_pred <- eval_table %>%
     values_to = "predicted"
   ) %>%
   mutate(
-    model = case_when(model == "pred_rf" ~ "Random Forest (R² = 0.554)",
-                      model == "pred_linear" ~ "Linear model (R² = 0.162)",
+    model = case_when(model == "pred_rf" ~ "Random Forest (R² = 0.7)",
+                      model == "pred_linear" ~ "Linear model (R² = 0.129)",
                       T ~ NA)
   ) %>%
   ggplot() +

@@ -27,6 +27,7 @@ bioc_pkgs <- c(
 
 # devtools::install_github('erocoar/gghalves')
 # install.packages("https://cran.r-project.org/src/contrib/Archive/notifier/notifier_1.0.0.tar.gz")
+install.packages("vip", repos = c("https://bgreenwell.r-universe.dev", "https://cloud.r-project.org"))
 
 
 # 3. Safe, Non-Destructive Loading Pipeline
@@ -65,7 +66,7 @@ for (pkg in all_packages) {
 
 colors_all <- list(
   #Blues
-  blues = c("#4361ee", "#4DBBD5FF", "#90A4AEFF", "#06d6a0", "#46eec6", 
+  blues = c("#4361ee", "#4DBBD5FF", "#3D405B", "#90A4AEFF", "#06d6a0", "#46eec6", 
             "#175289", "#caf0f8", "#4cc9f0", "#669bbc", "purple", "#7014cc", "#cd61a1", "gray80"),
   #Neutral harmony bliss
   neutral_harmony = c("#F4F1DE", "#E07A5F", "#3D405B", "#81B29A", "#F2CC8F"),
