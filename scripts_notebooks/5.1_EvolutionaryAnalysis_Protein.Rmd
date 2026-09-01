@@ -40,8 +40,7 @@ dge_btm_process_module_diff_and_legs =
   readRDS(file = here("tables", "all_human_mouse_gsea_btm_legs.rds"))
 
 # Import BTM gene-level correlation data
-dge_btm_process_genes_diff_bygene =
-  readRDS(here("tables", "human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune.rds"))
+dge_btm_process_genes_diff_bygene_clean_filtered =  readRDS(file = here("tables", "dge_btm_process_genes_diff_bygene_clean_filtered.rds"))
 
 # Import homolog alignment data
 all_alignments = read_csv(here("tables", "human_to_mouse_alignment_mart_export.txt"))
@@ -94,26 +93,31 @@ protein_identity_process = alignments_human2mouse %>%
 # gene_info_human %>% saveRDS(file = here("tables", "gene_info_human.rds"))
 
 # Import pre-computed human gene information and join with alignment data
+# gene_info_human =
+#   readRDS(file = here("tables", "gene_info_human.rds")) %>%
+#   select(-hgnc_symbol) %>% 
+#   full_join(alignments_human2mouse_all, by = "gene") %>% 
+#   full_join(alignments_human2mouse %>% 
+#               select(gene, process, pathogen, treatment, timepoint_comparison, group) %>% 
+#               distinct(),
+#           by = "gene") %>%
+#   
+#   #Add difference in log2FC
+#   inner_join(dge_btm_process_genes_diff_bygene_clean_filtered,
+#              by = join_by(gene == hgnc_symbol, pathogen, timepoint_comparison, treatment, status)) 
+
+
 gene_info_human =
-  readRDS(file = here("tables", "gene_info_human.rds")) %>%
-  select(-hgnc_symbol) %>% 
-  inner_join(alignments_human2mouse_all, by = "gene") %>% 
-  full_join(alignments_human2mouse %>% 
-              select(gene, process, pathogen, treatment, timepoint_comparison, group, status) %>% 
-              distinct(),
-          by = "gene") %>%
+  alignments_human2mouse_all %>% 
   
   #Add difference in log2FC
-  inner_join(dge_btm_process_genes_diff_bygene %>% 
-               filter(gene_set == "All genes") %>% 
-               filter(pathogen_mouse != "DMD") %>% 
-               select(pathogen = pathogen_human, timepoint_comparison, 
-                      treatment = treatment_human, 
-                      gene = human_symbol, mean_log2fc_human, 
-                      mean_log2fc_mouse, mean_log2fc_diff, 
-                      weight_se_inverse_combined) %>% 
-               distinct(),
-             by = join_by(gene, pathogen, timepoint_comparison, treatment)) 
+  inner_join(dge_btm_process_genes_diff_bygene_clean_filtered,
+             by = join_by(gene == hgnc_symbol)) 
+
+
+
+gene_info_human %>% 
+  dplyr::count(pathogen, status)
 
 
 ```
@@ -124,8 +128,7 @@ gene_info_human =
 #### Difference in means vs. status
 gene_info_human_clean_dge <- gene_info_human %>%
   filter(treatment != "Vaccination") %>% 
-  mutate(status = ifelse(status == "Shared", "Shared", "Not-shared")) %>% 
-  select(treatment, pathogen, status, timepoint_comparison, gene, identity_human2mouse, mean_log2fc_diff, weight_se_inverse_combined) %>% 
+  select(treatment, pathogen, status, timepoint_comparison, gene, identity_human2mouse, abs_log2fc_diff, inverse_se_mouse) %>% 
   distinct()
 
 #Save
@@ -233,88 +236,70 @@ difflog2fc_distribution_legs_plot %>%
 
 
 ```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
-#Difference in means vs weight se
-gene_info_human_clean_dge %>% 
-  ggplot() +
-  aes(x = weight_se_inverse_combined,
-      y = abs(mean_log2fc_diff),
-      # size = weight_se_inverse_combined,
-      fill = status) +
-  facet_nested_wrap(~treatment+pathogen, nrow = 1, scales = "free_x")+
-  geom_point(pch = 21,
-             alpha = 0.7,
-             size = 2,
-             data = . %>% filter(status != "Shared")) +
-  geom_point(pch = 21,
-             alpha = 1,
-             size = 2,
-             data = . %>% filter(status == "Shared")) +
-  geom_hline(yintercept = 0, linetype = 2, linewidth = 0.5) +
-  scale_fill_manual(values = colors$comparison) +
-  scale_color_manual(values = colors$comparison) +
-  theme_vaxgo() +
-  theme(legend.position = "top")
 
 
-#### Difference in means vs. identity
-stats_df <- gene_info_human_clean_dge %>%
-  group_by(treatment, pathogen, status) %>%
-  summarise(
-    cor_res = list(cor.test(identity_human2mouse, abs(mean_log2fc_diff))),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    r = map_dbl(cor_res, ~ .x$estimate),
-    p = map_dbl(cor_res, ~ .x$p.value),
-    rr = r^2,
-    p_signif = as.character(cut(
-      p,
-      breaks = c(-Inf, 0.001, 0.01, 0.05, Inf),
-      labels = c("***", "**", "*", "ns")
-    )),
-    color_hex = ifelse(status == "Not-shared", "black", "#00A0D2"),
-    status_label = sprintf(
-      "<span style='color:%s;'>R=%.2f, R²=%.2f, %s</span>",
-      color_hex, r, rr, p_signif
-    )
-  ) %>% 
-  mutate(status = factor(status, levels = c("Not-shared", "Shared"))) %>%
-  arrange(treatment, pathogen, status) %>%
-  group_by(treatment, pathogen) %>%
-  summarise(
-    label_text = paste(status_label, collapse = "<br>"),
-    .groups = "drop"
-  )
-
+#Plot
 alignments_human2mouse_legs_identity_log2fc_plot = gene_info_human_clean_dge %>% 
-  inner_join(stats_df %>% select(treatment, pathogen, label_text),
-             by = join_by(treatment, pathogen)) %>% 
-  ggplot() +
-  aes(x = identity_human2mouse,
-      y = abs(mean_log2fc_diff),
-      fill = status) +
-  facet_nested_wrap(~treatment+pathogen+label_text, ncol = 4)+
-  geom_point(pch = 21,
-             alpha = 0.2,
-             stroke = 0,
-             size = 2) +
-  stat_smooth(method = "lm",
-              mapping = aes(color = status)) +
+
+  filter(status != "Not LEG") %>% 
+
+    ggplot() +
+  aes(
+    x = identity_human2mouse,
+    y = abs_log2fc_diff,
+    color = status,
+    fill = status
+  ) +
+  
+  facet_nested_wrap(~treatment+pathogen, nrow = 1) +
+  
+  # Regression
+  geom_smooth(
+    method = "lm",
+    mapping = aes(color = status, fill = status),
+    se = TRUE
+  ) +
+  
+     #Marginal Boxplot
+   # TOP SIDE 
+  geom_boxplot(
+    mapping = aes(
+      x = identity_human2mouse,         
+      y = 3,
+      group = interaction(status, pathogen)
+    ),
+    outliers = FALSE,
+    outlier.shape = NA,
+    alpha = 0.5,
+    width = 0.5,
+    show.legend = FALSE
+  ) +
+
+
   scale_fill_manual(values = colors$comparison) +
   scale_color_manual(values = colors$comparison) +
-  scale_x_continuous(expand = c(0.01, 0.01)) +
-  scale_y_continuous(expand = c(0.01, 0.01)) +
+  scale_x_continuous(expand = c(0,0)) +
+  labs(
+    x = "%Protein identity",
+    y = "|ΔMean Log2FC|",
+    fill = "LEG status"
+  ) +
   theme_vaxgo() +
   theme(
     legend.position = "top",
-    strip.text = ggtext::element_markdown()
   ) +
-  labs(x = "%Identity",
-       y = "|Mean Log2FC|",
-       fill = "LEGs",
-       color = "LEGs")
+  guides(
+    color = "none",
+    fill = guide_legend(
+      title.position = "left", 
+      byrow = TRUE, 
+      nrow = 1,
+      override.aes = list(shape = 22, alpha = 1, size = 3, linetype = 0)
+    )
+  )
 
-alignments_human2mouse_legs_identity_log2fc_plot
+alignments_human2mouse_legs_identity_log2fc_plot 
+
 
 # Save to file
 alignments_human2mouse_legs_identity_log2fc_plot %>%
@@ -323,6 +308,81 @@ alignments_human2mouse_legs_identity_log2fc_plot %>%
          height = 3)
 
 ```
+
+
+
+```{r fig.height=4, fig.width=4, message=FALSE, warning=FALSE}
+
+
+#Plot
+alignments_human2mouse_legs_identity_log2fc_pooled_plot = gene_info_human_clean_dge %>% 
+
+  filter(status != "Not LEG") %>% 
+
+    ggplot() +
+  aes(
+    x = identity_human2mouse,
+    y = abs_log2fc_diff,
+    color = status,
+    fill = status
+  ) +
+  
+  # Regression
+  geom_smooth(
+    method = "lm",
+    mapping = aes(color = status, fill = status),
+    se = TRUE
+  ) +
+  
+  #Marginal Boxplot
+   # TOP SIDE 
+  geom_boxplot(
+    mapping = aes(
+      x = identity_human2mouse,         
+      y = 2,             
+      fill = status,
+    ),
+    outliers = FALSE,
+    outlier.shape = NA,
+    alpha = 0.5,
+    width = 0.2,
+    show.legend = FALSE
+  ) +
+
+  scale_fill_manual(values = colors$comparison) +
+  scale_color_manual(values = colors$comparison) +
+  scale_x_continuous(expand = c(0,0)) +
+  labs(
+    x = "%Protein identity",
+    y = "|ΔMean Log2FC|",
+    fill = "LEG status"
+  ) +
+  theme_vaxgo() +
+  theme(
+    legend.position = "top",
+  ) +
+  guides(
+    color = "none",
+    fill = guide_legend(
+      title.position = "left", 
+      byrow = TRUE, 
+      nrow = 1,
+      override.aes = list(shape = 22, alpha = 1, size = 3, linetype = 0)
+    )
+  )
+
+alignments_human2mouse_legs_identity_log2fc_pooled_plot
+
+# Save to file
+alignments_human2mouse_legs_identity_log2fc_pooled_plot %>%
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_btms_legs_identity_vs_meanlog2fc_pooled.png"),
+         width = 4,
+         height = 4)
+
+```
+
+
+
 
 
 

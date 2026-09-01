@@ -322,7 +322,7 @@ theme_vaxgo <- function() {
       plot.title           = ggplot2::element_text(size = 10),
       plot.subtitle        = ggplot2::element_text(size = 10),
       plot.caption         = ggplot2::element_text(hjust = 0, size = 5),
-      plot.margin          = ggplot2::margin(0.1, 0.1, 0.1, 0.1, "cm")
+      plot.margin          = ggplot2::margin(0.1, 0.2, 0.1, 0.1, "cm")
     )
 }
 
