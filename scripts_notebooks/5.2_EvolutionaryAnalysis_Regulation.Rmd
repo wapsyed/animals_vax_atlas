@@ -37,6 +37,10 @@ gsea_btm_results_core_joined =
 dge_btm_process_module_diff_and_legs = 
   readRDS(file = here("tables", "all_human_mouse_gsea_btm_legs.rds"))
 
+#Save
+dge_btm_process_genes_diff_bygene_clean_filtered = 
+  readRDS(file = here("tables", "dge_btm_process_genes_diff_bygene_clean_filtered.rds"))
+
 # Import BTM gene-level correlation data
 dge_btm_process_genes_diff_bygene =
   readRDS(here("tables", "human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune.rds"))
@@ -343,15 +347,6 @@ cres_type_homology_comparison <- cres_annotated %>% #453,679
   ) %>%
   dplyr::summarise(n_cres = dplyr::n(), .groups = "drop") %>%
   
-  # # Step 4: Complete missing combinations with 0 to explicitly retain n = 0 per stratum
-  # tidyr::complete(
-  #   hgnc_symbol,
-  #   type_human = c("pELS", "dELS", "PLS"),
-  #   ctcf_human,
-  #   match_homology_group,
-  #   fill = list(n_cres = 0)
-  # ) %>%
-  # 
   # Step 5: Compute total locus cCREs
   dplyr::group_by(hgnc_symbol) %>%
   dplyr::mutate(
@@ -415,9 +410,84 @@ cres_type_homology_comparison
 cres_type_homology_comparison %>% 
   saveRDS(file = here("tables", "cres_type_homology_comparison.rds"))
 
-
-
 ```
+
+
+Pivot to wide format
+```{r} 
+#Pivot to wide format
+
+#All variables ===========================
+cres_type_homology_comparison_wide <- dplyr::bind_rows(
+  
+  # 1. Total cCRE count per gene locus
+  cres_type_homology_comparison %>%
+    dplyr::select(hgnc_symbol, count = n_total_cres_gene) %>%
+    dplyr::distinct() %>%
+    dplyr::mutate(feature_name = "n_total_cres_gene"),
+
+  # 2. Absolute counts per Human Type (PLS, pELS, dELS)
+  cres_type_homology_comparison %>%
+    dplyr::select(hgnc_symbol, type_human, count = n_type) %>%
+    dplyr::distinct() %>%
+    dplyr::mutate(feature_name = stringr::str_c("n_type_", type_human)),
+
+  # 3. % Matching Type within each Human Type
+  cres_type_homology_comparison %>%
+    dplyr::select(hgnc_symbol, type_human, count = pct_match_type) %>%
+    dplyr::distinct() %>%
+    dplyr::mutate(feature_name = stringr::str_c("pct_match_type_", type_human)),
+
+  # 4. Absolute counts per Subtype stratum (Type + CTCF)
+  cres_type_homology_comparison %>%
+    dplyr::select(hgnc_symbol, type_human, ctcf_human, count = n_ctcf) %>%
+    dplyr::distinct() %>%
+    dplyr::mutate(feature_name = stringr::str_c("n_ctcf_", type_human, "_", ctcf_human)),
+
+  # 5. % Matching CTCF within each Subtype stratum (Type + CTCF)
+  cres_type_homology_comparison %>%
+    dplyr::select(hgnc_symbol, type_human, ctcf_human, count = pct_match_ctcf) %>%
+    dplyr::distinct() %>%
+    dplyr::mutate(feature_name = stringr::str_c("pct_match_ctcf_", type_human, "_", ctcf_human)),
+
+  # 6. Absolute Homology counts per stratum (Type + CTCF + Homology Group)
+  cres_type_homology_comparison %>%
+    dplyr::select(hgnc_symbol, type_human, ctcf_human, match_homology_group, count = n_homology) %>%
+    dplyr::distinct() %>%
+    dplyr::mutate(
+      clean_homology = stringr::str_replace_all(match_homology_group, " ", "_"),
+      feature_name = stringr::str_c("n_homology_", type_human, "_", ctcf_human, "_", clean_homology)
+    ) %>%
+    dplyr::select(-clean_homology),
+
+  # 7. % Homology per stratum (Type + CTCF + Homology Group)
+  cres_type_homology_comparison %>%
+    dplyr::select(hgnc_symbol, type_human, ctcf_human, match_homology_group, count = pct_homology) %>%
+    dplyr::distinct() %>%
+    dplyr::mutate(
+      clean_homology = stringr::str_replace_all(match_homology_group, " ", "_"),
+      feature_name = stringr::str_c("pct_homology_", type_human, "_", ctcf_human, "_", clean_homology)
+    ) %>%
+    dplyr::select(-clean_homology)
+    
+) %>%
+  dplyr::filter(!is.na(feature_name)) %>%
+  dplyr::distinct() %>%
+  
+  # Final pivoting step to wide format (1 row per gene)
+  tidyr::pivot_wider(
+    id_cols     = hgnc_symbol,
+    names_from  = feature_name,
+    values_from = count,
+    values_fill = 0
+  )
+
+cres_type_homology_comparison_wide 
+
+cres_type_homology_comparison_wide %>% 
+  saveRDS(file = here("tables", "cres_type_homology_comparison_wide.rds"))
+```
+
 
 #### Have CREs diverged their functions?
 
@@ -659,6 +729,21 @@ cres_type_divergence_pooled_plot = cres_type_homology_comparison_dge_legs_stats 
     show.legend = FALSE
   ) +
   
+     #Rug
+  geom_rug(,
+    mapping = aes(
+      x = n_type,         
+      color = status,
+      group = interaction(status, type_human),
+    ),
+    sides = "b",
+    alpha = 0.01,
+    # position = "jitter",
+    y = 0.3,
+    length = unit(0.03, "npc"),
+    show.legend = FALSE 
+  ) +
+  
   scale_x_continuous(expand = c(0.01, 0.01)) +
   scale_y_continuous(expand = c(0.01, 0.01)) +
   scale_fill_manual(values = colors$comparison) +
@@ -685,7 +770,7 @@ cres_type_divergence_pooled_plot = cres_type_homology_comparison_dge_legs_stats 
   )
 
 # Display composite plot
-cres_type_divergence_pooled_plot
+cres_type_divergence_pooled_plot 
 
 #Save
 cres_type_divergence_pooled_plot %>%
@@ -749,6 +834,21 @@ cres_type_ctcf_divergence_pooled_plot = cres_type_homology_comparison_dge_legs_s
     width = 0.1,
     show.legend = FALSE
   ) +
+  
+     #Rug
+  geom_rug(,
+    mapping = aes(
+      x = n_type,         
+      color = status,
+      group = interaction(status, type_human),
+    ),
+    sides = "b",
+    alpha = 0.01,
+    # position = "jitter",
+    y = 0.3,
+    length = unit(0.03, "npc"),
+    show.legend = FALSE 
+  ) +
   scale_x_continuous(expand = c(0.01, 0.01)) +
   scale_y_continuous(expand = c(0.01, 0.01)) +
   scale_fill_manual(values = colors$comparison) +
@@ -774,7 +874,7 @@ cres_type_ctcf_divergence_pooled_plot = cres_type_homology_comparison_dge_legs_s
   )
 
 #Print
-cres_type_ctcf_divergence_pooled_plot 
+cres_type_ctcf_divergence_pooled_plot
 
 #Save
 cres_type_ctcf_divergence_pooled_plot %>%
@@ -942,6 +1042,14 @@ cres_type_matchingpct_divergence_pooled_plot = cres_type_homology_comparison_dge
     width = 0.2,
     show.legend = FALSE
   )  +
+    #Rug
+  geom_rug(
+    sides = "b",
+    alpha = 0.01,
+    y = 0.3,
+    length = unit(0.03, "npc"),
+    show.legend = FALSE 
+  ) +
     theme_vaxgo() +
   theme(
     legend.position = "top"
@@ -1081,6 +1189,15 @@ cres_type_ctcf_matchingpct_divergence_pooled_plot = cres_type_homology_compariso
     width = 0.05,
     show.legend = FALSE
   )   +
+  
+    #Rug
+  geom_rug(
+    sides = "b",
+    alpha = 0.1,
+    y = 0.3,
+    length = unit(0.03, "npc"),
+    show.legend = FALSE 
+  ) +
     theme_vaxgo() +
   theme(
     legend.position = "top",
@@ -1125,6 +1242,9 @@ cres_type_ctcf_matchingpct_divergence_pooled_plot %>%
 
 #PCT homology
 cres_type_ctcf_homology_pooled_plot = cres_type_homology_comparison_dge_legs_stats %>% 
+  mutate(match_homology_group = str_replace(match_homology_group, " ", "\n"),
+         match_cretype = fct_relevel(match_cretype, "Same") , 
+         match_ctcf = fct_relevel(match_ctcf, "Same")) %>% 
   distinct() %>% 
   filter(status != "Not LEG") %>%  
   ggplot(aes(
@@ -1182,9 +1302,10 @@ cres_type_ctcf_homology_pooled_plot %>%
 #Plot
 cres_type_ctcf_homology_divergence_pooled_plot = cres_type_homology_comparison_dge_legs_stats %>% 
   distinct() %>% 
-  mutate(match_homology_group = str_replace(match_homology_group, " ", "\n")) %>% 
-  filter(status == "All genes") %>% 
-  # filter(status != "Not LEG") %>% 
+  mutate(match_homology_group = str_replace(match_homology_group, " ", "\n"),
+         match_cretype = fct_relevel(match_cretype, "Same") , 
+         match_ctcf = fct_relevel(match_ctcf, "Same")) %>% 
+  filter(status != "Not LEG") %>%
 
     ggplot(aes(
     x = pct_homology,
@@ -1199,7 +1320,8 @@ cres_type_ctcf_homology_divergence_pooled_plot = cres_type_homology_comparison_d
   geom_smooth(
     method = "lm",
     mapping = aes(color = status, fill = status),
-    se = TRUE
+    se = TRUE,
+    data = . %>% filter(status == "All genes") 
   ) +
   
   #Marginal Boxplot
@@ -1214,8 +1336,17 @@ cres_type_ctcf_homology_divergence_pooled_plot = cres_type_homology_comparison_d
     outliers = FALSE,
     outlier.shape = NA,
     alpha = 0,
-    width = 0.02,
+    width = 0.05,
     show.legend = FALSE
+  ) +
+  
+  #Rug
+  geom_rug(
+    sides = "b",
+    alpha = 0.1,
+    y = 0.3,
+    length = unit(0.03, "npc"),
+    show.legend = FALSE 
   ) +
 
   scale_fill_manual(values = colors$comparison) +
@@ -1231,7 +1362,7 @@ cres_type_ctcf_homology_divergence_pooled_plot = cres_type_homology_comparison_d
     # panel.spacing = grid::unit(0.7, "cm")
   ) +
   guides(
-    color = "none",
+    color = "none", 
     fill = guide_legend(
       title.position = "left", 
       byrow = TRUE, 
@@ -1241,7 +1372,7 @@ cres_type_ctcf_homology_divergence_pooled_plot = cres_type_homology_comparison_d
   )
 
 
-cres_type_ctcf_homology_divergence_pooled_plot
+cres_type_ctcf_homology_divergence_pooled_plot 
 
 
 #Save
@@ -1299,7 +1430,7 @@ https://pubmed.ncbi.nlm.nih.gov/29180706/#&gid=article-figures&pid=figure-2-uid-
 #   scale_fill_manual(values = colors$comparison) +
 #   scale_color_manual(values = colors$comparison) +
 #   labs(x = "N",
-#        y = expression("|" * Delta * "Log"[2] * "FC|"),
+#        y = "|ΔMean Log2FC|",
 #        color = "LEGs",
 #        fill = "LEGs",
 #        title = "Pooled gene expression conditions") +
@@ -2035,23 +2166,15 @@ dge_btm_process_genes_diff_bygene_clean_filtered =  readRDS(file = here("tables"
   
   
   # Inner join with cross-species differential expression statistics =============
-gene_attribute_tf_count_log2fc_stats <- 
-  
-  bind_rows( 
-    
-  gene_tf_shared_unique %>%
+gene_attribute_tf_count_log2fc_stats <- gene_tf_shared_unique %>%
                rename(hgnc_symbol = gene) %>% 
    #Annotate with gene expression
   inner_join(dge_btm_process_genes_diff_bygene_clean_filtered,
-             by = join_by(hgnc_symbol)),
-  
-  #All genes
-  gene_tf_shared_unique %>%
-    rename(hgnc_symbol = gene) %>% 
-  inner_join(dge_btm_process_genes_diff_bygene_clean_filtered,
-             by = join_by(hgnc_symbol)) %>% 
-  mutate(status = "All genes")
-    )
+             by = join_by(hgnc_symbol))
+
+gene_attribute_tf_count_log2fc_stats %>% 
+  dplyr::count(pathogen, status)
+
 ```
 
 
@@ -2081,28 +2204,30 @@ gene_attribute_tf_divergence_pooled_plot = gene_attribute_tf_count_log2fc_stats 
   # Relabel facets cleanly
   facet_wrap(
     ~variable, 
-    scales = "free", 
+    scales = "free_x", 
     nrow = 1,
     labeller = labeller(variable = variable_names)
   ) +
-  geom_smooth(method = "lm") +
+  geom_smooth(method = "lm",
+              data = . %>% filter(status == "All genes")
+              ) +
      # 1. TOP SIDE: Boxplot 
   geom_boxplot(
     mapping = aes(
       x = value,         
-      y = 3,             
+      y = 1,             
       color = status,
       group = interaction(status, variable),
     ),
     outliers = FALSE, 
     outlier.shape = NA,
     alpha = 0,
-    width = 0.5,
-    show.legend = FALSE
+    width = 0.1,
+    show.legend = T
   ) +
   scale_fill_manual(values = colors$comparison) +
   scale_color_manual(values = colors$comparison) +
-  scale_y_continuous(limits = c(0, NA), expand = c(0.01, 0.01)) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
   scale_x_continuous(expand = c(0.01, 0.01)) +
   
   labs(
@@ -2119,7 +2244,6 @@ gene_attribute_tf_divergence_pooled_plot = gene_attribute_tf_count_log2fc_stats 
   )
 
 #Print
-
 gene_attribute_tf_divergence_pooled_plot
 
 # Save complete regulation figure
@@ -2150,6 +2274,7 @@ variable_names <- c(
 
 gene_attribute_tf_count_legs_pooled_plot = gene_attribute_tf_count_log2fc_stats %>% 
   select(hgnc_symbol, pathogen, treatment, status, abs_log2fc_diff, pct_tf_shared, n_tf_shared, n_tf_total) %>% 
+  distinct() %>% 
   pivot_longer(
     cols = c(pct_tf_shared, n_tf_shared, n_tf_total),
     names_to = "variable", 
@@ -2188,7 +2313,7 @@ gene_attribute_tf_count_legs_pooled_plot = gene_attribute_tf_count_log2fc_stats 
       cutpoints = c(0, 0.001, 0.01, 0.05, 1),
       symbols = c("***", "**", "*", "ns")
     ),
-    size = 3,
+    size = 4,
     vjust = 0.3,
     hide.ns = F, 
     tip.length = 0.01, 

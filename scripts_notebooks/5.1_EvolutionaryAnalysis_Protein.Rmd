@@ -106,7 +106,7 @@ protein_identity_process = alignments_human2mouse %>%
 #   inner_join(dge_btm_process_genes_diff_bygene_clean_filtered,
 #              by = join_by(gene == hgnc_symbol, pathogen, timepoint_comparison, treatment, status)) 
 
-
+# Import pre-computed human gene information and join with alignment data
 gene_info_human =
   alignments_human2mouse_all %>% 
   
@@ -127,7 +127,7 @@ gene_info_human %>%
 ```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
 #### Difference in means vs. status
 gene_info_human_clean_dge <- gene_info_human %>%
-  filter(treatment != "Vaccination") %>% 
+  # filter(treatment != "Vaccination") %>% 
   select(treatment, pathogen, status, timepoint_comparison, gene, identity_human2mouse, abs_log2fc_diff, inverse_se_mouse) %>% 
   distinct()
 
@@ -139,109 +139,12 @@ gene_info_human_clean_dge %>%
 
 ```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
 
-##### Difference in means vs. status
-stat_results <- gene_info_human_clean_dge %>%
-  mutate(abs_diff = abs(mean_log2fc_diff)) %>%
-  group_by(treatment, pathogen) %>%
-  summarise(
-    n_shared     = sum(status == "Shared" & !is.na(abs_diff)),
-    n_not_shared = sum(status == "Not-shared" & !is.na(abs_diff)),
-    
-    median_shared     = if (n_shared > 0) median(abs_diff[status == "Shared"], na.rm = TRUE) else NA_real_,
-    median_not_shared = if (n_not_shared > 0) median(abs_diff[status == "Not-shared"], na.rm = TRUE) else NA_real_,
-    
-    # Teste de Wilcoxon comparando Shared e Not-shared
-    wilcox_p = if (n_shared >= 1 && n_not_shared >= 1) {
-      wilcox.test(
-        abs_diff[status == "Shared"],
-        abs_diff[status == "Not-shared"]
-      )$p.value
-    } else {
-      NA_real_
-    },
-    
-    .groups = "drop"
-  ) %>%
-  mutate(
-    fdr_wilcox = p.adjust(wilcox_p, method = "BH"),
-    fdr_wilcox_sci = sprintf("%.2e", fdr_wilcox),
-    
-    # Tamanho do Efeito r = |Z| / sqrt(N)
-    total_n       = n_shared + n_not_shared,
-    z_score       = abs(qnorm(wilcox_p / 2)),
-    effect_size_r = z_score / sqrt(total_n),
-    
-    # Rótulo formatado para o facet do gráfico
-    label_facet   = sprintf("padj=%s, r=%.2f", fdr_wilcox_sci, effect_size_r)
-  )
-
-#Plot
-difflog2fc_distribution_legs_plot = gene_info_human_clean_dge %>% 
-  inner_join(stat_results, by = c("treatment", "pathogen")) %>% 
-  ggplot() +
-  aes(
-    x     = abs(mean_log2fc_diff),
-    color = status,
-    fill  = status
-  ) +
-  # Facetamento agrupado com o p-ajustado no título
-  facet_nested_wrap(
-    ~ treatment + pathogen + label_facet,
-    nrow = 1
-  ) +
-  # Duas curvas de densidade (uma para cada status)
-  geom_density(
-    linewidth = 1,
-    data = . %>% filter(status == "Shared")
-  ) +
-  geom_density(
-    linewidth = 1,
-    data = . %>% filter(status == "Not-shared")
-  ) +
-  # Boxplot alinhado na base do eixo Y
-  geom_boxplot(
-    aes(y = -0.1),
-    width = 0.2, 
-    outliers = FALSE,
-    color = "black", show.legend = F
-  ) +
-  # Escalas e estética visual
-  scale_y_continuous(expand = c(0.01, 0.01)) +
-  scale_x_continuous(expand = c(0, 0)) +
-   # Set manual color palette for model types
-
-  scale_color_manual(values = c("Not-shared" = "black", "Shared" = "#4DBBD5FF")) +
-  scale_fill_manual(values = c("Not-shared" = NA, "Shared" = "#4DBBD5FF")) +
-  theme_vaxgo() +
-  theme(
-    legend.position = "top",
-    panel.spacing   = grid::unit(0.7, "cm"),
-    plot.margin     = ggplot2::margin(0.1, 0.5, 0.1, 0.1, "cm")
-  ) +
-  labs(
-    x     = "|ΔMean Log2FC|",
-    y     = "Density",
-    fill  = "Status",
-    color = "Status"
-  )
-
-difflog2fc_distribution_legs_plot
-
-# Save to file
-difflog2fc_distribution_legs_plot %>%
-  ggsave(filename = here("Figures", "all_human_mouse_gsea_LEGs_btms_legs_meanlog2fc.png"),
-         width = 8,
-         height = 3)
-```
-
-
-```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
-
 
 #Plot
 alignments_human2mouse_legs_identity_log2fc_plot = gene_info_human_clean_dge %>% 
 
-  filter(status != "Not LEG") %>% 
+  filter(status != "Not LEG",
+         treatment %in% c("Infection", "Injury")) %>% 
 
     ggplot() +
   aes(
@@ -274,7 +177,14 @@ alignments_human2mouse_legs_identity_log2fc_plot = gene_info_human_clean_dge %>%
     width = 0.5,
     show.legend = FALSE
   ) +
-
+    #Rug
+  geom_rug(
+    sides = "b",
+    alpha = 0.01,
+    y = 1.8,
+    length = unit(0.03, "npc"),
+    show.legend = FALSE 
+  ) +
 
   scale_fill_manual(values = colors$comparison) +
   scale_color_manual(values = colors$comparison) +
@@ -317,7 +227,9 @@ alignments_human2mouse_legs_identity_log2fc_plot %>%
 #Plot
 alignments_human2mouse_legs_identity_log2fc_pooled_plot = gene_info_human_clean_dge %>% 
 
-  filter(status != "Not LEG") %>% 
+  
+    filter(status != "Not LEG",
+         treatment %in% c("Infection", "Injury")) %>% 
 
     ggplot() +
   aes(
@@ -347,6 +259,14 @@ alignments_human2mouse_legs_identity_log2fc_pooled_plot = gene_info_human_clean_
     alpha = 0.5,
     width = 0.2,
     show.legend = FALSE
+  ) +
+    #Rug
+  geom_rug(
+    sides = "b",
+    alpha = 0.01,
+    y = 1.8,
+    length = unit(0.03, "npc"),
+    show.legend = FALSE 
   ) +
 
   scale_fill_manual(values = colors$comparison) +
@@ -1864,7 +1784,7 @@ alignments_human2mouse_all_global_df %>%
   geom_point()
 ```
 
-## Gene biotype and LEGs
+## Gene biotype
 
 Examine whether gene biotype categories (miRNA, protein-coding,
 pseudogenes, lncRNA, snoRNA) differ in their sequence identity to mouse
@@ -3082,8 +3002,8 @@ library(tidyverse)
 library(pwalign)
 library(ape)
 
-dge_btm_process_genes_diff_bygene =
-  readRDS(here("tables", "human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune.rds"))
+# Gene expression
+dge_btm_process_genes_diff_bygene_clean_filtered =  readRDS(file = here("tables", "dge_btm_process_genes_diff_bygene_clean_filtered.rds"))
 
 gene_info_human_clean_dge = 
   readRDS(here("tables", "human_mouse_gene_info_dge_clean.rds"))
@@ -3345,33 +3265,29 @@ notify(title = "Alignment done", msg = "Check it out!")
 
 ```{r fig.height=3, fig.width=3}
 #Import
-gene_info_human_clean_dge = 
-   readRDS(here("tables", "human_mouse_gene_info_dge_clean.rds"))
+# Gene expression
+dge_btm_process_genes_diff_bygene_clean_filtered =  readRDS(file = here("tables", "dge_btm_process_genes_diff_bygene_clean_filtered.rds"))
 
 human_mouse_cds_distance = 
   readRDS(file = here::here("tables", "human_mouse_cds_distance.rds"))
 
 #Merge
 human_mouse_cds_distance_dge = 
-  bind_rows(
   #LEGs
   human_mouse_cds_distance %>% 
-  inner_join(gene_info_human_clean_dge %>% rename(hgnc_symbol = gene),
-             by = "hgnc_symbol"),
-  #Add all genes
-  human_mouse_cds_distance %>% 
-  inner_join(dge_btm_process_genes_diff_bygene %>% 
-               rename(hgnc_symbol = human_symbol) %>% 
-               mutate(status = "All genes"),
+  inner_join(dge_btm_process_genes_diff_bygene_clean_filtered,
              by = "hgnc_symbol")
-  )
+
+human_mouse_cds_distance_dge %>% 
+  dplyr::count(pathogen, status)
+
 ```
 
 
 Is LEG status explaned by the evolutionary distance in the CDS?
 ```{r fig.height=3, fig.width=3}
 #Is LEG status explaned by the evolutionary distance in the CDS?
-human_mouse_cds_distance_dge %>%
+distance_legs_plot = human_mouse_cds_distance_dge %>%
   ggplot2::ggplot() +
   ggplot2::aes(
     x     = status,
@@ -3401,25 +3317,31 @@ human_mouse_cds_distance_dge %>%
   ggplot2::coord_cartesian(ylim = c(0, NA)) +
   theme_vaxgo() +
   ggplot2::theme(
-    legend.position = "top",
+    legend.position = "top", legend.location = "plot",
     axis.text.x = element_blank(),
     axis.ticks.x = element_blank()
   ) +
     # STATISTICAL TEST LAYER
   stat_compare_means(
     comparisons = list(c("Shared", "Not-shared"),
-                       c("Shared", "All"),
+                       c("Shared", "All genes"),
                        c("Not-shared", "All genes")),
     method = "wilcox.test",
-    label = "p.signif",
-    symnum.args = list(
-      cutpoints = c(0, 0.001, 0.01, 0.05, 1),
-      symbols = c("***", "**", "*", "ns")
-    ),
-    vjust = 1.2,
+    label = "p.adj", 
+    vjust = 1.5,
     label.y.np = "top",
+    size = 3,
     hide.ns = F
   ) 
+
+
+distance_legs_plot
+
+#Save
+distance_legs_plot %>%
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_btms_legs_kimuradistance.png"),
+         width = 3,
+         height = 3)
 
 ```
 
@@ -3431,53 +3353,55 @@ difflog2fc_distance_scatter_plot <- human_mouse_cds_distance_dge %>%
   ggplot2::ggplot() +
   ggplot2::aes(
     x     = dist_k80,
-    y     = abs(mean_log2fc_diff),
+    y     = abs_log2fc_diff,
     color = status,
     fill  = status
   ) +
-  geom_point(
-    alpha = 0,
-    size  = 0.5
-  ) +
   geom_smooth(method = "lm", se = TRUE) +
+     #Marginal Boxplot
+   # TOP SIDE 
+  geom_boxplot(
+    mapping = aes(
+      x = dist_k80,         
+      y = 1.8,             
+      fill = status,
+    ),
+    outliers = FALSE,
+    outlier.shape = NA,
+    alpha = 0,
+    width = 0.2,
+    show.legend = FALSE
+  )  +
+  #Rug
+  geom_rug(
+    sides = "b",
+    alpha = 0.01,
+    y = 1.8,
+    length = unit(0.03, "npc"),
+    show.legend = FALSE 
+  ) +
   scale_fill_manual(values = colors$comparison) +
   scale_color_manual(values = colors$comparison) +
   scale_x_continuous(expand = c(0.01, 0.01)) +
-  scale_y_continuous(expand = c(0.01, 0.01),
-                     limits = c(0, 4)
-                     ) +
+  scale_y_continuous(expand = c(0.01, 0.01)) +
   labs(
     x     = "Kimura Distance",
-    y     = expression("|" * Delta * "Log"[2] * "FC|"),
+    y     = "|ΔMean Log2FC|",
     fill  = "",
     color = ""
   ) +
   theme_vaxgo() +
-  theme(legend.position = "top") +
+  theme(legend.position = "top",
+        legend.location = "plot") +
   guides(fill = guide_legend(override.aes = list(alpha = 1)))
 
-ggExtra::ggMarginal(
-  p             = difflog2fc_distance_scatter_plot,
-  type          = "boxplot",
-  groupColour   = FALSE,
-  groupFill     = TRUE,
-  margins       = "both",
-  size          = 5,
-  alpha         = 0.5,
-  linewidth     = 0.5,
-  outlier.shape = NA, 
-)
+difflog2fc_distance_scatter_plot 
 
-ggExtra::ggMarginal(
-  p           = difflog2fc_distance_scatter_plot,
-  type        = "density",
-  groupColour = TRUE,
-  groupFill   = TRUE,
-  margins     = "both",
-  size        = 5,
-  alpha       = 0.1,
-  linewidth = 1
-)
+#Save
+difflog2fc_distance_scatter_plot %>%
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_btms_legs_kimuradistance_divergence.png"),
+         width = 3,
+         height = 3)
 
 ```
 

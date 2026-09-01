@@ -2399,24 +2399,27 @@ legs_divergence_plot = dge_btm_process_genes_diff_bygene_clean_filtered %>%
                color = "black",
                outliers = F) +
   scale_y_continuous(limits = c(0, 3), expand = c(0.01, 0.01)) +
-  # STATISTICAL TEST LAYER
+    # STATISTICAL TEST LAYER
   stat_compare_means(
     comparisons = list(c("Shared", "Not-shared")),
     method = "wilcox.test",
-    label = "p.signif",
-    symnum.args = list(
-      cutpoints = c(0, 0.001, 0.01, 0.05, 1),
-      symbols = c("***", "**", "*", "ns")
-    ),
-    label.y.np = "top",
-    label.y = 2.2,       
+    p.adjust.method = "BH",
+    label = "p.adj",
+    # label = "p.signif",
+    # symnum.args = list(
+    #   cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+    #   symbols = c("***", "**", "*", "ns")
+    # ),
+    label.y.np = "top", 
+    label.y = 2.2,
+    vjust = 1.5,
     hide.ns = T, step.increase = 0,
     size = 2.5, tip.length = 0,
   ) +
   scale_fill_manual(values = colors$comparison) +
   scale_color_manual(values = colors$comparison) +
   labs(x = "N",
-       y = expression("|" * Delta * "Log"[2] * "FC|"),
+       y = "|ΔMean Log2FC|",
        fill = "",
        color = "") +
   theme_vaxgo() +
@@ -2425,12 +2428,111 @@ legs_divergence_plot = dge_btm_process_genes_diff_bygene_clean_filtered %>%
         axis.text.x = element_blank(),
         axis.ticks.x = element_blank()) 
 
+#Print
 legs_divergence_plot
 
+#Save plot
 legs_divergence_plot %>% 
   ggsave(filename = here("Figures", "all_human_mouse_legs_divergence_plot.png"),
          height = 3, width = 8)
 
+```
+
+
+
+
+```{r fig.height=3, fig.width=8, message=FALSE, warning=FALSE}
+
+##### Difference in means vs. status
+stat_results <- dge_btm_process_genes_diff_bygene_clean_filtered %>%
+  filter(status %in% c("Shared", "Not-shared"),
+         treatment %in% c("Infection", "Injury")) %>%
+  group_by(treatment, pathogen) %>%
+  summarise(
+    n_shared     = sum(status == "Shared" & !is.na(abs_log2fc_diff)),
+    n_not_shared = sum(status == "Not-shared" & !is.na(abs_log2fc_diff)),
+    
+    median_shared     = if (n_shared > 0) median(abs_log2fc_diff[status == "Shared"], na.rm = TRUE) else NA_real_,
+    median_not_shared = if (n_not_shared > 0) median(abs_log2fc_diff[status == "Not-shared"], na.rm = TRUE) else NA_real_,
+    
+    wilcox_p = if (n_shared >= 1 && n_not_shared >= 1) {
+      wilcox.test(
+        abs_log2fc_diff[status == "Shared"],
+        abs_log2fc_diff[status == "Not-shared"]
+      )$p.value
+    } else {
+      NA_real_
+    },
+    .groups = "drop"
+  ) %>%
+  mutate(
+    fdr_wilcox = p.adjust(wilcox_p, method = "BH"),
+    fdr_wilcox_sci = sprintf("%.2e", fdr_wilcox),
+    
+    total_n       = n_shared + n_not_shared,
+    z_score       = abs(qnorm(wilcox_p / 2)),
+    effect_size_r = z_score / sqrt(total_n),
+    
+    label_facet   = sprintf("padj=%s, r=%.2f", fdr_wilcox_sci, effect_size_r)
+  )
+
+#Plot
+difflog2fc_distribution_legs_plot = dge_btm_process_genes_diff_bygene_clean_filtered %>% 
+  filter(status %in% c("Shared", "Not-shared"),
+         treatment %in% c("Infection", "Injury")) %>%
+  inner_join(stat_results, by = c("treatment", "pathogen")) %>% 
+  ggplot() +
+  aes(
+    x     = abs_log2fc_diff,
+    color = status,
+    fill  = status
+  ) +
+  # Facetamento agrupado com o p-ajustado no título
+  facet_nested_wrap(
+    ~ treatment + pathogen + label_facet,
+    nrow = 1
+  ) +
+  # Duas curvas de densidade (uma para cada status)
+  geom_density(
+    linewidth = 1,
+    data = . %>% filter(status == "Shared")
+  ) +
+  geom_density(
+    linewidth = 1,
+    data = . %>% filter(status == "Not-shared")
+  ) +
+  # Boxplot alinhado na base do eixo Y
+  geom_boxplot(
+    aes(y = -0.1),
+    width = 0.2, 
+    outliers = FALSE,
+    color = "black", show.legend = F
+  ) +
+      scale_y_continuous(expand = c(0.01, 0.01)) +
+    scale_x_continuous(expand = c(0.01, 0.01)) +
+   # Set manual color palette for model types
+  scale_color_manual(values = c("Not-shared" = "black", "Shared" = "#4DBBD5FF")) +
+  scale_fill_manual(values = c("Not-shared" = NA, "Shared" = "#4DBBD5FF")) +
+  theme_vaxgo() +
+  theme(
+    legend.position = "top",
+    panel.spacing   = grid::unit(0.7, "cm"),
+    plot.margin     = ggplot2::margin(0.1, 0.5, 0.1, 0.1, "cm")
+  ) +
+  labs(
+    x     = "|ΔMean Log2FC|",
+    y     = "Density",
+    fill  = "Status",
+    color = "Status"
+  )
+
+difflog2fc_distribution_legs_plot
+
+# Save to file
+difflog2fc_distribution_legs_plot %>%
+  ggsave(filename = here("Figures", "all_human_mouse_gsea_LEGs_btms_legs_meanlog2fc.png"),
+         width = 8,
+         height = 3)
 ```
 
 
@@ -2474,21 +2576,23 @@ legs_error_plot = dge_btm_process_genes_diff_bygene_clean_filtered %>%
         axis.title.x = element_blank(), 
         axis.text.x = element_blank(),
         axis.ticks.x = element_blank()) +
-  # STATISTICAL TEST LAYER
+    # STATISTICAL TEST LAYER
   stat_compare_means(
     comparisons = list(c("Shared", "Not-shared")),
     method = "wilcox.test",
-    label = "p.signif",
-    symnum.args = list(
-      cutpoints = c(0, 0.001, 0.01, 0.05, 1),
-      symbols = c("***", "**", "*", "ns")
-    ),
-    label.y.np = "top",
-        size = 2.5,
-    vjust = 0.2,
-    hide.ns = F, 
-    tip.length = 0, 
-  )
+    p.adjust.method = "BH",
+    label = "p.adj",
+    # label = "p.signif",
+    # symnum.args = list(
+    #   cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+    #   symbols = c("***", "**", "*", "ns")
+    # ),
+    label.y.np = "top", 
+    # label.y = 2.2, 
+    vjust = 1.5,
+    hide.ns = T, step.increase = 0,
+    size = 2.5, tip.length = 0,
+  ) 
 
 legs_error_plot
 
@@ -2506,61 +2610,75 @@ legs_error_plot %>%
 
 ##### Is divergence in Log2FC associated with groups of processes?
 
-```{r fig.height=4, fig.width=6}
+```{r fig.height=3, fig.width=6}
 ##### Is divergence in Log2FC associated with groups of processes?
 dge_btm_process_genes_diff_bygene_process = dge_btm_process_genes_diff_bygene_clean_filtered %>% 
-  inner_join(btm_annotation_genes %>% 
+  full_join(btm_annotation_genes %>% 
   select(process, hgnc_symbol = symbol, group, subgroup),
-  by = "hgnc_symbol")
+  by = "hgnc_symbol") %>% 
+  mutate(process = if_else(is.na(process), "Not BTM", process),
+         group = if_else(is.na(group), "Not BTM", group))
 
 
 
-# Pooled
-dge_btm_process_genes_diff_bygene_process_pooled_plot = dge_btm_process_genes_diff_bygene_process %>% 
-  filter(status %in% c("All genes"),
-         treatment %in% c("Infection", "Injury")) %>%
-  mutate(group = fct_relevel(group, immune_order) %>% fct_rev()) %>% 
+# 1. Prepare and filter data
+plot_data <- dge_btm_process_genes_diff_bygene_process %>% 
+  filter(
+    status %in% c("All genes"),
+    treatment %in% c("Infection", "Injury")
+  ) %>%
+  mutate(group = fct_relevel(group, c("Not BTM", immune_order)) %>% fct_rev()) %>% 
   select(-process) %>% 
-  distinct() %>% 
-  ggplot() +
-  aes(x = abs_log2fc_diff,
-      y = group,
-      color = group,
-      fill =  group,
-      ) +
-  # facet_nested_wrap(~treatment+pathogen,
-  #                   nrow = 1, 
-  #                   # axes = "all",
-  #                   scales = "free_x"
-  #                   ) +
+  distinct()
+
+# 2. Perform Wilcoxon test against "Not BTM" with BH adjustment
+stat_results <- plot_data %>% 
+  rstatix::wilcox_test(
+    abs_log2fc_diff ~ group, 
+    ref.group = "Not BTM", 
+    p.adjust.method = "BH"
+  ) 
+
+# 3. Generate Plot
+dge_btm_process_genes_diff_bygene_process_pooled_plot <- ggplot(
+  plot_data, 
+  aes(x = group, y = abs_log2fc_diff, color = group, fill = group)
+) +
+  geom_violin(alpha = 1, width = 1, color = NA) +
+  geom_boxplot(width = 0.5, alpha = 0, color = "black", outliers = FALSE) +
   
-   geom_violin(alpha = 1,
-              width = 1,
-              color = NA) +
-  
-  # Boxplot centered on each status
-  geom_boxplot(
-    width = 0.5,
-    alpha = 0,
-    color = "black",
-    outliers = FALSE
+  # STATISTICAL TEST LAYER
+  stat_pvalue_manual(
+    stat_results,
+    x = "group2",             
+    y.position = 3.5,           
+    label = "p.adj",     
+    remove.bracket = TRUE,    
+    coord.flip = TRUE,
+    size = 4, hide.ns = F,
+    color = "black", hjust = 0
   ) +
-  scale_x_continuous(limits = c(0, 4), expand = c(0, 0)) +
+  
+  coord_flip() +
+  scale_y_continuous(limits = c(0, 4.5), expand = c(0, 0)) +
   scale_fill_manual(values = btm_immune_groups$group) +
   scale_color_manual(values = btm_immune_groups$group) +
-  labs(x = "|ΔLog2FC|",
-       y = "",
-       fill = "",
-       color = "") +
+  labs(
+    x = "",
+    y = "|ΔMean Log2FC|",
+    fill = "",
+    color = ""
+  ) +
   theme_vaxgo() +
-  theme(legend.position = "none") 
+  theme(legend.position = "none")
 
-
+#Display plot
 dge_btm_process_genes_diff_bygene_process_pooled_plot
 
+#Save
 dge_btm_process_genes_diff_bygene_process_pooled_plot %>% 
   ggsave(filename = here("Figures", "all_human_mouse_dge_btm_process_genes_diff_bygene_process_pooled.png"),
-         height = 4, width = 4)
+         height = 4, width = 6)
 
 ```
 
