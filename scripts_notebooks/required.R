@@ -27,8 +27,8 @@ bioc_pkgs <- c(
 
 # devtools::install_github('erocoar/gghalves')
 # install.packages("https://cran.r-project.org/src/contrib/Archive/notifier/notifier_1.0.0.tar.gz")
-install.packages("vip", repos = c("https://bgreenwell.r-universe.dev", "https://cloud.r-project.org"))
-
+# install.packages("vip", repos = c("https://bgreenwell.r-universe.dev", "https://cloud.r-project.org"))
+library(vip)
 
 # 3. Safe, Non-Destructive Loading Pipeline
 # Combining lists to load sequentially via base R
