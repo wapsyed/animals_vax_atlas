@@ -1154,6 +1154,11 @@ ggplot(results_quartiles) +
 
 ```
 
+
+
+
+
+
 ##----------------
 
 ### Gene-level, BTMs
@@ -1524,12 +1529,22 @@ Compute the percentage of leading-edge genes shared between organisms,
 stratified by status, process, pathogen, and timepoint.
 
 ```{r fig.height = 12, fig.width=4}
+
+#Filter genes analysed in both species
+matching_genes = dge_btm_process_genes_wide %>%
+  select(pathogen, human_symbol = symbol) %>% 
+  distinct() 
+
+
 # Compute percentage of LEGs per status and stratum
 legs_perc <- gsea_btm_results_core_joined %>%
+  # filter(process == "immune activation - generic cluster") %>%
+  inner_join(matching_genes, by = join_by(pathogen, gene == human_symbol)) %>% 
   dplyr::distinct() %>%
   # Count genes per status within each process stratum
   dplyr::group_by(pathogen, timepoint_comparison, process, status) %>%
-  dplyr::summarise(n = dplyr::n(), .groups = "drop_last",
+  dplyr::summarise(n = dplyr::n(), 
+                   .groups = "drop_last",
                    group = dplyr::first(group)) %>%
   # Calculate overall metrics and Mouse-specific denominator
   dplyr::mutate(
@@ -1554,11 +1569,11 @@ legs_perc <- gsea_btm_results_core_joined %>%
       pathogen %in% c("Burn", "Trauma")        ~ "Injury",
       TRUE                                     ~ pathogen
     ),
-    treatment = stats::relevel(factor(treatment), "Vaccination")
+    treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury")
   ) %>%
   dplyr::arrange(timepoint_comparison)
 
-# Save summary table
+# # Save summary table
 legs_perc %>%
   saveRDS(file = here("tables", "all_human_mouse_gsea_btm_results_core_summary.rds"))
 
@@ -1567,10 +1582,12 @@ legs_perc %>%
   filter(status == "Shared") %>%
   # group_by(pathogen) %>%
   summarise(
-            # mean_perc = mean(percent),
-            median_perc = median(percent),
-            # mean_perc_mouse = mean(percent_mouse),
-            median_perc_mouse = median(percent_mouse))
+            median_perc = median(percent, na.rm = T),
+            mean_perc = mean(percent, na.rm = T),
+            n = n(),
+            se_perc = sd(percent, na.rm = T),
+            median_perc_mouse = median(percent_mouse, na.rm = T),
+            mean_perc_mouse = mean(percent_mouse, na.rm = T))
 
 ```
 
@@ -1578,7 +1595,7 @@ Visualise the distribution of shared leading-edge gene percentages
 across processes, pathogens, and timepoints with violin-boxplots,
 annotating extreme processes.
 
-```{r fig.height = 4, fig.width=8}
+```{r fig.height = 3, fig.width=10}
 #Import
 legs_perc = readRDS(file = here("tables", "all_human_mouse_gsea_btm_results_core_summary.rds"))
 # Prepare plot data
@@ -1663,12 +1680,26 @@ shared_processes_bypathogen_time = shared_perc_plot_df %>%
   # Scales
   scale_y_continuous(expand = c(0.05, 0.05)) +
   scale_fill_manual(values = btm_immune_groups$group) +
+  guides(
+    fill = guide_legend(
+      byrow = TRUE,
+      ncol = 1, 
+      override.aes = list(shape = 22, size = 3)
+    )
+  ) +
+  theme(
+    legend.position = "right",
+    legend.key.spacing.y = unit(1, "pt"), 
+    legend.margin = margin(t = 0, b = 10)
+  ) +
   # Theme
   theme_vaxgo() +
   theme(panel.spacing = unit(0.2, "lines"),
         plot.margin = margin(0.3, 0.3, 0, 0, unit = "cm"),
         plot.title = element_text(hjust = 0.5, face = "bold"), plot.title.position = "panel",
-        legend.position = "top", 
+        legend.position = "right",
+        legend.key.spacing.y = unit(1, "pt"), 
+        legend.margin = margin(t = 0, b = 10),
         legend.key.size = unit(2, "pt"),
         ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) +
   # Labels
@@ -1679,26 +1710,14 @@ shared_processes_bypathogen_time = shared_perc_plot_df %>%
        title = "Distribution of %Shared LEGs, modules with p_adj <= 0.25") 
 
 # Render plot
-shared_processes_bypathogen_time +
-  guides(
-    fill = guide_legend(
-      byrow = TRUE,
-      nrow = 3, 
-      override.aes = list(shape = 22, size = 3)
-    )
-  ) +
-  theme(
-    legend.position = "top",
-    legend.key.spacing.y = unit(1, "pt"), 
-    legend.margin = margin(t = 0, b = 10)
-  )
-   
+shared_processes_bypathogen_time 
 
 # Save plot
 shared_processes_bypathogen_time %>%
   ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_intramodule_shared_violinplot_percentage_labeled_horizontal.png"),
          width = 10,
-         height = 4)
+         height = 3)
+
 ```
 
 
@@ -1783,14 +1802,17 @@ process_selected <- "immune activation - generic cluster"
 # Unite all data sources into a master data frame by sequential joins
 df_legs <- dge_btm_process_genes_wide %>%
   
-  # filter(process == process_selected)
+  filter(process == process_selected) %>% 
   
   # 2. Join with GSEA core enrichment (Leading Edge) genes
   full_join(
     gsea_btm_results_core_joined,
     # filter(process == process_selected)
-    by = join_by(pathogen, group, process, timepoint_comparison, symbol == gene)
-  ) %>%
+    by = join_by(group, process, pathogen, timepoint_comparison, symbol == gene)
+  ) %>% 
+  drop_na(status) %>% 
+  # Drop genes not measured in both organisms
+  drop_na(mean_l2fc_Mouse, mean_l2fc_Human) %>% 
   
   # 3. Integrate shared percentage metrics
   inner_join(
@@ -1832,8 +1854,7 @@ df_legs <- dge_btm_process_genes_wide %>%
   # Rank genes by log2FC within each condition group
   group_by(pathogen, process, group, timepoint_comparison) %>%
   
-  # Drop genes not measured in both organisms
-  drop_na(mean_l2fc_Mouse, mean_l2fc_Human) %>%
+  
   mutate(Mouse_rank = rank(mean_l2fc_Mouse),
          Mouse_rank_p = rank(mean_l2fc_Mouse * -log(p_adjust_mouse_gsea)),
          Human_rank_p = rank(mean_l2fc_Human * -log(p_adjust_human_gsea)),
@@ -1891,6 +1912,8 @@ df_legs_ranked = df_legs %>%
   ) %>%
   arrange(timepoint_comparison) %>%
   mutate(facet_label = fct_inorder(facet_label))
+
+df_legs_ranked
 
 
 
@@ -1965,16 +1988,14 @@ legs_perc_barplot
 
 ##### Shared LEGs, Ranks and Effect size: Scatterplot
 
-
+Vertical
 ```{r fig.height=8, fig.width=4}
 # Scatterplot of significance-weighted ranks
 legs_scatterplot_rank_significance = df_legs %>%
   mutate(facet_label_vertical = paste0(pathogen, "\n", facet_label)) %>% 
   arrange(treatment) %>% 
   mutate(facet_label_vertical= fct_inorder(facet_label_vertical)) %>% 
-  filter(process == process_selected,
-         # status == "Shared"
-         ) %>%
+  filter(process == process_selected) %>%
   # Data aesthetics
   ggplot() +
   aes(x = Mouse_rank_p,
@@ -2030,12 +2051,15 @@ legs_scatterplot_rank_significance_label = legs_scatterplot_rank_significance +
                   data = . %>% filter(status == "Shared"),
                   size = 2, max.overlaps = 10000)  
 
+
+legs_scatterplot_rank_significance_label
+
 legs_scatterplot_rank_significance_label %>% 
   ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_leadingedge_core_ranks_scatterplot_LabelledGenes.png"),
          width = 10, height = 4)
 ```
 
-
+Horizontal
 ```{r fig.height=3, fig.width=8}
 legs_scatterplot_rank_significance_horizontal = df_legs %>%
   mutate(facet_label_vertical = paste0(pathogen, "\n", facet_label)) %>% 
@@ -2085,8 +2109,10 @@ legs_scatterplot_rank_significance_horizontal = df_legs %>%
         legend.title = element_text(size = 10),
         ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) 
 
+legs_scatterplot_rank_significance_horizontal
+
 # Render both scatterplots
-legs_scatterplot_rank_significance_horizontal %>% 
+legs_scatterplot_rank_significance_horizontal %>%
   ggsave(filename = here("Figures", "all_human_mouse_gsea_btm_results_leadingedge_core_ranks_scatterplot_horizontal.png"),
          width = 8, height = 3 )
 
@@ -2357,12 +2383,9 @@ legs_divergence_plot = dge_btm_process_genes_diff_bygene_clean_filtered %>%
       ) +
   facet_nested_wrap(~treatment+pathogen,
                     nrow = 1, axes = "all", scales = "free") +
-    geom_point(alpha = 0.2,
-             size = 0.5,
-            position = position_jitterdodge(jitter.width = 0.3, 
-                                    dodge.width = 0.75),) +
+  geom_violin(width = 1) +
   geom_boxplot(width = 0.3,
-               alpha = 1,
+               alpha = 0,
                color = "black",
                outliers = F) +
   scale_y_continuous(limits = c(0, 3), expand = c(0.01, 0.01)) +
@@ -2377,7 +2400,7 @@ legs_divergence_plot = dge_btm_process_genes_diff_bygene_clean_filtered %>%
     ),
     label.y.np = "top",
     label.y = 2.2,       
-    hide.ns = F, step.increase = 0,
+    hide.ns = T, step.increase = 0,
     size = 2.5, tip.length = 0,
   ) +
   scale_fill_manual(values = colors$comparison) +
@@ -2462,6 +2485,72 @@ legs_error_plot
 legs_error_plot %>% 
   ggsave(filename = here("Figures", "all_human_mouse_legs_error_plot.png"),
          height = 3, width = 8)
+
+```
+
+
+
+
+
+
+
+##### Is divergence in Log2FC associated with groups of processes?
+
+```{r fig.height=4, fig.width=6}
+##### Is divergence in Log2FC associated with groups of processes?
+dge_btm_process_genes_diff_bygene_process = dge_btm_process_genes_diff_bygene_clean_filtered %>% 
+  inner_join(btm_annotation_genes %>% 
+  select(process, hgnc_symbol = symbol, group, subgroup),
+  by = "hgnc_symbol")
+
+
+
+# Pooled
+dge_btm_process_genes_diff_bygene_process_pooled_plot = dge_btm_process_genes_diff_bygene_process %>% 
+  filter(status %in% c("All genes"),
+         treatment %in% c("Infection", "Injury")) %>%
+  mutate(group = fct_relevel(group, immune_order) %>% fct_rev()) %>% 
+  select(-process) %>% 
+  distinct() %>% 
+  ggplot() +
+  aes(x = abs_log2fc_diff,
+      y = group,
+      color = group,
+      fill =  group,
+      ) +
+  # facet_nested_wrap(~treatment+pathogen,
+  #                   nrow = 1, 
+  #                   # axes = "all",
+  #                   scales = "free_x"
+  #                   ) +
+  
+   geom_violin(alpha = 1,
+              width = 1,
+              color = NA) +
+  
+  # Boxplot centered on each status
+  geom_boxplot(
+    width = 0.5,
+    alpha = 0,
+    color = "black",
+    outliers = FALSE
+  ) +
+  scale_x_continuous(limits = c(0, 4), expand = c(0, 0)) +
+  scale_fill_manual(values = btm_immune_groups$group) +
+  scale_color_manual(values = btm_immune_groups$group) +
+  labs(x = "|ΔLog2FC|",
+       y = "",
+       fill = "",
+       color = "") +
+  theme_vaxgo() +
+  theme(legend.position = "none") 
+
+
+dge_btm_process_genes_diff_bygene_process_pooled_plot
+
+dge_btm_process_genes_diff_bygene_process_pooled_plot %>% 
+  ggsave(filename = here("Figures", "all_human_mouse_dge_btm_process_genes_diff_bygene_process_pooled.png"),
+         height = 4, width = 4)
 
 ```
 

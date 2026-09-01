@@ -292,7 +292,8 @@ theme_vaxgo <- function() {
       axis.text            = ggplot2::element_text(size = 10),
       axis.text.x          = ggplot2::element_text(size = 10, color = "black", angle = 0),
       axis.text.y          = ggplot2::element_text(size = 10, color = "black", angle = 0),
-      axis.title.y         = ggplot2::element_text(color = "black"),
+      axis.title.x         = ggplot2::element_text(color = "black", face = "bold"),
+      axis.title.y         = ggplot2::element_text(color = "black", face = "bold"),
       axis.line.x          = ggplot2::element_line(linewidth = 0.5, colour = "black", linetype = 1),
       axis.line.y          = ggplot2::element_line(linewidth = 0.5, colour = "black", linetype = 1),
       axis.ticks.x         = ggplot2::element_line(linewidth = 0.5, color = "black"),
@@ -319,7 +320,7 @@ theme_vaxgo <- function() {
       
       # Plot
       plot.title           = ggplot2::element_text(size = 10),
-      plot.subtitle        = ggplot2::element_text(size = 8),
+      plot.subtitle        = ggplot2::element_text(size = 10),
       plot.caption         = ggplot2::element_text(hjust = 0, size = 5),
       plot.margin          = ggplot2::margin(0.1, 0.1, 0.1, 0.1, "cm")
     )
