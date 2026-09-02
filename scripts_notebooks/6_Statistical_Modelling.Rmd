@@ -107,26 +107,6 @@ human_mouse_parameters_values %>%
 
 # Statistical modelling
 
-## Inputs
-```{r}
-#Create features tables for each model
-input_features = human_mouse_parameters_values
-
-human_mouse_features_regression = input_features %>% 
-  select(-status) %>% 
-  distinct() %>% 
-  select(treatment:abs_log2fc_diff,inverse_se_mouse, hgnc_symbol, everything())
-
-human_mouse_features_classification_legs = input_features %>% 
-  drop_na(status) %>% 
-  filter(status %in% c("Shared", "Not-shared")) %>% 
-  mutate(status = fct_relevel(status, "Not-shared")) %>% 
-  select(treatment:inverse_se_mouse, inverse_se_mouse, hgnc_symbol, status, everything()) %>% 
-  select(!c(abs_log2fc_diff)) 
-
-input_features
-```
-
 ## Features dictionary
 ```{r}
 library(dplyr)
@@ -228,19 +208,154 @@ feature_dictionary <- tibble::tibble(
   ) %>%
   dplyr::arrange(feature_type)
 
-feature_dictionary$feature_type %>% levels()
+
+# ==============================================================================
+# 1. BUILDING BLOCKS (CATEGORY-SPECIFIC FEATURE DEFINITIONS)
+# ==============================================================================
+
+# Experimental metadata and target outcome
+feat_base_experiment <- c("treatment", "pathogen", "timepoint_comparison", "hgnc_symbol")
+feat_base_outcome    <- c("inverse_se_mouse", "abs_log2fc_diff", "status")
+
+# Biological Modules
+feat_sequence_evolution <- c("dist_k80", "identity_human2mouse")
+
+feat_btms <- c(
+  "Not-BTM", "INNATE RESPONSE", "B CELLS", "T CELLS", "PLATELETS", 
+  "ECM AND MIGRATION", "ENERGY METABOLISM", "MONOCYTES", "CELL CYCLE", 
+  "IFN", "SIGNAL TRANSDUCTION", "NK CELLS", "NEUTROPHILS"
+)
+
+feat_tfs_selected    <- c("n_tf_total", "pct_tf_shared")
+
+
+# ==============================================================================
+# 2. BIOLOGICAL ABLATION CONTROLS (NEGATIVE CONTROLS)
+# ==============================================================================
+
+# [Ablation 1] Experimental metadata and DGE statistical precision only
+features_ablation_dge_only <- c(feat_base_experiment, feat_base_outcome)
+
+# [Ablation 2] DGE + Protein sequence conservation
+features_ablation_dge_seq <- c(features_ablation_dge_only, feat_sequence_evolution)
+
+features_ablation_btms <- c(features_ablation_dge_only, feat_sequence_evolution, feat_btms)
+
+# [Ablation 3] DGE + Sequence + Transcriptional Networks (TFs & BTMs) - NO epigenomics/cCREs
+features_ablation_no_ccre <- c(features_ablation_btms, feat_tfs_selected)
+
+
+# ==============================================================================
+# 3. REGULATORY RESOLUTION SETS (cCREs / ENHANCERS / PROMOTERS)
+# ==============================================================================
+
+# [Resolution 1] Minimal: Primary cCRE counts only (PLS, pELS, dELS) without BTMs
+features_ccre_baseline_minimal <- c(
+  features_ablation_no_ccre,
+  "n_total_cres_gene", 
+  "n_type_PLS", "n_type_pELS", "n_type_dELS"
+)
+
+
+# [Resolution 4] High: Includes subtype matching rates (% match)
+features_ccre_ctcf_match <- c(
+  features_ablation_no_ccre,
+  "n_total_cres_gene",
+  ## PLS
+  "n_type_PLS",                               # Count of PLS
+  "pct_match_type_PLS",                       # % Matching PLS subtype
+  "pct_match_ctcf_PLS_CTCF-bound",            # % Matching subtype
+  ## pELS
+  "n_type_pELS",                               # Count of pELS
+  "pct_match_type_pELS",                       # % Matching pELS subtype
+  "pct_match_ctcf_pELS_CTCF-bound",            # % Matching subtype
+  ## dELS
+  "n_type_dELS",                               # Count of dELS
+  "pct_match_type_dELS",                       # % Matching dELS subtype
+  "pct_match_ctcf_dELS_CTCF-bound"            # % Matching subtype
+)
+
+# [Resolution 5] Ultra-High: Adds complete homology and complex homology metrics
+features_ccre_full_homology <- c(
+  features_ablation_no_ccre,
+  "n_total_cres_gene",
+  
+  # --- cCREs: Promoter-like Sequences (PLS) ---
+  ## General PLS
+  "n_type_PLS",                               # Count of PLS
+  "pct_match_type_PLS",                       # % Matching PLS subtype
+  "pct_match_ctcf_PLS_CTCF-bound",            # % Matching subtype
+  "pct_homology_PLS_CTCF-bound_Homologous",   # % Homologous
+
+  # --- cCREs: Proximal Enhancer-like Sequences (pELS) ---
+  ## General pELS
+  "n_type_pELS",                               # Count of pELS
+  "pct_match_type_pELS",                       # % Matching pELS subtype
+  "pct_match_ctcf_pELS_CTCF-bound",            # % Matching subtype
+  "pct_homology_pELS_CTCF-bound_Homologous",   # % Homologous
+
+  # --- cCREs: Distal Enhancer-like Sequences (dELS) ---
+  ## General dELS
+  "n_type_dELS",                               # Count of dELS
+  "pct_match_type_dELS",                       # % Matching dELS subtype
+  "pct_match_ctcf_dELS_CTCF-bound",            # % Matching subtype
+  "pct_homology_dELS_CTCF-bound_Homologous"   # % Homologous
+)
+
+# ==============================================================================
+# 4. MASTER LIST FOR PIPELINE AND ROC EVALUATION
+# ==============================================================================
+
+feature_sets_list <- list(
+  # --- Biological Ablation Controls ---
+  "DGE Baseline"      = features_ablation_dge_only,
+  "+ Sequence"        = features_ablation_dge_seq,
+  "+ Sequence + BTMs"            = features_ablation_btms,
+  "+ Sequence + BTMs + TFs"             = features_ablation_no_ccre,
+  
+  # --- Regulatory Models (cCRE Resolution Gradient) ---
+  "+ CRE type"      = features_ccre_baseline_minimal,
+  "+ CTCF Split"        = features_ccre_ctcf_match,
+  "+ CRE type + CTCF + Homology"        = features_ccre_full_homology
+)
+
 ```
 
+## Inputs
+```{r}
+#Create features tables for each model
+input_features_selection = features_ablation_dge_seq
+input_features_name = "features_ablation_dge_seq"
 
+input_features = human_mouse_parameters_values %>% 
+  select(all_of(input_features_selection))
+
+input_features
+
+#Create features for regression and classification
+human_mouse_features_regression = input_features %>% 
+  select(-status) %>% 
+  distinct() %>% 
+  select(treatment:abs_log2fc_diff,inverse_se_mouse, hgnc_symbol, everything())
+human_mouse_features_regression
+
+human_mouse_features_classification_legs = input_features %>% 
+  drop_na(status) %>% 
+  filter(status %in% c("Shared", "Not-shared")) %>% 
+  mutate(status = fct_relevel(status, "Not-shared")) %>% 
+  select(treatment:inverse_se_mouse, inverse_se_mouse, hgnc_symbol, status, everything()) %>% 
+  select(!c(abs_log2fc_diff)) 
+human_mouse_features_classification_legs
+```
 
 #Data exploration
 
 ## Correlation
-```{r fig.height=14, fig.width=16}
+```{r fig.height=8, fig.width=10}
 library(Hmisc) # For fast pairwise correlation & p-value matrix computation
 
 # 1. Prepare numeric data matrix
-numeric_matrix <- human_mouse_parameters_values %>%
+numeric_matrix <- input_features %>%
   select(where(is.numeric)) %>%
   select(where(~ var(.x, na.rm = TRUE) > 0)) %>%
   as.matrix()
@@ -333,7 +448,7 @@ cor_long_annotated_matrixplot <- ggplot(
     axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1, size = 8),
     axis.text.y = element_text(size = 8),
     strip.text = element_text(size = 8, face = "bold"),
-    strip.text.x = element_text(angle = 90, hjust = 0, vjust = 0),
+    strip.text.x = element_text(angle = 90, hjust = 0, vjust = 0.5),
     strip.text.y = element_text(size = 8, hjust = 0, angle = 0),
     panel.grid = element_blank(),
     panel.spacing = unit(0.15, "lines")
@@ -341,9 +456,9 @@ cor_long_annotated_matrixplot <- ggplot(
 
 cor_long_annotated_matrixplot
 
-cor_long_annotated_matrixplot %>% 
-  ggsave(filename = here("Figures", "statistical_modelling_features_matrixplot_all.png"),
-         width = 16, height = 14)
+cor_long_annotated_matrixplot %>%
+  ggsave(filename = here("Figures", paste0( "statistical_modelling_features_matrixplot_", input_features_name, ".png")),
+         width = 12, height = 10)
 
 ```
 
@@ -355,34 +470,18 @@ cor_long_annotated_matrixplot %>%
 # Modelling
 
 ## Classify Shared vs Not-Shared LEGs
-```{r message=FALSE, warning=FALSE}
-# --------
-# Load required core libraries
-# --------
-library(tidyverse)
-library(tidymodels)
-library(ranger)
-library(pROC)
-library(here)
-
-# --------
+```{r fig.height=6, fig.width=8, message=FALSE, warning=FALSE}
 # Step 1: Define Classification Recipe with Near-Zero Variance Filter
-# --------
-
 classification_recipe <- recipes::recipe(status ~ ., data = human_mouse_features_classification_legs) %>%
   recipes::update_role(hgnc_symbol, treatment, pathogen, timepoint_comparison, new_role = "id") %>%
   recipes::step_dummy(recipes::all_nominal_predictors()) %>%
-  # Filter near-zero variance predictors to prevent numerical matrix collapse
   recipes::step_nzv(recipes::all_predictors()) %>%
   recipes::step_corr(recipes::all_numeric_predictors(), threshold = 0.9) %>%
   recipes::step_normalize(recipes::all_numeric_predictors())
 
-# --------
 # Step 2: Fit Penalized Logistic Regression Model (glmnet)
-# --------
-# Light Elastic Net penalty (penalty = 0.01) avoids exact 0/1 probability collapse
-logistic_spec <- logistic_reg(penalty = 0.01, mixture = 0.5) %>%
-  parsnip::set_engine("glmnet") %>%
+logistic_spec <- logistic_reg() %>%
+  parsnip::set_engine("glm") %>%
   parsnip::set_mode("classification")
 
 logistic_workflow <- workflows::workflow() %>%
@@ -391,9 +490,7 @@ logistic_workflow <- workflows::workflow() %>%
 
 logistic_fit <- workflows::fit(logistic_workflow, data = human_mouse_features_classification_legs)
 
-# --------
 # Step 3: Extract Tidy Odds Ratios (OR) and Join Dictionary
-# --------
 logistic_coefficients <- broom::tidy(logistic_fit, penalty = 0.01) %>%
   dplyr::filter(term != "(Intercept)") %>%
   dplyr::rename(feature_name_original = term) %>%
@@ -406,31 +503,19 @@ logistic_coefficients <- broom::tidy(logistic_fit, penalty = 0.01) %>%
     by = dplyr::join_by("feature_name_original")
   ) 
 
-# --------
 # Step 4: Compute Area Under the ROC Curve (AUC) Safely
-# --------
 prob_df <- stats::predict(logistic_fit, new_data = human_mouse_features_classification_legs, type = "prob") %>%
   dplyr::bind_cols(human_mouse_features_classification_legs %>% dplyr::select(status))
 
 roc_obj_logistic <- pROC::roc(
   response  = prob_df$status,
   predictor = prob_df$.pred_Shared,
-  levels    = c("Not_Shared", "Shared")
+  levels    = c("Not-shared", "Shared")
 )
 
 cat("Logistic AUC:", round(pROC::auc(roc_obj_logistic), 3), "\n")
-```
 
-
-```{r message=FALSE, warning=FALSE}
-# ==========================================
 # APPROACH 2: RANDOM FOREST CLASSIFIER (GINI IMPORTANCE)
-# ==========================================
-
-# --------
-# Step 2B: Configure Random Forest Classifier (No Tuning/CV)
-# --------
-# Define Random Forest specification with fixed classification parameters
 rf_cls_spec <- rand_forest(
   trees = 1000,
   mtry  = 8,       # Fixed number of predictors sampled at each split
@@ -444,9 +529,7 @@ rf_cls_workflow <- workflows::workflow() %>%
   workflows::add_recipe(classification_recipe) %>%
   workflows::add_model(rf_cls_spec)
 
-# --------
 # Fit Random Forest Classifier directly on the full classification dataset
-# --------
 final_rf_cls_fit <- workflows::fit(
   rf_cls_workflow, 
   data = human_mouse_features_classification_legs
@@ -455,9 +538,7 @@ final_rf_cls_fit <- workflows::fit(
 # Extract native ranger engine
 rf_cls_engine <- workflows::extract_fit_engine(final_rf_cls_fit)
 
-# --------
 # Extract Gini Impurity feature importance metric
-# --------
 rf_cls_importance <- tibble::tibble(
   feature_name_original = names(rf_cls_engine$variable.importance),
   importance            = as.numeric(rf_cls_engine$variable.importance)
@@ -467,85 +548,305 @@ rf_cls_importance <- tibble::tibble(
     by = dplyr::join_by("feature_name_original")
   )
 
-# --------
-# Save model artifacts and importance metrics
-# --------
-# Save
-saveRDS(final_rf_cls_fit, file = here::here("tables", "final_rf_cls_fit.rds"))
-saveRDS(rf_cls_importance, file = here::here("tables", "rf_cls_importance.rds"))
-```
+# Step 4: Compute Area Under the ROC Curve (AUC)
+prob_df_rf <- stats::predict(final_rf_cls_fit, new_data = human_mouse_features_classification_legs, type = "prob") %>%
+  dplyr::bind_cols(human_mouse_features_classification_legs %>% dplyr::select(status))
 
+roc_obj_rf <- pROC::roc(
+  response  = prob_df_rf$status,
+  predictor = prob_df_rf$.pred_Shared,
+  levels    = c("Not-shared", "Shared")
+)
 
-```{r fig.height=8, fig.width=8, message=FALSE, warning=FALSE}
-# --------
+cat("Logistic AUC:", round(pROC::auc(roc_obj_rf), 3), "\n")
+
+# Reorder feature names
+feature_names_order = logistic_coefficients %>% 
+  arrange(estimate) %>% 
+  pull(feature_name) %>% 
+  unique()
+
 # Step 5: Filter OR data and render Forest Plot
-# --------
 p_odds_ratio_forest <- logistic_coefficients %>%
-  ggplot2::ggplot() +
-  ggplot2::aes(
+  mutate(feature_name = fct_relevel(feature_name, c(feature_names_order))) %>% 
+  ggplot() +
+  aes(
     x     = estimate,
-    y     = feature_name %>% fct_rev()
+    y     = feature_name
   ) +
-  ggplot2::geom_vline(xintercept = 1, linetype = "dashed", color = "gray50", linewidth = 0.6) +
-    ggplot2::geom_point(aes(fill = feature_type),
+  facet_grid(feature_type~., scales = "free_y", space = "free_y") +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50", linewidth = 0.6) +
+    geom_point(aes(fill = feature_type),
                         size = 2.5, shape = 21, 
                       color = "black") +
   scale_fill_manual(values = colors_all$blues) +
-  ggplot2::labs(
+  labs(
     x     = "Odds Ratio",
     y     = "Feature Predictor",
     fill  = "Feature Category",
-    # title = paste0("Logistic Regression: Predictors of Shared LEGs (AUC = ", round(pROC::auc(roc_obj_logistic), 3), ")")
+    title = paste0("Logistic Regression:\nShared LEGs (AUC = ", round(pROC::auc(roc_obj_logistic), 3), ")")
   ) +
   theme_vaxgo() +
   theme(
-    legend.position = "right",
+    legend.position = "none",
     legend.location = "plot",
     axis.text.y     = element_text(size = 10), 
     strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)
   ) 
-  # guides(fill = guide_legend(nrow        = 3,
-  #     byrow       = TRUE,
-  #     title.position = "top"))
 
-print(p_odds_ratio_forest)
-
-```
-
-
-
-
-```{r message=FALSE, warning=FALSE}
-# ==========================================
-# VISUALIZATION & FEATURE SELECTION PLOTS
-# ==========================================
-# --------
-# Step 3B: Render Variable Importance Plot for Random Forest Classifier
-# --------
+# Render Variable Importance Plot for Random Forest Classifier
 p_rf_cls_importance <- rf_cls_importance %>%
-  dplyr::slice_max(importance, n = 20) %>%
-  dplyr::mutate(
-    feature_clean = forcats::fct_reorder(feature_name_original, importance)
-  ) %>%
-  ggplot2::ggplot() +
-  ggplot2::aes(x = importance, y = feature_clean, fill = feature_type) +
-  ggplot2::geom_col(width = 0.6) +
-  ggplot2::labs(
-    x     = "Variable Importance (Gini Impurity Reduction)",
+  mutate(feature_name = fct_relevel(feature_name, c(feature_names_order))) %>% 
+  ggplot() +
+  aes(x = importance, y = feature_name, fill = feature_type) +
+  facet_grid(feature_type~., scales = "free_y", space = "free_y") +
+  geom_col(width = 0.6) +
+  scale_fill_manual(values = colors_all$blues) +
+  labs(
+    x     = "Gini Impurity",
     y     = "Feature Predictor",
     fill  = "Feature Category",
-    title = "Random Forest Classifier: Top 20 Predictors of Shared Status"
-  ) +
+    title = paste0("Random Forest Classifier:\nShared LEGs (AUC = ", round(pROC::auc(roc_obj_rf), 3), ")"
+  )) +
   theme_vaxgo() +
-  ggplot2::theme(legend.position = "right") +
-  scale_fill_manual(values = colors_all$blues) 
+  theme(
+    legend.position = "none",
+    legend.location = "plot",
+    axis.text.y     = element_text(size = 10), 
+    strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)
+  ) 
 
-# Print evaluation plots
 
-print(p_rf_cls_importance)
+# 4. Merge plots (LM vs RF)
+coefficients_classifier_patch_plot = (p_odds_ratio_forest + theme(strip.text.y = element_blank())) +
+  p_rf_cls_importance +
+  plot_layout(widths = c(0.5, 0.5), guides = "collect", axes = "collect") +
+  plot_annotation(title = input_features_name)
 
+coefficients_classifier_patch_plot 
+
+coefficients_classifier_patch_plot %>%
+  ggsave(filename = here("Figures", paste0( "statistical_modelling_coefficients_classifier_", input_features_name, ".png")),
+         width = 8,
+         height = 1.5)
 
 ```
+
+
+### ROC curve
+```{r fig.height=4, fig.width=4}
+# ROC curve
+df_roc_logistic <- pROC::ggroc(roc_obj_logistic)$data %>%
+  dplyr::mutate(
+    model = paste0("Logistic Regression (AUC = ", round(pROC::auc(roc_obj_logistic), 3), ")")
+  )
+
+df_roc_rf <- pROC::ggroc(roc_obj_rf)$data %>%
+  dplyr::mutate(
+    model = paste0("Random Forest (AUC = ", round(pROC::auc(roc_obj_rf), 3), ")")
+  )
+
+df_roc_combined <- dplyr::bind_rows(df_roc_logistic, df_roc_rf)
+
+p_roc_comparison <- ggplot(df_roc_combined) +
+  aes(
+    x = 1 - specificity, # Convert to False Positive Rate
+    y = sensitivity, 
+    color = model
+  ) +
+  
+  # Diagonal reference line for random classifier (AUC = 0.5)
+  geom_segment(
+    aes(x = 0, y = 0, xend = 1, yend = 1),
+    linetype = "dashed", 
+    color = "gray60", 
+    linewidth = 0.6
+  ) +
+  
+  # Model ROC curves
+  geom_line(linewidth = 1.2) +
+  
+  # Color palette and scale adjustments
+  scale_color_manual(values = c(
+    "Logistic Regression" = "#001219", 
+    "Random Forest"       = "#4DBBD5FF"
+  ) %>% setNames(unique(df_roc_combined$model))) +
+  
+  scale_x_continuous(expand = c(0, 0.01), limits = c(0, 1)) +
+  scale_y_continuous(expand = c(0, 0.01), limits = c(0, 1)) +
+  
+  coord_fixed() + # Force 1:1 aspect ratio on the plot
+  
+  labs(
+    x = "1 - Specificity (False Positive Rate)",
+    y = "Sensitivity (True Positive Rate)",
+    color = "Classifier Model",
+    title = paste0("ROC Curves: LEGs Classification\n",
+                   input_features_name)
+  ) +
+  
+  theme_vaxgo() +
+  theme(
+    legend.position = c(0.65, 0.2),
+    legend.text = element_text(size = 9, face = "bold"),
+    plot.title.position = "plot"
+  )
+
+#Display
+p_roc_comparison
+
+#Save
+p_roc_comparison %>%
+  ggsave(filename = here("Figures", paste0( "statistical_modelling_coefficients_classifier_roccurve_", input_features_name, ".png")),
+         width = 4,
+         height = 4)
+
+```
+
+
+
+
+
+### Iterate over all features
+
+```{r fig.height=4, fig.width=6}
+
+all_roc_data_list <- purrr::imap(feature_sets_list, function(current_selection, set_name) {
+  
+  cat("Processing:", set_name, "\n")
+  
+  # 1. Filter classification dataset
+  df_classification <- human_mouse_parameters_values %>%
+    select(all_of(current_selection)) %>%
+    drop_na(status) %>%
+    filter(status %in% c("Shared", "Not-shared")) %>%
+    mutate(status = factor(status, levels = c("Not-shared", "Shared"))) %>%
+    select(!any_of("abs_log2fc_diff"))
+  
+  # 2. Standardized preprocessing recipe
+  cls_recipe <- recipe(status ~ ., data = df_classification) %>%
+    update_role(hgnc_symbol, treatment, pathogen, timepoint_comparison, new_role = "id") %>%
+    step_dummy(all_nominal_predictors()) %>%
+    step_nzv(all_predictors()) %>%
+    step_corr(all_numeric_predictors(), threshold = 0.9) %>%
+    step_normalize(all_numeric_predictors())
+  
+  # 3. Count remaining predictors after recipe filtering
+  prep_rec <- prep(cls_recipe, training = df_classification)
+  baked_predictors <- bake(prep_rec, new_data = NULL) %>% 
+    select(-status, -has_role("id"))
+  
+  num_cols <- ncol(baked_predictors)
+  cat("  -> Predictor columns used:", num_cols, "\n")
+  
+  # ----------------------------------------------------------------------------
+  # MODEL 1: Logistic Regression (Native R glm engine - supports 1 or more predictors)
+  # ----------------------------------------------------------------------------
+  logistic_spec <- parsnip::logistic_reg() %>% 
+    parsnip::set_engine("glm")
+  
+  fit_logistic <- workflows::workflow() %>%
+    workflows::add_recipe(cls_recipe) %>%
+    workflows::add_model(logistic_spec) %>%
+    workflows::fit(data = df_classification)
+  
+  pred_logistic <- stats::predict(fit_logistic, new_data = df_classification, type = "prob")$.pred_Shared
+  roc_logistic  <- pROC::roc(response = df_classification$status, predictor = pred_logistic, levels = c("Not-shared", "Shared"))
+  
+# ----------------------------------------------------------------------------
+  # MODEL 2: Random Forest (mtry dynamically bounded to not exceed num_cols)
+  # ----------------------------------------------------------------------------
+  rf_mtry <- min(8, max(1, num_cols))
+  
+  rf_spec <- parsnip::rand_forest(trees = 1000, mtry = rf_mtry, min_n = 5) %>% 
+    parsnip::set_engine("ranger", importance = "impurity") %>% 
+    parsnip::set_mode("classification")
+  
+  fit_rf <- workflows::workflow() %>%
+    workflows::add_recipe(cls_recipe) %>%
+    workflows::add_model(rf_spec) %>%
+    workflows::fit(data = df_classification)
+  
+  pred_rf <- stats::predict(fit_rf, new_data = df_classification, type = "prob")$.pred_Shared
+  roc_rf  <- pROC::roc(response = df_classification$status, predictor = pred_rf, levels = c("Not-shared", "Shared"))
+
+# ----------------------------------------------------------------------------
+  # Return structured ROC data
+  # ----------------------------------------------------------------------------
+  bind_rows(
+    pROC::ggroc(roc_logistic)$data %>% 
+      mutate(model = "Logistic Regression", auc = round(pROC::auc(roc_logistic), 3)),
+    pROC::ggroc(roc_rf)$data %>% 
+      mutate(model = "Random Forest", auc = round(pROC::auc(roc_rf), 3))
+  ) %>% 
+    mutate(
+      feature_set = set_name,
+      curve_label = paste0(model, " - ", set_name, " (AUC = ", auc, ")")
+    )
+})
+
+# Combine all iterations into a single master data frame
+df_master_roc <- bind_rows(all_roc_data_list) %>% 
+    mutate(feature_set = fct_relevel(feature_set,"DGE Baseline",
+      "+ Sequence",
+      "+ TFs & BTMs",
+      "Minimal cCRE",
+      "CTCF Split",
+      "Full Model"
+    )
+  )
+
+# 4. Option B: Faceted Comparison (Clearer visual separation by Feature Set)
+p_master_roc <- ggplot(df_master_roc) +
+  aes(
+    x = 1 - specificity, 
+    y = sensitivity, 
+    color = feature_set,
+    linetype = model
+  ) +
+  geom_segment(aes(x = 0, y = 0, xend = 1, yend = 1), linetype = "dashed", color = "gray70", linewidth = 0.5) +
+  geom_line(linewidth = 0.5) +
+  scale_color_manual(values = colors$feature_sets) +
+  scale_linetype_manual(values = c("Logistic Regression" = 2, "Random Forest" = 1)) +
+
+  scale_x_continuous(expand = c(0, 0.01), limits = c(0, 1)) +
+  scale_y_continuous(expand = c(0, 0.01), limits = c(0, 1)) +
+  labs(
+    x = "1 - Specificity (False Positive Rate)",
+    y = "Sensitivity (True Positive Rate)",
+    color = "Model",
+    linetype = "Algorithm",
+    title = "ROC Curve Comparison Faceted by Feature Selection Subsets"
+  ) +
+  theme_vaxgo() +
+  theme(
+    legend.key.width = unit(1, "cm"),
+    legend.position = "inside", 
+    plot.title.position = "plot",
+    legend.position.inside = c(0.75, 0.35),
+    legend.background = element_rect(
+      fill = "white",
+      color = NA)
+  ) +
+  guides(
+    linetype = guide_legend(override.aes = list(linewidth = 0.5))
+  ) 
+
+#Display
+p_master_roc 
+
+# Save Master Plot
+p_master_roc %>%
+  ggsave(
+    filename = here::here("Figures", "statistical_modelling_classifier_master_combined.png"),
+    width = 6,
+    height = 4
+  )
+```
+
+
+
+
 
 
 
@@ -664,12 +965,6 @@ rf_importance <- tibble(
   importance            = as.numeric(rf_engine$variable.importance)
 ) %>%
   inner_join(feature_dictionary, by = join_by("feature_name_original"))
-```
-
-
-### Model evaluation
-
-```{r fig.height=20, fig.width=12}
 
 # ==============================================================================
 # 4. EVALUATION & MODEL COMPARISON METRICS
@@ -679,13 +974,11 @@ eval_table <- human_mouse_features_regression %>%
   select(abs_log2fc_diff) %>%
   bind_cols(
     predict(linear_fit, new_data = human_mouse_features_regression) %>% rename(pred_linear = .pred),
-    predict(glm_fit, new_data = human_mouse_features_regression)    %>% rename(pred_glm = .pred),
     predict(final_rf_fit, new_data = human_mouse_features_regression) %>% rename(pred_rf = .pred)
   )
 
 # Calculate RMSE and R2 across all 4 models
 metrics_lm  <- metric_set(rmse, rsq)(eval_table, truth = abs_log2fc_diff, estimate = pred_linear) %>% mutate(model = "Linear (LM)")
-metrics_glm <- metric_set(rmse, rsq)(eval_table, truth = abs_log2fc_diff, estimate = pred_glm)    %>% mutate(model = "GLM")
 metrics_rf  <- metric_set(rmse, rsq)(eval_table, truth = abs_log2fc_diff, estimate = pred_rf)     %>% mutate(model = "Random Forest")
 
 model_comparison_metrics <- bind_rows(metrics_lm, metrics_glm, metrics_rf)
@@ -697,9 +990,8 @@ name_order <- rf_importance %>%
   mutate(feature_name = fct_inorder(feature_name))
 ```
 
-### Visualizations
 
-#### Forest plot and Importance plot
+### Forest plot and Importance plot
 ```{r fig.height=12, fig.width=12}
 # ==============================================================================
 # 5. VISUALIZATIONS
@@ -768,18 +1060,17 @@ p_rf_importance <- rf_importance %>%
   theme(legend.position = "right", strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5))
 
 
-# 4. Composite 3-Panel Plot (LM vs GLM vs RF)
-(linear_coefficients_forest_plot + theme(strip.text.y = element_blank())) +
+# 4. Merge plots (LM vs RF)
+coeffiecients_patch_plot = (linear_coefficients_forest_plot + theme(strip.text.y = element_blank())) +
   p_rf_importance +
   plot_layout(widths = c(0.5, 0.5), guides = "collect", axes = "collect")
-```
 
+coeffiecients_patch_plot %>%
+  ggsave(filename = here("Figures", paste0("statistical_modelling_coefficients_patch_plot_",input_features_name,  ".png")),
+         width = 12,
+         height = 6)
 
-
-#### Plot Observed vs Predicted values across models
-```{r fig.height=6, fig.width=3}
-
-library(tune) # For coord_obs_pred()
+#### Plot Observed vs Predicted values across models ============
 
 # 1. Extract R² values dynamically for accurate facet labels
 r2_lm  <- round(model_comparison_metrics$.estimate[model_comparison_metrics$model == "Linear (LM)" & model_comparison_metrics$.metric == "rsq"], 3)
@@ -825,8 +1116,8 @@ p_obs_vs_pred <- eval_table %>%
   tune::coord_obs_pred() +
   
   labs(
-    x = expression("Observed Divergence (" * "|" * Delta * "Log"[2] * "FC|" * ")"),
-    y = expression("Predicted Divergence (" * hat(Y) * ")"),
+    x = "Observed Divergence",
+    y = "Predicted",
     title = "Observed vs. Predicted\nLog2FC Divergence"
   ) +
   theme_vaxgo() +
@@ -839,6 +1130,11 @@ p_obs_vs_pred <- eval_table %>%
 # Display Plot
 print(p_obs_vs_pred)
 
+#Save
+p_obs_vs_pred %>%
+  ggsave(filename = here("Figures", paste0("statistical_modelling_p_obs_vs_pred.png",input_features_name,  ".png")),
+         width = 3,
+         height = 6)
 ```
 
 

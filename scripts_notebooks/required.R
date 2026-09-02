@@ -14,7 +14,7 @@ cran_pkgs <- c(
   "ggpp", "corto", "Hmisc", "patchwork", "tidymodels", "TidyDensity", "forcats", "deeptime",
   "GGally", "ggbeeswarm", "geomtextpath", "ggfx", "rstatix", "matrixTests",  "seqinr", "ape",
   "pkgconfig", "wCorr", "weights", "ggpubr", "rstatix", "emmeans", "effectsize", "coin", "ggtext",
-  "ranger", "gghalves"
+  "ranger", "gghalves", "pROC"
 )
 
 bioc_pkgs <- c(
@@ -195,7 +195,16 @@ colors = list(organism = c("FIT" = "#4361ee",
                            "Burn" = "#184e77"),
               treatment = c("Vaccination" = "#b9dbf4",
                             "Infection" = "#317ec2",
-                            "Injury" = "#155289")
+                            "Injury" = "#155289"),
+              feature_sets = c(
+                "DGE Baseline"      = "#b9dbf4",
+                "+ Sequence"        = "#a2d2ff",
+                "+ Sequence + BTMs"      = "#317ec2",
+                "+ Sequence + BTMs + TFs"      = "#184e77",
+                "+ CRE type"      = "#A1B0F7",
+                "+ CTCF Split"        = "#4361ee",
+                "+ CRE type + CTCF + Homology"        = "#00A087FF"
+              )
               )
 
 
