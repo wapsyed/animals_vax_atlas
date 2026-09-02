@@ -354,7 +354,7 @@ cor_long_annotated_matrixplot %>%
 
 # Modelling
 
-### Classify Shared vs Not-Shared LEGs
+## Classify Shared vs Not-Shared LEGs
 ```{r message=FALSE, warning=FALSE}
 # --------
 # Load required core libraries
@@ -554,8 +554,10 @@ print(p_rf_cls_importance)
 
 
 
-### Predict Log2FC Divergence Magnitude
+## Predict Log2FC Divergence Magnitude
 
+
+### Model specifications
 ```{r}
 library(mgcv)     # For GAM engine
 library(vip)      # For Permutation Importance
@@ -597,7 +599,7 @@ linear_coefficients <- broom::tidy(linear_lm_engine, conf.int = TRUE) %>%
 # MODEL 2: Generalized Linear Model (GLM - Gamma / Log Link for skewed |Log2FC|)
 # Note: For non-negative continuous outcomes like |ΔLog2FC|, Gamma GLM is ideal.
 glm_spec <- linear_reg() %>%
-  set_engine("glm", family = stats::gaussian(link = "identity")) %>% # Change family/link as needed
+  set_engine("glm", family = stats::Gamma(link = "log")) %>%
   set_mode("regression")
 
 glm_fit <- workflow() %>%
@@ -612,6 +614,33 @@ glm_coefficients <- broom::tidy(glm_engine, conf.int = TRUE) %>%
   rename(feature_name_original = term) %>%
   mutate(feature_name_original = str_replace_all(feature_name_original, "`", "")) %>% 
   inner_join(feature_dictionary, by = join_by("feature_name_original"))
+
+
+# MODEL 3: Generalized Additive Model (GAM) ------------------------------------
+# Uses mgcv to fit flexible non-linear smooth splines
+# 1. Especificação do GAM
+gam_spec <- gen_additive_mod() %>%
+  set_engine("mgcv") %>%
+  set_mode("regression")
+
+# 2. Identificar preditores numéricos
+numeric_vars <- human_mouse_features_regression %>%
+  dplyr::select(where(is.numeric), -abs_log2fc_diff) %>%
+  colnames()
+
+# 3. Construir a fórmula envolvendo os nomes entre crases: s(`NOME_DA_VARIAVEL`)
+gam_formula <- as.formula(
+  paste0("abs_log2fc_diff ~ ", paste0("s(`", numeric_vars, "`)", collapse = " + "))
+)
+
+# 4. Ajustar o Workflow fornecendo a fórmula corrigida no add_model()
+gam_fit <- workflow() %>%
+  add_recipe(regression_recipe) %>%
+  add_model(gam_spec, formula = gam_formula) %>%
+  fit(data = human_mouse_features_regression)
+
+# 5. Extrair o motor nativo do mgcv
+gam_engine <- extract_fit_engine(gam_fit)
 
 
 # MODEL : Random Forest (RF) --------------------------------------------------
@@ -638,27 +667,9 @@ rf_importance <- tibble(
 ```
 
 
+### Model evaluation
 
 ```{r fig.height=20, fig.width=12}
-# ==============================================================================
-# 3. PERMUTATION FEATURE IMPORTANCE (UNIFIED FOR EXPLANATORY COMPARISON)
-# ==============================================================================
-
-# Calculate permutation importance Random Forest (Standardized metric)
-# Custom prediction wrapper to bridge vip (newdata) with tidymodels (new_data)
-predict_wrapper <- function(object, newdata) {
-  predict(object, new_data = newdata)$.pred
-}
-# 2. Permutation Importance for Random Forest
-rf_perm_imp <- vip::vi_permute(
-  object = final_rf_fit,
-  target = "abs_log2fc_diff",
-  metric = "rmse",
-  pred_wrapper = predict_wrapper,
-  train = human_mouse_features_regression,
-  nsim = 5
-) %>%
-  rename(feature_name_original = Variable, importance_rf = Importance)
 
 # ==============================================================================
 # 4. EVALUATION & MODEL COMPARISON METRICS
@@ -686,8 +697,10 @@ name_order <- rf_importance %>%
   mutate(feature_name = fct_inorder(feature_name))
 ```
 
+### Visualizations
 
-```{r fig.height=12, fig.width=16}
+#### Forest plot and Importance plot
+```{r fig.height=12, fig.width=12}
 # ==============================================================================
 # 5. VISUALIZATIONS
 # ==============================================================================
@@ -757,46 +770,73 @@ p_rf_importance <- rf_importance %>%
 
 # 4. Composite 3-Panel Plot (LM vs GLM vs RF)
 (linear_coefficients_forest_plot + theme(strip.text.y = element_blank())) +
-  (glm_coefficients_forest_plot + theme(strip.text.y = element_blank())) +
   p_rf_importance +
-  plot_layout(widths = c(0.33, 0.33, 0.34), guides = "collect", axes = "collect")
+  plot_layout(widths = c(0.5, 0.5), guides = "collect", axes = "collect")
 ```
 
 
 
-
+#### Plot Observed vs Predicted values across models
 ```{r fig.height=6, fig.width=3}
 
-# Plot Observed vs Predicted values across models
+library(tune) # For coord_obs_pred()
+
+# 1. Extract R² values dynamically for accurate facet labels
+r2_lm  <- round(model_comparison_metrics$.estimate[model_comparison_metrics$model == "Linear (LM)" & model_comparison_metrics$.metric == "rsq"], 3)
+r2_rf  <- round(model_comparison_metrics$.estimate[model_comparison_metrics$model == "Random Forest" & model_comparison_metrics$.metric == "rsq"], 3)
+
+# 2. Reshape predictions and plot Observed vs. Predicted across all 4 models
 p_obs_vs_pred <- eval_table %>%
   pivot_longer(
-    cols      = c( pred_rf, pred_linear),
-    names_to  = "model",
+    cols      = c(pred_linear, pred_rf),
+    names_to  = "model_key",
     values_to = "predicted"
   ) %>%
   mutate(
-    model = case_when(model == "pred_rf" ~ "Random Forest (R² = 0.7)",
-                      model == "pred_linear" ~ "Linear model (R² = 0.129)",
-                      T ~ NA)
+    model = case_when(
+      model_key == "pred_linear" ~ paste0("Linear Model (R² = ", r2_lm, ")"),
+      model_key == "pred_rf"     ~ paste0("Random Forest (R² = ", r2_rf, ")"),
+      TRUE ~ NA_character_
+    ),
+    # Relevel factors to preserve structural layout from linear to complex models
+    model = factor(model, levels = c(
+      paste0("Linear Model (R² = ", r2_lm, ")"),
+      paste0("Random Forest (R² = ", r2_rf, ")")
+    ))
   ) %>%
-  ggplot() +
-  aes(x = abs_log2fc_diff, 
-      y = predicted, 
-      color = model) +
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  ggplot(aes(x = abs_log2fc_diff, y = predicted)) +
+  
+  # Identity reference line (1:1 perfect prediction)
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.6) +
+  
+  # Scatter points
   geom_point(alpha = 0.15, size = 1, color = "black") +
-  geom_smooth(method = "lm", se = T, size = 1, color = "#4DBBD5FF") +
-  facet_wrap(~ model, nrow = 2, axes = "all") +
+  
+  # Linear calibration fit line per model
+  geom_smooth(method = "lm", se = TRUE, linewidth = 1, color = "#4DBBD5FF") +
+  
+  # 2x2 Facet grid layout
+  facet_wrap(~ model, ncol = 1) +
+  
   scale_x_continuous(expand = c(0, 0)) +
   scale_y_continuous(expand = c(0, 0)) +
-  coord_obs_pred() +
+  
+  # Force 1:1 aspect ratio across axes
+  tune::coord_obs_pred() +
+  
   labs(
-    x     = expression("Observed Divergence (" * "|" * Delta * "Log"[2] * "FC|" * ")"),
-    y     = expression("Predicted Divergence (" * hat(Y) * ")")
+    x = expression("Observed Divergence (" * "|" * Delta * "Log"[2] * "FC|" * ")"),
+    y = expression("Predicted Divergence (" * hat(Y) * ")"),
+    title = "Observed vs. Predicted\nLog2FC Divergence"
   ) +
   theme_vaxgo() +
-  theme(legend.position = "none", plot.title.position = "plot")
+  theme(
+    legend.position = "none",
+    plot.title.position = "plot",
+    strip.text = element_text(size = 10, face = "bold")
+  )
 
+# Display Plot
 print(p_obs_vs_pred)
 
 ```
