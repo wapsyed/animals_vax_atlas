@@ -443,7 +443,7 @@ log2fc_distribution_control_condition_boxplot
 
 
 #### Log2FC diff vs. 1/SE
-```{r fig.height=3, fig.width=12, message=FALSE, warning=FALSE}
+```{r fig.height=2.5, fig.width=12, message=FALSE, warning=FALSE}
 
 
 #### Difference in means vs. status
@@ -461,69 +461,93 @@ log2fc_wide_allconditions = human_mouse_log2fc_avg_wide_degs_all_immune_nonimmun
                             T ~ NA))
 
 #Categorize in difference in log2fc and sign difference
-log2fc_wide_effect_error_plot = log2fc_wide_allconditions %>% 
+log2fc_wide_effect_error_plot_df = log2fc_wide_allconditions %>% 
     filter((pathogen == "E. coli" & timepoint_comparison == "24h-12h" |
             pathogen == "S. aureus" & timepoint_comparison == "24h-12h" |
             pathogen == "Burn" & timepoint_comparison == "Early hours-Day 7"|
             pathogen == "Trauma" & timepoint_comparison == "Day 7-Day 3"|
             pathogen == "Influenza" & timepoint_comparison == "Day 1-Day 7" |
-            pathogen == "HepB" & timepoint_comparison == "Day 7-Day 7")) %>% 
-  # filter(treatment != "Vaccination") %>% 
+            pathogen == "HepB" & timepoint_comparison == "Day 7-Day 7"))
+
+# Combine original data with Pooled summary group
+log2fc_wide_effect_error_plot_df_pooled <- log2fc_wide_effect_error_plot_df %>% 
+  bind_rows(
+    log2fc_wide_effect_error_plot_df %>% 
+      mutate(treatment = "Pooled", pathogen = "")
+  ) %>% 
+  mutate(treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury", "Pooled"))
+
+log2fc_wide_effect_error_plot = log2fc_wide_effect_error_plot_df_pooled %>% 
   select(treatment, pathogen, timepoint_comparison, is_deg, diff_sign_binary, mean_log2fc_diff, se_mouse, weight_se_inverse_combined) %>%
   distinct() %>% 
-  ggplot() +
-  aes(x = 1/se_mouse,
-      y = abs(mean_log2fc_diff)) +
-  facet_nested_wrap(~treatment+pathogen, nrow = 1, 
-                    scales = "free_x"
-                    )+
-  geom_point(pch = 21,
-             alpha = 0.01,
-             size = 1,
-             stroke = 0,
-             mapping = aes(fill = is_deg),
-             data = . %>% filter(is_deg == "not DEG, both")) +
-  geom_point(pch = 21,
-           alpha = 0.2,
-           size = 1,
-           stroke = 0,
-           mapping = aes(fill = is_deg),
-           data = . %>% filter(is_deg %in% c("DEG, mouse", "DEG, human"))) +
-    geom_point(pch = 21,
-           alpha = 0.5,
-           size = 1,
-           stroke = 0,
-           mapping = aes(fill = is_deg),
-           data = . %>% filter(is_deg %in% c("DEG, both"))) +
-  geom_smooth(method = "lm", 
-              mapping = aes(color = is_deg,
-                            fill = is_deg),
-              se = T, show.legend = F) +
-  geom_smooth(method = "lm",
-              color = "black",
-              linetype = 2) +
-  guides(
-    color = "none",
-    fill  = guide_legend(
-      override.aes = list(
-        shape = 22,
-        alpha = 1, size = 3
-      )
-    )
+  ggplot(aes(
+    x = 1 / se_mouse,
+    y = abs(mean_log2fc_diff),
+    color = is_deg,
+    fill = is_deg
+  )) +
+  facet_nested_wrap(~ treatment + pathogen, nrow = 1, scales = "free_x") +
+  
+  # Group-specific Linear Regressions
+  geom_smooth(
+    method = "lm",
+    mapping = aes(color = is_deg, fill = is_deg),
+    se = TRUE
   ) +
+  
+  # Marginal Violin Plot (Top Side)
+  geom_violin(
+    mapping = aes(
+      x = 1 / se_mouse,
+      y = 3
+    ),
+    outliers = FALSE,
+    outlier.shape = NA,
+    alpha = 0.5,
+    width = 0.75,
+    color = NA,
+    show.legend = FALSE
+  ) +
+  
+  # Marginal Boxplot (Top Side)
+  geom_boxplot(
+    mapping = aes(
+      x = 1 / se_mouse,
+      y = 3
+    ),
+    outliers = FALSE,
+    outlier.shape = NA,
+    alpha = 0, 
+    linewidth = 0.2,
+    color = "black",
+    width = 0.75,
+    show.legend = FALSE
+  ) +
+  
+  # Scales & Formatting
   scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) +
   scale_y_continuous(expand = c(0, 0)) +
-  scale_fill_manual(values = colors$degs_comparison) +
-  scale_color_manual(values = colors$degs_comparison) +
-  labs(fill = "DEG or not DEG",
-       x = "1/SE (mouse)",
-       y = "|ΔMean Log2FC|",
-       color = "",
-       fill = "") +
+  scale_fill_manual(values = colors$degs_comparison_line) +
+  scale_color_manual(values = colors$degs_comparison_line) +
+  labs(
+    x = "1/SE (mouse)",
+    y = "|ΔMean Log2FC|",
+    fill = "DEG or not DEG"
+  ) +
   theme_vaxgo() +
-  theme(legend.position = "top",
-        panel.spacing = grid::unit(0.7, "cm"),
-        plot.margin          = ggplot2::margin(0.1, 0.5, 0.1, 0.1, "cm")) 
+  theme(
+    legend.position = "top",
+    panel.spacing = grid::unit(0.7, "cm")
+  ) +
+  guides(
+    color = "none",
+    fill = guide_legend(
+      title.position = "left",
+      byrow = TRUE,
+      nrow = 1,
+      override.aes = list(shape = 22, alpha = 1, size = 3, linetype = 0)
+    )
+  )
 
 #Print
 log2fc_wide_effect_error_plot
@@ -531,246 +555,93 @@ log2fc_wide_effect_error_plot
 log2fc_wide_effect_error_plot %>%
   ggsave(filename = here("Figures", "all_human_mouse_dge_degs_mean_se_condition_selected.png"),
          width = 12,
-         height = 3)
+         height = 2.5)
   
+
+
 
 ```
-
-
-```{r fig.height=3, fig.width=3}
-#Categorize in difference in log2fc and sign difference
-log2fc_wide_effect_error_plot_pooled = log2fc_wide_allconditions %>% 
-    filter((pathogen == "E. coli" & timepoint_comparison == "24h-12h" |
-            pathogen == "S. aureus" & timepoint_comparison == "24h-12h" |
-            pathogen == "Burn" & timepoint_comparison == "Early hours-Day 7"|
-            pathogen == "Trauma" & timepoint_comparison == "Day 7-Day 3"|
-            pathogen == "Influenza" & timepoint_comparison == "Day 1-Day 7" |
-            pathogen == "HepB" & timepoint_comparison == "Day 7-Day 7")) %>% 
-  # filter(treatment != "Vaccination") %>% 
-  select(treatment, pathogen, timepoint_comparison, is_deg, diff_sign_binary, mean_log2fc_diff, se_mouse, weight_se_inverse_combined) %>%
-  distinct() %>% 
-  ggplot() +
-  aes(x = 1/se_mouse,
-      y = abs(mean_log2fc_diff),
-      color = is_deg,
-      fill = is_deg) +
-  geom_point(pch = 21,
-             alpha = 0.01,
-             size = 1,
-             stroke = 0,
-             mapping = aes(fill = is_deg),
-             data = . %>% filter(is_deg != "not DEG, both")) +
-  geom_smooth(method = "lm", 
-              mapping = aes(color = is_deg,
-                            fill = is_deg),
-              se = T, show.legend = F) +
-    geom_smooth(method = "lm",
-              color = "black",
-              fill = "black",
-              linetype = 2,inherit.aes = F,
-              mapping = aes(x = 1/se_mouse,
-                            y = abs(mean_log2fc_diff))) +
-  scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) +
-  scale_y_continuous(expand = c(0, 0), limits = c(0, 2)) +
-  scale_fill_manual(values = colors$degs_comparison) +
-  scale_color_manual(values = colors$degs_comparison) +
-  labs(
-       x = "1/SE (mouse)",
-       y = "|ΔMean Log2FC|") +
-  theme_vaxgo() +
-  theme(legend.position = "inside", legend.position.inside = c(0.7,0.8), legend.title = element_blank(),
-        panel.spacing = grid::unit(0.7, "cm"),
-        plot.margin          = ggplot2::margin(0.1, 0.5, 0.1, 0.1, "cm")) +
-  guides(
-    color = "none",
-    fill  = guide_legend(title.position = "left", byrow = T, nrow = 4,override.aes = list(shape = 22, alpha = 1, size = 3)))
-
-#Print
-log2fc_wide_effect_error_plot_pooled 
-  
-log2fc_wide_effect_error_plot_pooled_marginal <- ggExtra::ggMarginal(
-  p             = log2fc_wide_effect_error_plot_pooled,
-  type          = "density",
-  groupFill     = TRUE,
-  groupColour   = TRUE,
-  alpha         = 0.1, linewidth = 1,
-  margin        = "both", size =5
-)
-
-# Display composite plot
-print(log2fc_wide_effect_error_plot_pooled_marginal)
-
-#Save
-log2fc_wide_effect_error_plot_pooled_marginal %>%
-  ggsave(filename = here("Figures", "all_human_mouse_dge_degs_mean_se_condition_selected_pooled.png"),
-         width = 4,
-         height = 4)
-  
-```
-
-
-
 
 
 #### Difference in Log2FC and sign
 ```{r fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
-#Categorize in difference in log2fc and sign difference
-log2fc_wide_effect_sign_plot = log2fc_wide_allconditions %>% 
-    filter((pathogen == "E. coli" & timepoint_comparison == "24h-12h" |
-            pathogen == "S. aureus" & timepoint_comparison == "24h-12h" |
-            pathogen == "Burn" & timepoint_comparison == "Early hours-Day 7"|
-            pathogen == "Trauma" & timepoint_comparison == "Day 7-Day 3"|
-            pathogen == "Influenza" & timepoint_comparison == "Day 1-Day 7" |
-            pathogen == "HepB" & timepoint_comparison == "Day 7-Day 7")) %>% 
-  select(treatment, pathogen, timepoint_comparison, is_deg, diff_sign_binary, mean_log2fc_diff, weight_se_inverse_combined) %>%
-  distinct() %>% 
-  ggplot() +
-  aes(x = is_deg,
-      y = weight_se_inverse_combined) +
-  facet_nested_wrap(~treatment+pathogen+timepoint_comparison, nrow = 1, scales = "free_y")+
-  geom_boxplot(alpha = 1,
-             mapping = aes(fill = diff_sign_binary,
-                           group = interaction(diff_sign_binary,is_deg)),
-             position = position_dodge2(width = 0.5)) +
-  geom_hline(yintercept = 0, linetype = 2, linewidth = 0.5) +
-  scale_fill_manual(values = colors$direction) +
-  labs(fill = "DEG or not DEG",
-       x = "",
-       y = "1/combinedSE") +
-  theme_vaxgo() +
-  theme(legend.position = "top",
-        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
-
-log2fc_wide_effect_sign_plot
-
-```
-
-
-
-#### Mean SE by condition and timepoint
-```{r fig.height=3, fig.width=12, message=FALSE, warning=FALSE}
-
-#Categorize in difference in log2fc and sign difference
-# Prepare base dataset with treatment releveling and DEG classification
-degs_base <- all_degs_human_mouse_unmatched %>%
-  dplyr::select(
-    organism,
-    treatment, pathogen, timepoint,
-    se, adj_p_val
-  ) %>%
-  dplyr::mutate(
-    treatment = dplyr::case_when(
-      pathogen %in% c("HepB", "Influenza")    ~ "Vaccination",
-      pathogen %in% c("S. aureus", "E. coli") ~ "Infection",
-      pathogen %in% c("Burn", "Trauma")       ~ "Injury",
-      TRUE                                    ~ pathogen
-    ),
-    treatment = stats::relevel(factor(treatment), "Vaccination"),
-    is_deg    = dplyr::if_else(adj_p_val <= 0.05, "DEG", "not DEG")
-  ) %>%
-  dplyr::distinct()
-
-# Append "All genes" category and calculate 95% Confidence Intervals
-degs_summary <- dplyr::bind_rows(
-  degs_base,
-  degs_base %>% dplyr::mutate(is_deg = "All genes")
-) %>%
-  dplyr::group_by(treatment, pathogen, organism, timepoint, is_deg) %>%
-  dplyr::summarise(
-    n_genes    = dplyr::n(),
-    mean_se    = mean(se, na.rm = TRUE),
-    sd_se      = stats::sd(se, na.rm = TRUE),
-    se_of_mean = sd_se / sqrt(n_genes),
-    
-    # Calculate 95% Confidence Interval bounds using t-distribution
-    ci_lower   = mean_se - stats::qt(0.975, df = dplyr::if_else(n_genes > 1, n_genes - 1, 1)) * se_of_mean,
-    ci_upper   = mean_se + stats::qt(0.975, df = dplyr::if_else(n_genes > 1, n_genes - 1, 1)) * se_of_mean,
-    .groups    = "drop"
-  ) 
-  
-  
-  # Plot mean SE trends, confidence intervals, and gene counts across conditions
-log2fc_wide_effect_error_conditionwise_plot = degs_summary %>%
-  filter(is_deg == "DEG") %>%
-  mutate(
-    timepoint = str_replace_all(timepoint, " ", "\n"),
-    timepoint = fct_reorder(timepoint, parse_number(timepoint), .na_rm = FALSE),
-    timepoint = fct_relevel(timepoint, "Early\nhours")
+# 1. Prepare data and append the "Pooled" summary group
+plot_data_sign <- log2fc_wide_allconditions %>% 
+  filter(
+    (pathogen == "E. coli" & timepoint_comparison == "24h-12h") |
+    (pathogen == "S. aureus" & timepoint_comparison == "24h-12h") |
+    (pathogen == "Burn" & timepoint_comparison == "Early hours-Day 7") |
+    (pathogen == "Trauma" & timepoint_comparison == "Day 7-Day 3") |
+    (pathogen == "Influenza" & timepoint_comparison == "Day 1-Day 7") |
+    (pathogen == "HepB" & timepoint_comparison == "Day 7-Day 7")
   ) %>% 
-  ggplot() +
-  aes(
-    x     = timepoint,
-    y     = mean_se,
-    group = interaction(organism, is_deg)
-  ) +
-  # Create nested wrap facets across treatment and pathogen strata
+  select(
+    treatment, pathogen, timepoint_comparison, is_deg, 
+    diff_sign_binary, mean_log2fc_diff, weight_se_inverse_combined
+  ) %>%
+  distinct()
+
+plot_data_sign_pooled <- plot_data_sign %>% 
+  bind_rows(
+    plot_data_sign %>% 
+      mutate(treatment = "Pooled", pathogen = "", timepoint_comparison = "")
+  ) %>% 
+  mutate(treatment = fct_relevel(treatment, "Vaccination", "Infection", "Injury", "Pooled"))
+
+# 2. Build the plot
+log2fc_wide_effect_sign_plot <- plot_data_sign_pooled %>% 
+  ggplot(aes(
+    x = is_deg,
+    y = weight_se_inverse_combined
+  )) +
   facet_nested_wrap(
-    ~ is_deg + treatment + pathogen,
-    nrow   = 1,
-    scales = "free"
+    ~ treatment + pathogen + timepoint_comparison, 
+    nrow = 1, 
+    scales = "free_y"
   ) +
-  # Force lower limit to 0 while leaving upper limit free per panel
-  scale_y_continuous(
-    limits = c(0, NA),
-    expand = expansion(mult = c(0, 0.05)) # Opcional: remove folga abaixo do zero
-  )+
-  # Render mean trend lines
-  geom_line(
-    mapping   = aes(
-      color    = organism
+  geom_boxplot(
+    aes(
+      fill = diff_sign_binary,
+      group = interaction(is_deg, diff_sign_binary)
     ),
-    linewidth = 1,
-    position  = position_dodge(width = 0.3)
+    alpha = 1, 
+    outliers = FALSE,
+    position = position_dodge(width = 0.8)
   ) +
-  # Render 95% Confidence Interval error bars
-  geom_errorbar(
-    mapping  = aes(
-      ymin  = ci_lower,
-      ymax  = ci_upper,
-      color = organism
-    ),
-    width    = 0.2,
-    position = position_dodge(width = 0.3)
-  ) +
-  # Render mean points with size mapped directly to gene count (n_genes)
-  geom_point(
-    mapping  = aes(
-      fill = organism
-    ),
-    pch      = 21,
-    color    = "black", 
-    position = position_dodge(width = 0.3)
-  ) +
-  #Add n genes
-    geom_text_repel(aes(label = n_genes,
-                        color = organism), 
-                  size = 3, 
-                  fontface = "bold",
-                  segment.alpha = 1) +
-  # Apply continuous size range and manual color scales
-  scale_color_manual(values = colors$organism) +
-  scale_fill_manual(values = colors$organism) +
-  # Define plot titles and legend labels
+  
+  scale_fill_manual(values = colors$direction) +
   labs(
-    color    = "Organism",
-    fill     = "Organism",
-    x        = "Timepoint",
-    y        = "Mean SE"
+    fill = "Directional Sign",
+    x = "",
+    y = "1/combinedSE"
   ) +
-  # Apply custom theme and text formatting
   theme_vaxgo() +
-  theme(legend.position = "top")
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)
+  ) +
+  guides(
+    fill = guide_legend(
+      title.position = "left",
+      byrow = TRUE,
+      nrow = 1,
+      override.aes = list(shape = 22, alpha = 1, size = 3)
+    )
+  )
 
+# Display Plot
+log2fc_wide_effect_sign_plot +
+  # Statistical test layer (within-group comparison between fill levels per x-axis category)
+  stat_compare_means(
+    aes(group = diff_sign_binary, label = ..p.adj..),
+    method = "wilcox.test",
+    p.adjust.method = "BH",
+    hide.ns = TRUE,
+    size = 2.5,
+    vjust = -0.5, 
+  ) 
 
-log2fc_wide_effect_error_conditionwise_plot
-
-log2fc_wide_effect_error_conditionwise_plot %>%
-  ggsave(filename = here("Figures", "all_human_mouse_dge_degs_mean_se_timepoint.png"),
-         width = 12,
-         height = 3)
 ```
-
-
 
 
 
@@ -1491,8 +1362,9 @@ all_degs_human_mouse %>%
 
 #Functional modules
 btm_annotation_genes = read_csv(file = here("tables", "btm_annotation_genes.csv"))
-human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune %>%
-  saveRDS(here("tables", "human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune.rds"))
+
+human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune =
+  readRDS(here("tables", "human_mouse_log2fc_avg_wide_degs_all_immune_nonimmune.rds"))
 
 ```
 
@@ -1660,6 +1532,14 @@ human_mouse_log2fc_avg_wide_labels %>%
 
 ###### All genes + DEGs + Immune + Not-Immune
 ```{r fig.height=10, fig.width=11}
+#Import correlation
+correlation_filtered_inter_weighted = 
+  readRDS(file = here("tables", "all_human_mouse_correlation_filtered_inter_weighted.rds"))
+correlation_filtered_inter_weighted_filtered =
+  readRDS(file = here("tables", "all_human_mouse_correlation_filtered_inter_weighted_filtered.rds"))
+human_mouse_log2fc_avg_wide_labels = 
+  readRDS(file = here("tables", "all_human_mouse_log2fc_avg_wide_labels.rds"))
+
 
 # Plot Matrices
 # All
@@ -1683,7 +1563,7 @@ correlation_heatmap_all = correlation_filtered_inter_weighted %>%
   scale_x_discrete(expand = c(0,0)) +
   scale_y_discrete(expand = c(0,0)) +
   scale_fill_gradientn(
-        colors = c("#EFC000FF", "white","#4361ee"),
+        colors = c("#4DBBD5FF", "white","#4361ee"),
         values = scales::rescale(seq(-1, 1, length.out = 10)),
         limits = c(-1, 1),
         name = "Spearman's rho",
@@ -2326,83 +2206,132 @@ human_mouse_log2fc_avg_wide_labels_filters =
   mutate(color_group = "Immune")
   ) %>% 
   mutate(color_group = fct_relevel(color_group, "All genes", "All DEGs", "Shared DEGs", "Immune"))
+```
 
+
+```{r fig.height=10, fig.width=16}
 # Log2FC vs Log2fc
 human_mouse_log2fc_log2fc_avg_wide_scatterplot = human_mouse_log2fc_avg_wide_labels_filters %>% 
+  mutate(comparison_facet = if_else(str_detect(pathogen_comparison, "DMD"), "Control", "Experiment"),
+         comparison_facet = fct_relevel(comparison_facet, "Experiment", "Control")) %>% 
   
   #Plot
   ggplot() +
   aes(x = mean_log2fc_mouse,
       y = mean_log2fc_human) +
   #Facet
-  facet_nested_wrap(vars(treatment_human, pathogen_comparison, facet_label),
-                    scales = "free",
-                    ncol = 4,
+  facet_nested_wrap(~comparison_facet+treatment_human+pathogen_human+facet_label,
+                    # scales = "free",
+                    ncol = 6, axes = "x",
                     strip = strip_nested(size = "variable")) +
-  
+  #Points 
   geom_point(aes(fill = color_group),
-             alpha = 1,
-             color = "gray95",
+             alpha = 0.2,
              stroke = 0,
              pch = 21,
              size = 1.5,
              data = . %>% filter(color_group == "All genes")) +
   
   geom_point(aes(fill = color_group),
-             alpha = 1,
-             color = "gray85",
+             alpha = 0.2,
              stroke = 0,
              pch = 21,
              size = 1.5,
              data = . %>% filter(color_group == "All DEGs")) +
   
   geom_point(aes(fill = color_group),
-             alpha = 1,
+             alpha = 0.5,
              pch = 21,
              stroke = 0,
              size = 1.5,
              data = . %>% filter(!color_group %in% c("All genes", "All DEGs"))) +
-  
-  #Regression line: Linear model, Pearson
-  # stat_smooth(method = "lm", geom = "line", alpha = 1, se = F, size = 1,
-  #             mapping = aes(group = color_group,
-  #                       color = color_group)) +
-  guides(fill = guide_legend(override.aes = list(size = 4)),
-         # color = guide_legend(override.aes = list(linewidth = 4, shape = 1))
-         ) +
-  scale_fill_manual(values =  c("All genes" = "gray90",
-                        "All DEGs" = "#3dccc7",
-                        "Shared DEGs" = "purple",
-                        "Immune" ="#f72585")) +
-  # scale_color_manual(values =  c("All genes" = "gray90",
-  #                       "All DEGs" = "#3dccc7",
-  #                       "Shared DEGs" = "purple",
-  #                       "Immune" ="#f72585")) +
+    # Regression
+  geom_smooth(
+    method = "lm",
+    mapping = aes(color = color_group, fill = color_group),
+    se = TRUE
+  ) +
+  #Marginal plots
+  # TOP SIDE 
+  geom_violin(
+    mapping = aes(
+      color = color_group, fill = color_group,
+      y = 8,
+    ),
+    outliers = FALSE,
+    outlier.shape = NA,
+    alpha = 1,
+    width = 4,
+    color = NA,
+    show.legend = FALSE
+  ) +
+  geom_boxplot(
+    mapping = aes(
+      color = color_group, fill = color_group,
+      y = 8,
+    ),
+    outliers = FALSE,
+    outlier.shape = NA,
+    alpha = 0, linewidth = 0.2,
+    color = "black",
+    width = 4,
+    show.legend = FALSE
+  ) +
+  # Right SIDE 
+  geom_violin(
+    mapping = aes(
+      color = color_group, fill = color_group,
+      x = 8,
+    ),
+    outliers = FALSE,
+    outlier.shape = NA,
+    alpha = 1,
+    width = 4,
+    color = NA,
+    show.legend = FALSE
+  ) +
+  geom_boxplot(
+    mapping = aes(
+      color = color_group, fill = color_group,
+      x = 8,
+    ),
+    outliers = FALSE,
+    outlier.shape = NA,
+    alpha = 0, linewidth = 0.2,
+    color = "black",
+    width = 4,
+    show.legend = FALSE
+  ) +
+  guides(fill = guide_legend(override.aes = list(size = 4))) +
+  scale_fill_manual(values =  colors$shared) +
+  scale_color_manual(values =  colors$shared) +
   #Add lines
   geom_abline(alpha = 0.2, linetype = 2) +
   geom_hline(yintercept = 0, alpha = 1, linetype = 2) +
   geom_vline(xintercept = 0, alpha = 1, linetype = 2) +
   #Theme
   theme_vaxgo() +
-  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size =10),
-        axis.text.y = element_text(size = 10),
-        strip.text.x = element_text(angle = 0, hjust = 0, vjust = 0),
-        legend.position = "top",
+  theme(legend.position = "top",
         legend.direction = "horizontal",
-        ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)) +
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        legend.text = element_text(size = 12),
+        legend.title = element_text(size = 12),
+        strip.text.x           = element_text(size = 11, color = "black", hjust = 0, margin = margin(5, 0, 5, 0))) +
   labs(x = "Mouse L2FC",
        y = "Human L2FC",
-       fill = "Gene type",
-       # color = "Linear regression",
+       fill = "Class",
+       color = "Class",
        title = "Correlation plot,\nHuman vs Mouse")
 
 
 human_mouse_log2fc_log2fc_avg_wide_scatterplot
+  
 
 #Save
 human_mouse_log2fc_log2fc_avg_wide_scatterplot %>%
   ggsave(filename = here("Figures", "all_human_mouse_dge_degs_scatterplot_withControl.png"),
-         width = 12, height = 12)
+         width = 16, height = 10)
 
 ```
 
