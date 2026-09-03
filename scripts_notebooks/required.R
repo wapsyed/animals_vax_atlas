@@ -198,12 +198,12 @@ colors = list(organism = c("FIT" = "#4361ee",
                             "Injury" = "#155289"),
               feature_sets = c(
                 "DGE Baseline"      = "black",
-                "+ BTMs"            = "#4361ee",
                 "+ Sequence"        = "gray25",
                 "+ Sequence + TFs"      = "gray50",
-                "+ Sequence + TFs + CRE type"      = "#184e77",
-                "+ Sequence + TFs + CRE type + CTCF"        = "#a2d2ff",
-                "+ Sequence + TFs + CRE type + CTCF + Homology"        = "#4cc9f0"
+                "+ Sequence + TFs + CRE type"      = "#a2d2ff",
+                "+ Sequence + TFs + CRE type + CTCF"        = "#4cc9f0",
+                "+ Sequence + TFs + CRE type + CTCF + Homology"        = "#184e77",
+                "Full + BTM"        = "#4361ee"
               )
               )
 

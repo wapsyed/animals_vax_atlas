@@ -107,25 +107,27 @@ human_mouse_parameters_values %>%
 human_mouse_parameters_values =
   readRDS(file = here("tables", "human_mouse_statsmodelling_parameters_values.rds"))
 
-feature_dictionary <- tibble::tibble(
+feature_dictionary <- tibble(
   feature_name_original = names(human_mouse_parameters_values)
 ) %>%
-  dplyr::filter(!feature_name_original %in% c("hgnc_symbol", "treatment", "pathogen", "timepoint_comparison", "status")) %>%
+  filter(!feature_name_original %in% c("hgnc_symbol", "treatment", "pathogen", "timepoint_comparison", "status")) %>%
   
-  # 1. Regex parsing
-  tidyr::extract(
+  # 1. Regex parsing for cCRE feature sets
+  extract(
     col     = feature_name_original,
     into    = c("cre_metric", "cre_type", "cre_ctcf", "cre_homology"),
     regex   = "^(n_type|pct_match_type|n_ctcf|pct_match_ctcf|n_homology|pct_homology)_(PLS|pELS|dELS)(?:_(CTCF-bound|not-CTCF))?(?:_([A-Za-z0-9_]+))?$",
     remove  = FALSE
   ) %>%
+  mutate(cre_ctcf = str_replace(cre_ctcf, "-bound", "")) %>% 
   
-  dplyr::mutate(
+  # 2. Consolidated classification and label formatting
+  mutate(
     # --- Category Assignment ---
-    feature_type = dplyr::case_when(
+    feature_type = case_when(
       feature_name_original %in% c("inverse_se_mouse", "abs_log2fc_diff") ~ "Gene expression",
       feature_name_original %in% c("dist_k80", "identity_human2mouse") ~ "Sequence evolution",
-      stringr::str_detect(feature_name_original, "^(n_tf|pct_tf)") ~ "Transcription Factor",
+      str_detect(feature_name_original, "^(n_tf|pct_tf)") ~ "Transcription Factor",
       feature_name_original %in% c(
         "Not-BTM", "INNATE RESPONSE", "B CELLS", "T CELLS", "PLATELETS", 
         "ECM AND MIGRATION", "ENERGY METABOLISM", "MONOCYTES", 
@@ -133,24 +135,20 @@ feature_dictionary <- tibble::tibble(
       ) ~ "BTMs",
       feature_name_original == "n_total_cres_gene" ~ "CREs | Summary",
       
-      !is.na(cre_type) & !is.na(cre_ctcf) ~ stringr::str_c("CREs | ", cre_type, ", ", cre_ctcf),
-      !is.na(cre_type)                    ~ stringr::str_c("CREs | ", cre_type),
+      !is.na(cre_type) & !is.na(cre_ctcf) ~ str_c(cre_type, " ", cre_ctcf),
+      !is.na(cre_type)                    ~ cre_type,
+      
+      str_detect(feature_name_original, "PLS")  ~ "PLS",
+      str_detect(feature_name_original, "pELS") ~ "pELS",
+      str_detect(feature_name_original, "dELS") ~ "dELS",
       TRUE ~ "Other"
     ),
     
-    # Fallback assignment
-    feature_type = dplyr::case_when(
-      is.na(feature_type) & stringr::str_detect(feature_name_original, "PLS")  ~ "CREs | PLS",
-      is.na(feature_type) & stringr::str_detect(feature_name_original, "pELS") ~ "CREs | pELS",
-      is.na(feature_type) & stringr::str_detect(feature_name_original, "dELS") ~ "CREs | dELS",
-      TRUE ~ feature_type
-    ),
-    
-    # Limpeza preventiva: remove qualquer vírgula final caso tenha ficado em "CREs | PLS,"
-    feature_type = stringr::str_remove(feature_type, ",$"),
+    # Clean whitespace and trailing commas
+    feature_type = str_trim(feature_type),
     
     # --- Formatted Clean Feature Labels ---
-    feature_name = dplyr::case_when(
+    feature_name = case_when(
       feature_name_original == "abs_log2fc_diff"        ~ "|ΔMean Log2FC|",
       feature_name_original == "inverse_se_mouse"        ~ "1/SE",
       feature_name_original == "identity_human2mouse"   ~ "%Protein AA identity",
@@ -165,43 +163,47 @@ feature_dictionary <- tibble::tibble(
       feature_name_original == "n_total_cres_gene"      ~ "nTotal cCREs",
       
       cre_metric == "n_type"                             ~ "nCREs",
-      cre_metric == "pct_match_type"                    ~ "%Matching Type",
-      cre_metric == "n_ctcf"                             ~ "nSubtype CREs",
-      cre_metric == "pct_match_ctcf"                    ~ "%Matching Subtype",
+      cre_metric == "pct_match_type"                    ~ "%Match Type",
+      cre_metric == "n_ctcf"                             ~ "nCTCF",
+      cre_metric == "pct_match_ctcf"                    ~ "%Match CTCF",
       
-      cre_metric == "n_homology"                         ~ stringr::str_c("nHomology: ", stringr::str_replace_all(cre_homology, "_", " ")),
-      cre_metric == "pct_homology"                       ~ stringr::str_c("%Homology: ", stringr::str_replace_all(cre_homology, "_", " ")),
+      cre_metric == "n_homology"                         ~ str_c("n", str_replace_all(cre_homology, "_", " ")),
+      cre_metric == "pct_homology"                       ~ str_c("%", str_replace_all(cre_homology, "_", " ")),
       
       TRUE ~ feature_name_original
     )
   ) %>%
   
-  dplyr::select(feature_name_original, feature_type, feature_name) %>%
-  
-  # Relevel 
-  dplyr::mutate(
-    feature_type = forcats::fct_relevel(
+  # 3. Final selection, factor releveling, and ordering
+  select(feature_name_original, feature_type, feature_name) %>% 
+  mutate(
+    feature_type = fct_relevel(
       feature_type, 
       "Gene expression", 
       "Sequence evolution", 
-      "BTMs",
       "Transcription Factor", 
       "CREs | Summary",
-      "CREs | PLS, ",             
-      "CREs | PLS, CTCF-bound", 
-      "CREs | PLS, not-CTCF",
-      "CREs | pELS, ",             
-      "CREs | pELS, CTCF-bound", 
-      "CREs | pELS, not-CTCF",
-      "CREs | dELS, ",             
-      "CREs | dELS, CTCF-bound", 
-      "CREs | dELS, not-CTCF",
-      "Other"
+      "PLS",              
+      "PLS CTCF", 
+      "PLS not-CTCF",
+      "pELS",             
+      "pELS CTCF", 
+      "pELS not-CTCF",
+      "dELS",             
+      "dELS CTCF", 
+      "dELS not-CTCF",
+      "Other",
+      "BTMs"
     )
-  ) %>%
-  dplyr::arrange(feature_type)
+  ) %>% 
+  arrange(feature_type)
+
+feature_dictionary
+
+```
 
 
+```{r}
 # ==============================================================================
 # 1. BUILDING BLOCKS (CATEGORY-SPECIFIC FEATURE DEFINITIONS)
 # ==============================================================================
@@ -240,19 +242,11 @@ features_ablation_no_ccre <- c(features_ablation_dge_seq, feat_tfs_selected)
 # ==============================================================================
 # 3. REGULATORY RESOLUTION SETS (cCREs / ENHANCERS / PROMOTERS)
 # ==============================================================================
-
-# [Resolution 1] Minimal: Primary cCRE counts only (PLS, pELS, dELS) without BTMs
 features_ccre_baseline_minimal <- c(
   features_ablation_no_ccre,
   "n_total_cres_gene", 
   "n_type_PLS", "n_type_pELS", "n_type_dELS"
 )
-
-features_dge_seq_btms <- c(
-  features_ablation_dge_seq,
-  feat_btms
-)
-
 
 
 # [Resolution 4] High: Includes subtype matching rates (% match)
@@ -300,6 +294,13 @@ features_ccre_full_homology <- c(
   "pct_homology_dELS_CTCF-bound_Homologous"   # % Homologous
 )
 
+
+
+features_dge_seq_btms <- c(
+  features_ccre_full_homology,
+  feat_btms
+)
+
 # ==============================================================================
 # 4. MASTER LIST FOR PIPELINE AND ROC EVALUATION
 # ==============================================================================
@@ -308,14 +309,25 @@ feature_sets_list <- list(
   # --- Biological Ablation Controls ---
   "DGE Baseline"      = features_ablation_dge_only,
   "+ Sequence"        = features_ablation_dge_seq,
-  "+ BTM"            = features_dge_seq_btms,
   "+ Sequence + TFs"             = features_ablation_no_ccre,
   
   # --- Regulatory Models (cCRE Resolution Gradient) ---
   "+ Sequence + TFs + CRE type"      = features_ccre_baseline_minimal,
   "+ Sequence + TFs + CRE type + CTCF"        = features_ccre_ctcf_match,
-  "+ Sequence + TFs + CRE type + CTCF + Homology"        = features_ccre_full_homology
+  "+ Sequence + TFs + CRE type + CTCF + Homology"        = features_ccre_full_homology,
+  # --- Functional Models ---
+  "Full + BTM"            = features_dge_seq_btms
 )
+
+features_names_vector = c(
+      "DGE Baseline",
+      "+ Sequence",
+      "+ Sequence + TFs",
+      "+ Sequence + TFs + CRE type",
+      "+ Sequence + TFs + CRE type + CTCF",
+      "+ Sequence + TFs + CRE type + CTCF + Homology",
+      "Full + BTM" 
+    )
 
 ```
 
@@ -712,7 +724,7 @@ ROC curve
 
 ### Iterate over all features
 
-```{r fig.height=8, fig.width=8}
+```{r fig.height=12, fig.width=10}
 # Create a directory to store the lightweight RDS files if it doesn't exist
 dir.create(here::here("Models"), showWarnings = FALSE)
 
@@ -851,103 +863,70 @@ all_classification_results <- imap(feature_sets_list, function(current_selection
 
 master_class_metrics <- map_dfr(all_classification_results, "metrics") %>% 
   mutate(
-    feature_set = fct_relevel(feature_set, c(
-      "DGE Baseline",
-      "+ Sequence",
-      "+ BTMs",
-      "+ Sequence + TFs",
-      "+ Sequence + TFs + CRE type",
-      "+ Sequence + TFs + CRE type + CTCF",
-      "+ Sequence + TFs + CRE type + CTCF + Homology"
-    ))
+    feature_set = fct_relevel(feature_set, features_names_vector)
   )
 saveRDS(master_class_metrics, file = here::here("Models", "master_class_metrics.rds"))
 
 master_class_coefs <- map_dfr(all_classification_results, "coefficients") %>% 
-   mutate(
-    feature_set = fct_relevel(feature_set, c(
-      "DGE Baseline",
-      "+ Sequence",
-      "+ BTMs",
-      "+ Sequence + TFs",
-      "+ Sequence + TFs + CRE type",
-      "+ Sequence + TFs + CRE type + CTCF",
-      "+ Sequence + TFs + CRE type + CTCF + Homology"
-    ))
-  )
+   mutate(feature_set = fct_relevel(feature_set, features_names_vector))
 saveRDS(master_class_coefs, file = here::here("Models", "master_class_coefs.rds"))
 
-master_class_var_imp <- map_dfr(all_classification_results, "importance") %>% 
-  mutate(
-    feature_set = fct_relevel(feature_set, c(
-      "DGE Baseline",
-      "+ Sequence",
-      "+ BTMs",
-      "+ Sequence + TFs",
-      "+ Sequence + TFs + CRE type",
-      "+ Sequence + TFs + CRE type + CTCF",
-      "+ Sequence + TFs + CRE type + CTCF + Homology"
-    ))
-  )
+master_class_var_imp <- map_dfr(all_classification_results, "importance")  %>% 
+   mutate(feature_set = fct_relevel(feature_set, features_names_vector))
+
 saveRDS(master_class_var_imp, file = here::here("Models", "master_class_var_imp.rds"))
 
-master_class_roc_data <- map_dfr(all_classification_results, "roc_data") %>% 
-  mutate(
-    feature_set = fct_relevel(feature_set, c(
-      "DGE Baseline",
-      "+ Sequence",
-      "+ BTMs",
-      "+ Sequence + TFs",
-      "+ Sequence + TFs + CRE type",
-      "+ Sequence + TFs + CRE type + CTCF",
-      "+ Sequence + TFs + CRE type + CTCF + Homology"
-    ))
-  )
+master_class_roc_data <- map_dfr(all_classification_results, "roc_data")  %>% 
+   mutate(feature_set = fct_relevel(feature_set, features_names_vector))
 
 saveRDS(master_class_roc_data, file = here::here("Models", "master_class_roc_data.rds"))
 
 # Generate wide summary table of AUC values across models and feature sets
 classification_auc_table <- master_class_metrics %>%
-  pivot_wider(names_from = model, values_from = auc) %>%
-  mutate(
-    feature_set = fct_relevel(feature_set, c(
-      "DGE Baseline",
-      "+ Sequence",
-      "+ BTMs",
-      "+ Sequence + TFs",
-      "+ Sequence + TFs + CRE type",
-      "+ Sequence + TFs + CRE type + CTCF",
-      "+ Sequence + TFs + CRE type + CTCF + Homology"
-    ))
-  ) %>%
+  pivot_wider(names_from = model, values_from = auc)  %>% 
+   mutate(feature_set = fct_relevel(feature_set, features_names_vector)) %>% 
   arrange(feature_set)
 
 classification_auc_table
-
 
 # ==============================================================================
 # 5. VISUALIZATIONS
 # ==============================================================================
 
-# Feature ordering based on Random Forest importance
-name_order_class <- master_class_var_imp %>%
-  arrange(importance) %>% 
-  mutate(feature_name = fct_inorder(feature_name))
 
-# 1. Logistic Regression Coefficients Plot
-log_coefs_plot <- master_class_coefs %>%
+# Logistic Regression Coefficients Plot================
+log_coefs_plot_df = master_class_coefs %>%
   inner_join(
     master_class_metrics %>% filter(model == "Logistic Regression"),
     by = "feature_set"
   ) %>%
   mutate(
     feature_set_label = paste0(feature_set, "\n(AUC = ", auc, ")"),
-    feature_set = fct_rev(feature_set),
-    feature_name = fct_relevel(feature_name, c(name_order_class$feature_name %>% as.character() %>% unique()))
+    feature_set       = fct_relevel(feature_set, features_names_vector),
+    feature_name = if_else(
+      str_detect(feature_type, "PLS|pELS|dELS"),
+      paste(feature_type, feature_name),
+      feature_name
+    )
   ) %>%
-  ggplot(aes(x = estimate, y = feature_name, xmin = conf.low, xmax = conf.high, fill = feature_set, group = feature_set)) +
+  arrange(feature_set) %>%
+  mutate(feature_name = fct_rev(fct_inorder(feature_name)))
+
+
+log_coefs_plot = log_coefs_plot_df %>% 
+  ggplot() +
+  aes(x = estimate, 
+      y = feature_set %>% fct_rev(), 
+      xmin = conf.low, 
+      xmax = conf.high, 
+      fill = feature_set, 
+      group = feature_set) +
+  facet_grid(feature_name %>% fct_rev() ~., scale="free_y", space="free", switch = "y") +
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.6) +
-  geom_errorbarh(height = 0.2, linewidth = 0.6, position = position_dodge(width = 1), show.legend = FALSE) +
+  geom_errorbarh(height = 0.2, linewidth = 0.6, width = 0,
+                 alpha = 0.5,
+                 position = position_dodge(width = 1), 
+                 show.legend = FALSE) +
   geom_point(size = 2.2, pch = 21, position = position_dodge(width = 1)) +
   scale_fill_manual(values = colors$feature_sets) +
   labs(
@@ -956,49 +935,78 @@ log_coefs_plot <- master_class_coefs %>%
     fill = "Feature Set"
   ) +
   theme_vaxgo() +
-  theme(legend.position = "top", legend.location = "plot", strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
+  theme(legend.position = "top", 
+    legend.location = "plot",
+    strip.placement = "outside",
+    strip.text.y.left = element_text(angle = 0, hjust = 1, vjust = 0.5),
+    axis.text.y = element_blank()) +
   guides(fill = guide_legend(override.aes = list(pch = 22),
                              ncol = 1))
 
-# 2. Random Forest Importance Plot
-rf_imp_plot_class <- master_class_var_imp %>%
+# 2. Random Forest Importance Plot================
+# Classification RF Importance Data Preparation
+rf_imp_plot_class_df <- master_class_var_imp %>%
   inner_join(
     master_class_metrics %>% filter(model == "Random Forest"),
     by = "feature_set"
   ) %>%
   mutate(
     feature_set_label = paste0(feature_set, "\n(AUC = ", auc, ")"),
-    feature_set = fct_rev(feature_set),
-    feature_name = fct_relevel(feature_name, c(name_order_class$feature_name %>% as.character() %>% unique()))
+    feature_set       = fct_relevel(feature_set, features_names_vector),
+    feature_name = if_else(
+      str_detect(feature_type, "PLS|pELS|dELS"),
+      paste(feature_type, feature_name),
+      feature_name
+    )
   ) %>%
+  arrange(feature_set) %>%
+  mutate(feature_name = fct_rev(fct_inorder(feature_name)))
+
+# Classification RF Importance Visualization
+rf_imp_plot_class <- rf_imp_plot_class_df %>%
   ggplot() +
-  aes(x = importance + 1, y = feature_name, 
-      fill = feature_set %>% fct_rev()) +
-  geom_col(width = 0.6, position = position_dodge(1)) +
+  aes(
+    x    = importance + 1, 
+    y    = feature_set %>% fct_rev(), 
+    fill = feature_set
+  ) +
+  facet_grid(feature_name %>% fct_rev() ~ ., scale = "free_y", space = "free", switch = "y") +
+  geom_col(
+    width    = 0.6, 
+    position = position_dodge(1)
+  ) +
   scale_fill_manual(values = colors$feature_sets) +
-  scale_x_log10(breaks = c(1, 10, 50, 100, 250, 1000), labels = c("0", "10", "50", "100", "250", "1000")) +
+  scale_x_log10(
+    breaks = c(1, 10, 50, 100, 250, 1000), 
+    labels = c("0", "10", "50", "100", "250", "1000"), 
+    expand = c(0, 0)
+  ) +
   labs(
-    x = "Gini",
-    y = "Feature",
+    x    = "Gini",
+    y    = "Feature",
     fill = "Feature Set"
   ) +
   theme_vaxgo() +
-  theme(legend.position = "top", legend.location = "plot", strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)) +
-   guides(fill = guide_legend(byrow = T, ncol = 1))
+  theme(
+    legend.position   = "top", 
+    legend.location   = "plot",
+    strip.placement   = "outside",
+    strip.text.y.left = element_text(angle = 0, hjust = 1, vjust = 0.5),
+    axis.text.y       = element_blank()
+  ) +
+  guides(
+    fill = guide_legend(
+      override.aes = list(pch = 22),
+      byrow        = TRUE,
+      ncol         = 1
+    )
+  )
 
-# 5. AUC ROC Bar Chart Comparison
-p_auc_bars <- master_class_metrics %>%
-  mutate(
-    feature_set = fct_relevel(feature_set, c(
-      "DGE Baseline",
-      "+ Sequence",
-      "+ BTMs",
-      "+ Sequence + TFs",
-      "+ Sequence + TFs + CRE type",
-      "+ Sequence + TFs + CRE type + CTCF",
-      "+ Sequence + TFs + CRE type + CTCF + Homology"
-    ))
-  ) %>% 
+rf_imp_plot_class
+
+# AUC ROC Bar Chart Comparison ========================
+p_auc_bars <- master_class_metrics  %>% 
+   mutate(feature_set = fct_relevel(feature_set, features_names_vector)) %>% 
   ggplot() +
   aes(x = auc, y = feature_set, fill = model) +
   facet_wrap(.~feature_set,
@@ -1037,24 +1045,25 @@ p_auc_bars <- master_class_metrics %>%
   ) +
    guides(fill = guide_legend(byrow = T, nrow = 2))
 
-# Display Plot
+# Merge plots
 class_patch_plot <- (
-  # Bloco da Esquerda (Coeficientes e Importância)
   (log_coefs_plot + theme(strip.text.y = element_blank(), legend.position = "none")) |
-  (rf_imp_plot_class + guides(fill = guide_legend(byrow = TRUE, ncol = 1)) + theme(legend.title.position = "top", legend.location = "plot", legend.justification = "right"))
+  (rf_imp_plot_class + guides(fill = guide_legend(byrow = TRUE, ncol = 1)) + 
+     theme(legend.title.position = "top", legend.location = "plot", legend.justification = "right",
+           strip.text.y.left = element_blank()))
 ) +
   plot_layout(guides = "collect", axes = "collect") +
   plot_annotation(theme = theme(legend.position = "top", legend.location = "plot", legend.justification = "left"))
 
-class_patch_plot
-
-# Aplicação Global de Layout e Legenda
+# Final merge
 class_patch_plot <- (class_patch_plot |p_auc_bars) 
 
+#Display
 class_patch_plot
 
+#Save
 class_patch_plot %>% 
-ggsave(filename = here("Figures", "statistical_modelling_classification_coefficients_rocauc_allmodes.png"),
+ggsave(filename = here("Figures", "statistical_modelling_classification_coefficients_rocauc_allmodels.png"),
          width = 10,
          height = 12)
 ```
@@ -1327,7 +1336,6 @@ ggsave(filename = here("Figures", "statistical_modelling_classification_coeffici
 ### Iterate over multiple models
 
 ```{r fig.height=12, fig.width=10}
-
 # Create a directory to store the lightweight RDS files if it doesn't exist
 dir.create(here::here("Models"), showWarnings = FALSE)
 
@@ -1465,22 +1473,30 @@ all_regression_results <- imap(feature_sets_list, function(current_selection, se
 # ==============================================================================
 
 # 1. Master Metrics Table (RMSE, R2 for all models and sets)
-master_regression_metrics <- map_dfr(all_regression_results, "metrics")
+master_regression_metrics <- map_dfr(all_regression_results, "metrics") %>% 
+   mutate(feature_set = fct_relevel(feature_set, features_names_vector))
+
 master_regression_metrics %>% 
   saveRDS(file = here("Models", "master_regression_metrics.rds"))
 
 # 2. Master Coefficients Table (Linear Model terms across all sets)
-master_regression_coefs <- map_dfr(all_regression_results, "coefficients")
+master_regression_coefs <- map_dfr(all_regression_results, "coefficients") %>% 
+   mutate(feature_set = fct_relevel(feature_set, features_names_vector))
+
 master_regression_coefs %>% 
   saveRDS(file = here("Models", "master_regression_coefs.rds"))
 
 # 3. Master Variable Importance Table (Random Forest Gini across all sets)
-master_regression_var_imp <- map_dfr(all_regression_results, "importance")
+master_regression_var_imp <- map_dfr(all_regression_results, "importance") %>% 
+   mutate(feature_set = fct_relevel(feature_set, features_names_vector))
+
 master_regression_var_imp %>% 
   saveRDS(file = here("Models", "master_regression_var_imp.rds"))
 
 # 4. Master Predictions Table (Observed vs Predicted data across all sets)
-master_regression_predictions <- map_dfr(all_regression_results, "predictions")
+master_regression_predictions <- map_dfr(all_regression_results, "predictions") %>% 
+   mutate(feature_set = fct_relevel(feature_set, features_names_vector))
+
 master_regression_predictions %>% 
   saveRDS(file = here("Models", "master_regression_predictions.rds"))
 
@@ -1500,47 +1516,22 @@ regression_rsq_table <- master_regression_metrics %>%
   pivot_wider(
     names_from = model,
     values_from = .estimate
-  ) %>%
-  # Reorder rows to match your exact feature set hierarchy
-  mutate(
-    feature_set = fct_relevel(feature_set, c(
-      "DGE Baseline",
-      "+ Sequence",
-      "+ BTMs",
-      "+ Sequence + TFs",
-      "+ Sequence + TFs + CRE type",
-      "+ Sequence + TFs + CRE type + CTCF",
-      "+ Sequence + TFs + CRE type + CTCF + Homology"
-    ))
   ) %>% 
+   mutate(feature_set = fct_relevel(feature_set, features_names_vector)) %>% 
   arrange(feature_set)
 
 # Display the summary table
 print(regression_rsq_table)
-
 ```
 
 
-
-
-
-
-
-
-
 ```{r fig.height=12, fig.width=10}
-
 # ==============================================================================
 # 5. VISUALIZATIONS
 # ==============================================================================
 
-# Preserve your exact factor level ordering logic
-name_order <- master_regression_var_imp %>%
-  arrange(importance) %>% 
-  mutate(feature_name = fct_inorder(feature_name))
-
-# 1. LM Forest Plot
-linear_coefficients_forest_plot = master_regression_coefs %>%
+# 1. LM Forest Plot Data Preparation
+linear_coefficients_df <- master_regression_coefs %>%
   inner_join(
     master_regression_metrics %>% 
       filter(model == "Linear (LM)", .metric == "rsq") %>% 
@@ -1549,47 +1540,64 @@ linear_coefficients_forest_plot = master_regression_coefs %>%
   ) %>%
   mutate(
     feature_set_label = paste0(feature_set, "\n(R² = ", round(.estimate, 2), ")"),
-    feature_set = fct_rev(feature_set),
-    feature_name = fct_relevel(feature_name, c(name_order$feature_name %>% as.character() %>% unique()))
+    feature_set       = fct_relevel(feature_set, features_names_vector),
+    feature_name = if_else(
+      str_detect(feature_type, "PLS|pELS|dELS"),
+      paste(feature_type, feature_name),
+      feature_name
+    )
   ) %>%
-  ggplot(aes(
-    x = estimate, 
-    y = feature_name, 
-    xmin = conf.low, 
-    xmax = conf.high,
-    fill = feature_set,
+  arrange(feature_set) %>%
+  mutate(feature_name = fct_rev(fct_inorder(feature_name)))
+
+# 2. LM Forest Plot Visualization
+linear_coefficients_forest_plot <- linear_coefficients_df %>%
+  ggplot() +
+  aes(
+    x     = estimate, 
+    y     = feature_set %>% fct_rev(), 
+    xmin  = conf.low, 
+    xmax  = conf.high, 
+    fill  = feature_set, 
     group = feature_set
-  )) +
+  ) +
+  facet_grid(feature_name %>% fct_rev() ~ ., scale = "free_y", space = "free", switch = "y") +
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.6) +
   geom_errorbarh(
-    height = 0.2, 
-    linewidth = 0.6,
-    position = position_dodge(width = 1), show.legend = F
+    height      = 0.2, 
+    linewidth   = 0.6, 
+    width       = 0,
+    alpha       = 0.5,
+    position    = position_dodge(width = 1), 
+    show.legend = FALSE
   ) +
-  geom_point(
-    size = 2.2,
-    pch = 21,
-    position = position_dodge(width = 1)
-  ) +
+  geom_point(size = 2.2, pch = 21, position = position_dodge(width = 1)) +
   scale_fill_manual(values = colors$feature_sets) +
   labs(
-    x = "Standardized Effect Size",
-    y = "Feature Predictor",
-    color = "Feature Set",
-    shape = "Feature Set"
+    x    = "Std. Effect Size",
+    y    = "Feature",
+    fill = "Feature Set"
   ) +
   theme_vaxgo() +
   theme(
-    legend.position = "top", 
-    legend.location = "plot",
-    strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)
+    legend.position   = "top", 
+    legend.location   = "plot",
+    strip.placement   = "outside",
+    strip.text.y.left = element_text(angle = 0, hjust = 1, vjust = 0.5),
+    axis.text.y       = element_blank()
   ) +
-  guides(fill = guide_legend(override.aes = list(pch = 22)))
+  guides(
+    fill = guide_legend(
+      override.aes = list(pch = 22),
+      ncol         = 1
+    )
+  )
 
-linear_coefficients_forest_plot 
+linear_coefficients_forest_plot
 
 # 3. Random Forest Gini Importance Plot
-p_rf_importance = master_regression_var_imp %>%
+# 1. RF Importance Data Preparation
+rf_importance_df <- master_regression_var_imp %>%
   inner_join(
     master_regression_metrics %>% 
       filter(model == "Random Forest", .metric == "rsq") %>% 
@@ -1598,27 +1606,53 @@ p_rf_importance = master_regression_var_imp %>%
   ) %>%
   mutate(
     feature_set_label = paste0(feature_set, "\n(R² = ", round(.estimate, 2), ")"),
-    feature_set = fct_rev(feature_set),
-    feature_name = fct_relevel(feature_name, c(name_order$feature_name %>% as.character() %>% unique()))
+    feature_set       = fct_relevel(feature_set, features_names_vector),
+    feature_name = if_else(
+      str_detect(feature_type, "PLS|pELS|dELS"),
+      paste(feature_type, feature_name),
+      feature_name
+    )
   ) %>%
-  ggplot(aes(x = importance + 1, y = feature_name, 
-             fill = feature_set)) +
-  geom_col(width = 0.6,
-           position= position_dodge(1)) +
+  arrange(feature_set) %>%
+  mutate(feature_name = fct_rev(fct_inorder(feature_name)))
+
+# 2. RF Importance Visualization
+p_rf_importance <- rf_importance_df %>% 
+  ggplot() +
+  aes(
+    x    = importance + 1, 
+    y    = feature_set %>% fct_rev(), 
+    fill = feature_set
+  ) +
+  facet_grid(feature_name %>% fct_rev() ~ ., scale = "free_y", space = "free", switch = "y") +
+  geom_col(
+    width    = 0.6,
+    position = position_dodge(1)
+  ) +
   scale_fill_manual(values = colors$feature_sets) +
   scale_x_log10(
     breaks = c(1, 10, 50, 100, 250, 1000),
-    labels = c("0", "10", "50", "100", "250", "1000")
+    labels = c("0", "10", "50", "100", "250", "1000"),
+    expand = c(0, 0)
   ) +
   labs(
-    x     = "Variable Importance (Gini)",
-    y     = "Feature Predictor",
-    fill  = "Feature Set") +
+    x    = "Importance",
+    y    = "Feature",
+    fill = "Feature Set"
+  ) +
   theme_vaxgo() +
   theme(
-    legend.position = "top", 
-    legend.location = "plot",
-    strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)
+    legend.position   = "top", 
+    legend.location   = "plot",
+    strip.placement   = "outside",
+    strip.text.y.left = element_text(angle = 0, hjust = 1, vjust = 0.5),
+    axis.text.y       = element_blank()
+  ) +
+  guides(
+    fill = guide_legend(
+      override.aes = list(pch = 22),
+      ncol         = 1
+    )
   )
 
 p_rf_importance
@@ -1627,7 +1661,7 @@ p_rf_importance
 coeffiecients_patch_plot = (linear_coefficients_forest_plot + 
                               theme(strip.text.y = element_blank(),
                                     legend.position = "none")) +
-  p_rf_importance +
+  (p_rf_importance + theme(strip.text.y.left = element_blank()))+
   plot_layout(widths = c(0.5, 0.5), 
               guides = "collect", axes = "collect") +
   plot_annotation(theme = theme(legend.position = "top", legend.location = "plot"))
@@ -1639,7 +1673,7 @@ coeffiecients_patch_plot
 pobs_vs_pred_df = master_regression_predictions %>% 
   inner_join(regression_rsq_table,
              by = "feature_set") %>% 
-  mutate(feature_set_label = paste0(feature_set, "\nLinear model:R²=", `Linear (LM)`, ",\nRandom forest:R²=", `Random Forest`)) %>% 
+  mutate(feature_set_label = paste0(feature_set, "\nLinear model: R² = ", `Linear (LM)`, ",\nRandom forest: R² = ", `Random Forest`)) %>% 
   select(feature_set, feature_set_label, abs_log2fc_diff, pred_linear, pred_rf) %>% 
   pivot_longer(cols = c(pred_linear, pred_rf),
                names_to = "algorithm",
@@ -1647,14 +1681,7 @@ pobs_vs_pred_df = master_regression_predictions %>%
   mutate(algorithm = case_when(algorithm == "pred_linear" ~ "Linear model",
                                algorithm == "pred_rf" ~ "Random forest",
                                T ~ algorithm),
-         feature_set = fct_relevel(feature_set, c(
-      "DGE Baseline",
-      "+ Sequence",
-      "+ Sequence + TFs",
-      "+ CRE type",
-      "+ CTCF Split",
-      "+ CRE type + CTCF + Homology"
-    ))
+         feature_set = fct_relevel(feature_set,features_names_vector)
     ) %>% 
   arrange(feature_set) %>% 
   mutate(feature_set_label = fct_inorder(feature_set_label))
@@ -1668,12 +1695,12 @@ p_obs_vs_pred = pobs_vs_pred_df %>%
   geom_point(alpha = 0.1, size = 1, pch = 21, stroke = 0.5) +
   geom_smooth(method = "lm", se = TRUE, linewidth = 1, show.legend = F) +
   scale_color_manual(values = c("Random forest" = "#4DBBD5FF",
-                                "Linear model" = "black")) +
+                                "Linear model" = "gray70")) +
   guides(
     color = guide_legend(override.aes = list(alpha = 1,
                                              size = 4,
                                              pch = 21,
-                                             fill = c("black", "#4DBBD5FF")),
+                                             fill = c("gray70", "#4DBBD5FF")),
                          nrow = 2))  +
   scale_x_continuous(expand = c(0, 0)) +
   scale_y_continuous(expand = c(0, 0)) +
@@ -1691,12 +1718,9 @@ p_obs_vs_pred = pobs_vs_pred_df %>%
     legend.title = element_blank(),
   )
 
-# Display Plot
-p_obs_vs_pred 
-
 #Merge plots
 coeffiecients_pobsvspred_patch_plot = (coeffiecients_patch_plot | p_obs_vs_pred ) +
-  plot_layout(widths = c(0.7, 0.3)) 
+  plot_layout(widths = c(0.6, 0.4)) 
 
 coeffiecients_pobsvspred_patch_plot
 
