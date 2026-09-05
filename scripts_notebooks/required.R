@@ -77,14 +77,6 @@ colors_all <- list(
 
 
 
-colors_vaccines = c("Agrippal" = "#669bbc",
-                    "Fluad" = "#219ebc",
-                    "Quadri 2019-2020" = "#4DBBD5FF",
-                    "Quadri 19-20" = "#4DBBD5FF",
-                    "Engerix" = "#4361ee")
-
-
-
 colors = list(organism = c("FIT" = "#4361ee",
                            "Mouse" = "gray50",
                            "Immune" = "#f72585",
