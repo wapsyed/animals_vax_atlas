@@ -1,815 +1,261 @@
-------------------------------------------------------------------------
-
-editor_options: markdown: wrap: 72 ---
-
-# Complete Project Methodology
+# Complete Study Methodology
 
 ## Animals Vax Atlas: Comparative Immunogenomics of Human-Mouse Vaccine and Infection Responses
 
-------------------------------------------------------------------------
+---
 
-## I. INTRODUCTION & RESEARCH QUESTIONS
+## I. INTRODUCTION & RESEARCH FRAMEWORK
 
-### I.A Study Rationale
-
-- **Core Question:** Do murine (mouse) models accurately predict human immune responses to vaccines, infections, and systemic injuries?
-- **Challenge:** Individual orthologous gene expression correlations between species are typically low, raising questions about translational validity
-- **Hypothesis:** Higher-order functional responses (pathways, Blood Transcription Modules) are conserved between species despite gene-level divergence
-- **Key Outcome:** Pathway-level and module-level responses are highly conserved; translational accuracy scales with stimulus intensity
+### I.A Study Rationale & Objectives
+- **Core Scientific Question:** To what degree do murine models accurately mirror human blood transcriptomic dynamics during vaccination, acute bacterial infection, and systemic sterile injury?
+- **The Translational Conundrum:** Individual orthologous gene-level correlations between mice and humans are frequently poor or inconsistent, casting doubt on preclinical murine translatability.
+- **Central Hypothesis:** Higher-order biological structures—specifically functional pathways, Blood Transcription Modules (BTMs), and coordinated gene networks—are evolutionarily conserved across species, retaining high predictive fidelity even when individual gene effect sizes diverge.
+- **Key Findings:** 
+  1. Shifting from gene-centric to pathway-level metrics substantially elevates cross-species concordance.
+  2. Translational fidelity scales monotonically with stimulus intensity: systemic injuries and acute bacterial infections show robust conservation, while milder vaccination stimuli reveal pronounced species-specific divergence.
+  3. Expression divergence between orthologs is driven by divergent *cis*-regulatory promoter architecture (ENCODE cCRE rewiring) rather than protein-coding sequence identity or codon evolution.
 
 ### I.B Study Design
+- **Comparative Design:** Parallel time-course blood transcriptomic profiling of matched biological perturbations across humans (*Homo sapiens*) and laboratory mice (*Mus musculus*).
+- **Perturbations Analyzed:** Six matched immune and injury conditions spanning viral-antigen vaccination, Gram-positive bacteremia, Gram-negative sepsis, and major sterile tissue trauma.
+- **Data Repositories:** Publicly available transcriptomic cohorts retrieved from the NCBI Gene Expression Omnibus (GEO) and NCBI BioProject databases.
+- **Analytical Trajectory:** Automated data curation $\to$ multi-level quality control $\to$ platform-specific normalization $\to$ maximum variance probe collapsing $\to$ linear modeling (limma DGE) $\to$ pathway enrichment (fgsea & ssGSEA) $\to$ macroevolutionary divergence modeling $\to$ predictive classification (ROC/AUC) $\to$ structural/regulatory evolutionary genomics $\to$ multi-modal statistical modeling (`tidymodels`).
 
-- **Comparative framework:** Parallel human and mouse transcriptomic responses to matched stimuli
-- **Data source:** Publicly available blood transcriptome datasets from Gene Expression Omnibus (GEO) and BioProject
-- **Organisms:** Humans (*Homo sapiens*) and Laboratory mice (*Mus musculus*)
-- **Number of conditions:** 6 distinct vaccine/infection/injury scenarios
-- **Total samples:** \~400+ (human + mouse combined across all conditions and timepoints)
-- **Analysis scope:** Data curation → quality control → preprocessing → differential expression → functional enrichment → cross-species correlation → machine learning predictions
+---
 
-### I.C Conditions Analyzed
+## II. DATA ACQUISITION & STUDY COHORTS
 
-| Stimulus Type | Condition | Vaccine/Agent | Organisms | GEO Accession | Platform |
-|------------|------------|------------|------------|------------|------------|
-| Vaccination | Influenza | Fluad (TIV + MF59) | Human, Mouse | GSE124689 (H), GSE120661 (M) | Illumina HT-12, Agilent 8×60K |
-| Vaccination | Hepatitis B | Engerix-B | Human, Mouse | GSE124533 (H), GSE120661 (M) | Illumina HT-12, Agilent 8×60K |
-| Infection | *S. aureus* bacteremia | — | Human | GSE19668 | Affymetrix HuGene |
-| Infection | *E. coli* sepsis | — | Human | GSE33341 | Affymetrix HuGene |
-| Systemic injury | Burn | — | Human, Mouse | Human: burn cohort; Mouse: GSE182858 | Varies |
-| Systemic injury | Trauma | — | Human | GSE36809 | Affymetrix HuGene |
-| Systemic injury + vaccine | Burn + Quadrivalent vaccine | — | Mouse | GSE182858 | Illumina MouseWG-6 |
+### II.A Public Repository Search Strategy
+1. **BioProject Systematic Curation:** NCBI BioProject was queried for functional genomics studies matching keywords (`"vaccine"`, `"vaccination"`, `"immunization"`, `"immune response"`, `"infection"`), restricted to *Homo sapiens* (Taxonomy ID 9606) and *Mus musculus* (Taxonomy ID 10090).
+2. **Inclusion Criteria:**
+   - Longitudinal, time-course experimental designs incorporating pre-treatment baseline (Day 0) and post-challenge timepoints.
+   - Peripheral blood sampling (whole blood or isolated peripheral blood mononuclear cells [PBMCs]).
+   - Minimum sample size of $\ge 3$ biological replicates per timepoint/group.
+   - Fully accessible raw or normalized microarray expression matrices and complete sample metadata.
+3. **Exclusion Criteria:**
+   - Oncology, tumor immunology, chronic autoimmune pathogenesis, or drug-toxicity screens (filtered via regex: `!str_detect(title, "cancer|tumor|autoimmune|drug")`).
+   - Single-cell RNA-seq studies without bulk equivalent resolution.
+   - Incomplete timepoint or phenotypic annotation.
 
-------------------------------------------------------------------------
+### II.B Dataset Cohort Matrix
 
-## II. DATA CURATION & ACQUISITION
+| Stimulus Category | Condition / Agent | Organism | GEO Accession | Platform ID | Array Technology | Tissue Source |
+|:---|:---|:---|:---|:---|:---|:---|
+| **Vaccination** | Influenza (Fluad: TIV + MF59) | Mouse | GSE120661 | GPL21103 | Agilent-074309 8×60K | Whole Blood |
+| **Vaccination** | Influenza (Fluad: TIV + MF59) | Human | GSE124689 | GPL10558 | Illumina HumanHT-12 v4.0 | Whole Blood |
+| **Vaccination** | Hepatitis B (Engerix-B) | Mouse | GSE120661 | GPL21103 | Agilent-074309 8×60K | Whole Blood |
+| **Vaccination** | Hepatitis B (Engerix-B) | Human | GSE124533 | GPL10558 | Illumina HumanHT-12 v4.0 | Whole Blood |
+| **Acute Infection**| *S. aureus* bacteremia | Human | GSE19668 | GPL6244 | Affymetrix Human Gene 1.0 ST | Whole Blood |
+| **Acute Infection**| *S. aureus* systemic challenge | Mouse | GSE120661 | GPL21103 | Agilent-074309 8×60K | Whole Blood |
+| **Acute Infection**| *E. coli* sepsis | Human | GSE33341 | GPL6244 | Affymetrix Human Gene 1.0 ST | Whole Blood |
+| **Acute Infection**| *E. coli* endotoxemia/challenge| Mouse | GSE120661 | GPL21103 | Agilent-074309 8×60K | Whole Blood |
+| **Sterile Injury** | Severe Burn Injury | Human | Clinical cohort | Custom Array | Microarray | Whole Blood |
+| **Sterile Injury** | Severe Burn Injury | Mouse | GSE182858 | GPL6887 | Illumina MouseWG-6 v2.0 | Whole Blood |
+| **Sterile Injury** | Severe Blunt Trauma | Human | GSE36809 | GPL6244 | Affymetrix Human Gene 1.0 ST | Whole Blood |
+| **Injury + Vaccine**| Burn + Quadrivalent Vaccine | Mouse | GSE182858 | GPL6887 | Illumina MouseWG-6 v2.0 | Whole Blood |
 
-### II.A Dataset Selection & Search Strategy
+---
 
-**Step 1: BioProject Search** - Search BioProject database (<https://www.ncbi.nlm.nih.gov/bioproject/>) for studies with: - Keywords: "vaccine," "vaccination," "immunization," "immune response" - Organism filter: *Homo sapiens*, *Mus musculus* - Study design: Transcriptomics studies (microarray or RNA-seq) - Availability: Public datasets with accessible metadata
+## III. QUALITY CONTROL & PREPROCESSING
 
-**Step 2: Inclusion Criteria** - Experimental design: Time-course studies with baseline and post-treatment timepoints - Sample type: Whole blood or peripheral blood mononuclear cells (PBMCs) - Minimum sample size: ≥30 samples per condition/organism - Quality: Peer-reviewed publications with complete metadata - Data availability: Raw or normalized data in GEO or ArrayExpress
+### III.A Array Quality Metrics & Outlier Detection
+Prior to integration, all expression datasets were evaluated for technical fidelity via `1_QualityControl.Rmd`:
+1. **ArrayQualityMetrics (`arrayQualityMetrics`):** Assessed distance matrices, boxplots of signal intensities, and pooled RNA degradation gradients.
+2. **Relative Log Expression (RLE):** 
+   $$\text{RLE}_{gi} = \log_2(E_{gi}) - \operatorname{median}_{j}(\log_2(E_{gj}))$$
+   Samples exhibiting anomalous interquartile range (IQR) divergence or median shifts $>2.5$ standard deviations from the cohort centroid were flagged and excluded.
+3. **Principal Component Analysis (PCA):** Outliers exceeding 2 standard deviations across PC1 and PC2 were visually inspected and removed if technical confounding (e.g., severe hybridisation failure) was confirmed.
 
-**Step 3: Exclusion Criteria** - Studies focused on cancer, autoimmune disease, or drug toxicity (excluded via text filtering: `!str_detect(title, "cancer|tumor|autoimmune|drug")`) - Insufficient metadata or incomplete timepoint information - Datasets with \<10 samples per timepoint - Technical replicates or single-subject studies
+### III.B Platform-Specific Normalization
+Microarray intensity matrices were processed using technology-specific algorithms in `2_Preprocessing_and_DGE.Rmd`:
+- **Affymetrix Oligonucleotide Arrays (Human Gene 1.0 ST):** Raw probe cell intensity files (.CEL) were preprocessed with the **Robust Multi-array Average (RMA)** algorithm via `affy`/`oligo`, executing background correction, quantile normalization, and median-polish probe set summarization.
+- **Illumina BeadChips & Agilent Arrays:** Raw expression intensities were $\log_2$-transformed and subjected to **between-array quantile normalization** using `limma::normalizeBetweenArrays(method = "quantile")` to enforce identical empirical distributions across arrays while preserving relative biological rank orders.
 
-### II.B Sample Metadata Collection & Standardization
+### III.C Probe-to-Gene Annotation & Maximum Variance Collapsing
+To map platform-specific probe identifiers to standardized gene nomenclatures (HGNC symbols for human; MGI symbols for mouse), annotation tables were retrieved via Bioconductor platform packages (`illuminaHumanv4.db`, `hugene10sttranscriptcluster.db`, `biomaRt`).
 
-**Metadata fields extracted for each sample:** - `sample_id`: Unique GEO or internal identifier (e.g., GSM1234567) - `subject_id` / `participant_id`: Individual human participant or animal ID - `organism`: Species classification ("Human" or "Mouse") - `sex`: Biological sex of participant/animal - `age`: Age in years (humans) or weeks (mice); standardized when available - `timepoint`: Time post-treatment (days); 0 = baseline/pre-treatment - `treatment`: Vaccine type, pathogen, or injury category - `tissue_source`: Blood collection method (whole blood, PBMC, etc.) - `platform`: Microarray platform or sequencing technology - `batch_id`: Experimental batch or collection date (for batch effect detection)
+**Probe Collapsing Strategy:** Microarray platforms frequently feature multiple independent probe sets interrogating the same gene locus. To prevent signal dampening or dilution caused by unweighted averaging across non-responsive or poorly hybridising probes, we employed a **maximum variance probe selection strategy**:
+$$\text{Representative Probe}(g) = \arg\max_{p \in \mathcal{P}_g} \left( \operatorname{Var}_{s \in \mathcal{S}} \left( \log_2 I_{p,s} \right) \right)$$
+where $\mathcal{P}_g$ is the set of all probes mapping to gene $g$, and $\mathcal{S}$ is the set of all biological samples. For each gene, only the single probe displaying the greatest expression variance across the experiment was retained.
 
-**Standardization procedures:** - Organism names converted to consistent capitalization: "Homo sapiens" → "Human"; "Mus musculus" → "Mouse" - Timepoints normalized to numeric days post-treatment - Treatment/condition names standardized using controlled vocabulary (see CODEBOOK.md for complete terms) - Sex coded as M/F with unknown/unreported flagged separately - Batch information extracted from GEO platform or study design documents
+---
 
-### II.C Data Integration & Organization
+## IV. DIFFERENTIAL GENE EXPRESSION & STATISTICAL THRESHOLDS
 
-**Step 1: Condition-Organism Linking** - Match human and mouse datasets by condition (vaccine type or pathogen) - Map orthologous pairs using: - HGNC (Human Gene Nomenclature Committee) for human genes - MGI (Mouse Genome Informatics) for mouse genes - biomaRt package for automated ortholog retrieval
+### IV.A Linear Modeling with Limma
+Differential gene expression was modeled independently for each condition and species using linear models with Empirical Bayes variance moderation via `limma`:
+1. **Model Formulation:** For each condition, an unintercepted design matrix was constructed:
+   $$\mathbf{Y}_{g} = \mathbf{X}\boldsymbol{\beta}_g + \boldsymbol{\varepsilon}_g, \quad \boldsymbol{\varepsilon}_g \sim \mathcal{N}(0, \sigma_g^2 \mathbf{I})$$
+   where $\mathbf{X}$ represents experimental groups parameterized by organism, stimulus, and timepoint.
+2. **Contrasts:** Post-treatment timepoints were contrasted directly against their matched pre-treatment Day 0 baseline (e.g., $\text{Day 1} - \text{Day 0}$, $\text{Day 3} - \text{Day 0}$, $\text{Day 7} - \text{Day 0}$).
+3. **Variance Shrinkage (eBayes):** Squeeze gene-wise sample variances toward a global intensity-dependent prior using `limma::eBayes(fit, trend = TRUE)`:
+   $$\tilde{s}_g^2 = \frac{d_0 s_0^2 + d_g s_g^2}{d_0 + d_g}$$
+   moderating the test statistics against small sample size instability.
 
-**Step 2: File Organization** - Create standardized file naming: `{condition}_{vaccine}_{organism(s)}_{datatype}.{ext}` - Example: `influenza_fluad_human_mouse_metadata.csv` - All curated datasets saved to `tables/` directory - Metadata tables as CSV; expression data as RDS (R serialized objects)
+### IV.B Statistical Significance Limits
+- **DGE Threshold:** Genes were classified as significantly differentially expressed genes (DEGs) if they satisfied:
+  $$\text{adj. } P\text{-value (BH FDR)} \le 0.05$$
+  Effect size magnitude ($\log_2\text{FC}$) was preserved continuously without arbitrary threshold truncation to power downstream rank-based pathway analyses.
+- **GSEA Significance Threshold:** When evaluating functional modules via `fgsea`, the standard False Discovery Rate limit was established at:
+  $$\text{padj} \le 0.25$$
+  This $\le 0.25$ FDR threshold is standard for GSEA, capturing broader coordinated pathway trends (especially relevant for weaker stimuli like vaccination).
 
-**Step 3: Quality Metadata Documentation** - Create data curation log tracking: - Study accession and publication DOI - Sample inclusion count and filtering rationale - Data completeness (% missing values per field) - Any manual annotations or corrections applied
+---
 
-------------------------------------------------------------------------
+## V. FUNCTIONAL PATHWAY ENRICHMENT (BTMs & HALLMARKS)
 
-## III. QUALITY CONTROL & ASSESSMENT
+### V.A Blood Transcription Modules (BTMs)
+The primary analytical unit for immune response evaluation comprised 346 Blood Transcription Modules (Li et al., *Nat Immunol* 2014), capturing specific leukocyte subsets (T cells, B cells, NK cells, monocytes, neutrophils, dendritic cells) and intrinsic functional states (interferon response, inflammatory chemokines, cell cycle). Modules are grouped hierarchically into 16 broader physiological domains.
 
-### III.A Array Quality Metrics (ArrayQM)
+### V.B Fast Gene Set Enrichment Analysis (fgsea)
+For each contrast, orthologous genes were ranked by their moderated $t$-statistic ($t_g$):
+$$\text{Rank}(g) = t_g$$
+Enrichment scores ($ES$) across BTMs and MSigDB Hallmarks (50 gene sets) were computed using `fgsea::fgsea()`, testing for non-random distribution of module members within the ranked transcriptome via an adaptive multi-level split Monte Carlo permutation scheme (1,000 to 10,000 permutations). Enrichment scores were normalized for gene set size ($NES$).
 
-**Purpose:** Detect low-quality samples before downstream analysis that could confound results.
+### V.C Single-Sample Gene Set Enrichment Analysis (ssGSEA)
+To quantify module activation at individual sample resolution without requiring group-level contrast specification, single-sample GSEA was conducted using `GSVA::gsva(method = "ssgsea", ssgsea.norm = TRUE)`. For sample $s$ and module $m$, the ssGSEA score reflects the degree to which members of $m$ are coordinately up- or down-regulated relative to all other genes within that individual's transcriptome.
 
-**Quality metrics computed per sample:**
+---
 
-| Metric | Description | Threshold | Tool |
-|------------------|------------------|------------------|------------------|
-| **RNA Degradation** | 5'/3' bias in probe intensities; indicates RNA degradation | RLE slope \< ±0.1 | arrayQualityMetrics |
-| **Background Intensity** | Median background vs. signal; indicates dye incorporation issues | Expected vs. observed ratio | arrayQualityMetrics |
-| **Positive/Negative Controls** | Spike-in controls validate technical steps | z-score \< ±3 | Platform-specific |
-| **Sample Clustering** | Principal Component Analysis (PCA) to identify outliers | Euclidean distance \> 2 SD from mean | prcomp() + stats |
-| **Relative Log Expression (RLE)** | Median centered log-intensity; checks for normalization issues | IQR \< expected | limma::plotRLE() |
-| **MA-plots** | M (log-ratio) vs. A (average log-intensity); detects spatial artifacts | Visual inspection of loess fit | limma::plotMA() |
+## VI. UNIFIED CROSS-SPECIES COMPARATIVE ANALYSES & FIGURE 43 ARCHITECTURE
 
-**Outlier Detection:** - Z-score analysis: Samples with \|z-score\| \> 3 on any metric flagged for review - Distance-based: Samples \>2 standard deviations from mean in PCA space - Visual inspection: MA-plots and density plots reviewed manually
+Notebooks `3.1_Comparing_Human_Mouse_DGE_analyses.Rmd`, `3.2_Comparing_Human_Mouse_GSEA.Rmd`, and `3.3_Comparing_Human_Mouse_Functional_Analyses.Rmd` consolidate all 6 conditions into unified comparative frameworks.
 
-**Output:** - ArrayQM HTML reports saved to `ArrayQM/` directory - Outlier list: Sample IDs and reason for flagging - Filtered sample list for downstream analysis
+### VI.A Macroevolutionary Expression Divergence & Inverse-Variance Weighting
+For each 1:1 orthologous gene pair across matched experimental conditions:
+1. **Directional Effect Size Divergence:**
+   $$\Delta \log_2\text{FC} = \log_2\text{FC}_{\text{Human}} - \log_2\text{FC}_{\text{Mouse}}$$
+2. **Coefficient of Variation (CV):**
+   $$CV = \frac{SD}{|\text{mean } \log_2\text{FC}|}$$
+3. **Inverse-Variance Statistical Weighting:**
+   To ensure that downstream cross-species correlation and distance evaluations were not biased by noisy low-expression probes, joint standard error-based inverse weights were formulated:
+   $$W_{SE} = \frac{1}{SE_{\text{Human}}^2 + SE_{\text{Mouse}}^2}$$
+   where $SE$ represents the standard error from the linear model fit.
 
-### III.B Array Quality Filtering Decision Tree
+### VI.B Figure 43: Detailed Panel Methodologies
 
-```         
-For each condition/platform:
-  ├─ Generate ArrayQM metrics
-  ├─ If RNA degradation > threshold
-  │  └─ Flag sample; mark for potential removal
-  ├─ If PCA outlier (>2 SD)
-  │  └─ Inspect visually; decide: keep, remove, or recalibrate
-  ├─ If batch effect detected
-  │  └─ Document batch ID; plan ComBat adjustment (if applicable)
-  └─ Output: QC-filtered metadata file with quality flags
+#### Figure 43a | Functional Module NES Correlation Dynamics
+- **Objective:** Quantify the temporal concordance of higher-order immune programs across human and murine systems.
+- **Computation:** For each condition and timepoint pair, the vector of module Normalized Enrichment Scores ($NES$) was extracted for humans ($\mathbf{NES}_H$) and mice ($\mathbf{NES}_M$).
+- **Correlation Metric:** Spearman rank correlation ($\rho$) and Pearson linear correlation ($r$) were computed between species across functional modules over time.
+- **Stratified Filtering:** To evaluate the effect of statistical stringency on translatability, correlations were computed and compared across three nested module subsets:
+  1. **All Enriched Modules:** Unfiltered module sets.
+  2. **Mouse-Significant Modules:** Modules meeting $\text{padj} \le 0.25$ in the mouse model.
+  3. **Dual-Significant Modules:** Modules meeting $\text{padj} \le 0.25$ concordantly in both human and mouse cohorts.
+
+#### Figure 43b | Predictive Classification Performance (ROC & AUC)
+- **Objective:** Determine whether murine pathway signatures can accurately predict the regulatory status of human biological modules.
+- **Classification Task:** Murine effect metrics ($NES$ or mean $\log_2\text{FC}$) were deployed as continuous decision scores to classify human modules as significantly up- or down-regulated.
+- **Timepoint Regimes:**
+  - **Equal Timepoints:** Matched chronological intervals (e.g., Human Day 1 vs. Mouse Day 1).
+  - **Different Timepoints:** Cross-temporal evaluations accommodating species differences in kinetic velocity (e.g., murine Day 1 modeling human Day 3 or Day 7).
+- **Validation Controls:** Murine model performance was benchmarked against:
+  - **Permutation Controls:** Null distributions generated by randomly shuffling module labels ($N = 1,000$ iterations).
+  - **Biological Controls:** Unrelated baseline pathological cohorts (e.g., Duchenne Muscular Dystrophy, DMD) to establish empirical specificity baselines.
+- **Performance Metrics:** Receiver Operating Characteristic (ROC) curves and Area Under the Curve (AUC) were generated using `pROC` and `yardstick`.
+
+#### Figure 43c | Leading-Edge Gene (LEG) Conservation
+- **Objective:** Dissect whether module-level conservation is driven by identical core genes or alternative pathway components.
+- **Extraction:** For each enriched BTM ($\text{padj} \le 0.25$), the Leading-Edge Genes (LEGs)—genes accounting for the core enrichment signal prior to the peak running enrichment score—were extracted for both species.
+- **Categorization:** Genes within each module were partitioned into:
+  1. **Shared LEGs:** Present in the leading edge of both human and mouse.
+  2. **Human-Specific LEGs:** Driving enrichment exclusively in humans.
+  3. **Mouse-Specific LEGs:** Driving enrichment exclusively in mice.
+  4. **Non-LEGs:** Module members not contributing to the core leading-edge signal.
+- **Visualization:** Proportions and counts are visualized via stacked and faceted barplots across conditions.
+
+#### Figure 43d | Gene Rank Conservation in Core Immune Modules
+- **Objective:** Evaluate the conservation of intra-module gene prioritization between human and mouse.
+- **Focal Module:** Illustrated using the *"immune activation - generic cluster"* (BTM M37.0; 347 genes), representing innate inflammatory, Toll-like receptor, and chemokine signaling programs.
+- **Composite Rank Metric:** For each gene $g$, a rank score combining effect size and statistical significance was formulated:
+  $$\text{Rank Score}_g = \log_2(\text{FC}_g) \times \left( -\log_{10}(P\text{-value}_g) \right)$$
+- **Ranking Vector:** All orthologous module genes were ranked in descending order separately within human ($\text{Rank}_H$) and mouse ($\text{Rank}_M$). Spearman rank correlation was calculated between the two vectors.
+- **Visual Mapping:** A parallel-axis rank trajectory plot connects gene positions between human (left axis, H) and mouse (right axis, M):
+  - **Blue Lines:** Shared LEGs (conserved core drivers).
+  - **Black Lines:** Human-specific LEGs.
+  - **Dark Gray Lines:** Mouse-specific LEGs.
+  - **Light Gray Lines:** Non-LEGs (background module members).
+
+---
+
+## VII. EVOLUTIONARY GENOMICS: PROTEIN CODING VS. CIS-REGULATORY ARCHITECTURE
+
+Notebooks `5.1_EvolutionaryAnalysis_Protein.Rmd` and `5.2_EvolutionaryAnalysis_Regulation.Rmd` assess whether transcriptomic divergence is governed by structural coding evolution or regulatory rewiring.
+
+### VII.A Coding Sequence (CDS) Acquisition & Longest Isoform Selection
+1. **Source:** High-confidence 1:1 orthologous gene pairs were identified via Ensembl BioMart (`hsapiens_gene_ensembl` and `mmusculus_gene_ensembl`) using `biomaRt`.
+2. **Partitioned Retrieval:** Due to query volume and server timeout constraints, mouse CDS records were programmatically split into 3 balanced partitions (`target_map_mouse_part1`, `part2`, `part3`) and queried in chunks of 100 genes.
+3. **Isoform Resolution (Longest Canonical CDS):** Because alternative splicing produces multiple transcripts per Ensembl Gene ID, a filtering step retained only the longest coding sequence:
+   $$\text{Canonical CDS}_g = \arg\max_{t \in \mathcal{T}_g} \left( \operatorname{nchar}(\text{coding}_{g,t}) \right)$$
+   Records with `"Sequence unavailable"` or non-coding annotations were purged.
+
+### VII.B Pairwise Nucleotide Global Alignment & Distance Computation
+1. **Sequence Sanitization:** Leading/trailing whitespace and newline delimiters were stripped, and nucleotide sequences were converted to uppercase.
+2. **Global Needleman-Wunsch Alignment:** Pairwise global alignment was performed using `pwalign::pairwiseAlignment(type = "global")` between human and mouse CDS strings:
+   ```r
+   dna_align <- pwalign::pairwiseAlignment(
+     Biostrings::DNAString(human_cds),
+     Biostrings::DNAString(mouse_cds),
+     type = "global"
+   )
+   ```
+3. **Conversion to Alignment Object:** Aligned pattern and subject strings—preserving gap characters (`'-'`)—were converted to character matrices and converted into `DNAbin` objects via `ape::as.alignment()` and `ape::as.DNAbin()`.
+4. **Kimura 2-Parameter (K80) Distance Calculation:** Molecular evolutionary distances were computed using `ape::dist.dna(bin_dna, model = "K80")`. The Kimura K80 model corrects for multiple hits and differential rates between transitions ($P$) and transversions ($Q$):
+   $$d_{\text{K80}} = -\frac{1}{2}\ln(1 - 2P - Q) - \frac{1}{4}\ln(1 - 2Q)$$
+   Jukes-Cantor (JC69) distances were computed in parallel as a sensitivity control.
+5. **Protein Sequence Identity:** Amino acid sequence identity percentages (`identity_human2mouse` and `identity_mouse2human`) were extracted from Ensembl BioMart homology tables.
+
+### VII.C Cis-Regulatory Element (cCRE) Architecture from ENCODE
+To interrogate promoter and enhancer rewiring, Candidate Cis-Regulatory Elements (cCREs) were integrated from the ENCODE project:
+- **Human Reference:** GRCh38 cCRE catalogue.
+- **Mouse Reference:** mm10 cCRE catalogue.
+- **Functional Classes Analyzed:**
+  - **PLS:** Promoter-Like Signatures (high DNase, high H3K4me3, centered within 200 bp of TSS).
+  - **pELS / dELS:** Proximal and Distal Enhancer-Like Signatures (high DNase, high H3K27ac).
+  - **CTCF-bound:** Elements demonstrating high CTCF occupancy (chromatin architectural boundaries).
+- **Homology Mapping:** cCREs were assigned to target orthologs based on genomic distance to the primary Transcription Start Site (TSS) ($\pm 2\text{ kb}$ for promoters, $\pm 50\text{ kb}$ for enhancers). Regulatory conservation scores were calculated based on reciprocal element presence and transcription factor binding site conservation.
+
+---
+
+## VIII. MULTI-MODAL STATISTICAL MODELING (`tidymodels`)
+
+Script `6_Statistical_Modelling.Rmd` integrates heterogeneous evolutionary, regulatory, and transcriptomic metrics into a unified predictive modeling framework.
+
+### VIII.A Feature Matrix Construction
+A master feature matrix (`human_mouse_statsmodelling_parameters_values.rds`) was assembled by merging:
+1. **Structural Coding Evolution:** Kimura K80 CDS distance (`dist_k80`), amino acid identity %.
+2. **Transcriptional Concordance:** $\Delta \log_2\text{FC}$, sampling stability $SD$, linear model standard error $SE$.
+3. **Cis-Regulatory Features:** Promoter cCRE class presence (PLS, pELS, dELS, CTCF) in human and mouse, cCRE distance metrics.
+4. **Transcription Factor (TF) Networks:** Shared vs. species-unique TF binding site counts within orthologous promoters.
+5. **Functional Domain Annotations:** BTM module category, immune vs. non-immune designation.
+
+### VIII.B Model Training & Variable Importance
+- **Algorithms:** Random Forest classifiers/regressors (via the `ranger` engine) and regularized Elastic Net regression (via `glmnet`) implemented within the `tidymodels` ecosystem.
+- **Cross-Validation:** 10-fold cross-validation repeated 5 times, stratified by condition and immune module category.
+- **Variable Importance in Projection (VIP):** Permutation-based variable importance metrics were computed via `vip::vip()` to rank the genomic and epigenetic predictors governing cross-species translatability.
+
+---
+
+## IX. COMPUTATIONAL REPRODUCIBILITY & REPOSITORIES
+
+### IX.A Environment Management via `renv`
+All analyses were executed under R version 4.5.2 (Bioconductor 3.22). Complete computational environments are pinned in `renv.lock`. The project environment can be restored via:
+```r
+renv::restore()
 ```
 
-### III.C Visual Quality Control Outputs
-
-- **Density plots:** Sample-wise distribution of log-intensity values
-- **PCA biplot:** Samples colored by batch/condition; outliers identified
-- **Heatmaps:** Sample clustering by expression correlation
-- **MA-plots:** Per-sample M vs. A; assess normalization adequacy
-- **Relative Log Expression (RLE) boxplots:** Within-sample consistency across genes
-
-------------------------------------------------------------------------
-
-## IV. DATA PREPROCESSING & STANDARDIZATION
-
-### IV.A Raw Data Acquisition
-
-**Data Download:** - **Method:** GEOquery::getGEO() for automated download from Gene Expression Omnibus - **Input:** GEO accession number (e.g., "GSE120661") - **Output:** Bioconductor ExpressionSet object containing: - Expression matrix (probes × samples) - Probe annotation (platform information) - Sample metadata (phenotype data)
-
-**Example workflow:**
-
-``` r
-library(GEOquery)
-gse <- getGEO("GSE120661", GSEMatrix = TRUE)
-eset <- gse[[1]]
-exprs_matrix <- exprs(eset)
-metadata <- pData(eset)
-```
-
-**Data Storage:** - Expression matrices: Save as RDS (`readRDS()` / `saveRDS()`) - Metadata: Save as CSV for human readability and version control - All saved to `tables/` for organized access
-
-### IV.B Platform-Specific Normalization
-
-**Microarray platforms in dataset:**
-
-| Platform | Organism | Technology | Normalization Method |
-|------------------|------------------|------------------|------------------|
-| **Agilent 8×60K** | Mouse | Spotted microarray | Quantile normalization (limma::normalizeBetweenArrays) |
-| **Illumina HumanHT-12** | Human | Bead array | Quantile normalization (beadarray or limma) |
-| **Illumina MouseWG-6** | Mouse | Bead array | Quantile normalization |
-| **Affymetrix HuGene** | Human | Oligonucleotide array | RMA (Robust Multi-array Average) via affy package |
-
-**Normalization steps (common to all):**
-
-1.  **Background correction:** Remove non-specific signal
-    - Agilent/Illumina: Median-based background subtraction
-    - Affymetrix: RMA background correction
-2.  **Normalization:** Scale samples to common intensity distribution
-    - Method: Quantile normalization across all samples
-    - Purpose: Remove technical variation while preserving biological signal
-    - Output: Intensity values on log₂ scale
-3.  **Within-array normalization:** Correct for dye bias (if applicable)
-    - Affymetrix: Inherent in RMA
-    - Agilent: Loess normalization
-4.  **Between-array normalization:** Make arrays comparable
-    - Method: Quantile normalization (set all arrays to same empirical distribution)
-    - Implementation: `limma::normalizeBetweenArrays(..., method = "quantile")`
-
-**Normalized expression matrix output:** - Dimensions: Genes/probes (rows) × samples (columns) - Values: Log₂-transformed intensity - All samples on comparable scale (no batch effects at this stage)
-
-### IV.C Probe-to-Gene Annotation & Collapsing
-
-**Step 1: Probe Annotation** - Retrieve gene annotations from microarray platform: - Probe ID → Gene symbol (HGNC human, MGI mouse) - Entrez Gene ID (NCBI) for consistent cross-database mapping - Ensembl ID (for future RNA-seq integration) - Tool: biomaRt::useMart() + biomaRt::getBM() - Reference: NCBI Entrez Gene database
-
-**Step 2: Handling Probe Redundancy** - **Issue:** Multiple probes may target same gene; others may have poor annotation - **Strategy:** Collapse by retaining probe with highest variance across samples - Rationale: High-variance probes capture condition-specific signal better than constitutively expressed probes - Implementation: For each gene, select probe with `max(var(log2_intensity))` - **Alternative:** Mean or median intensity across probes (less preferred due to potential noise amplification)
-
-**Step 3: Gene Symbol Consistency** - Convert to HGNC symbols (humans) and MGI symbols (mice) - Remove non-genic probes (spike-ins, controls, etc.) - Flag genes with multiple annotation conflicts (rare; usually \<1%) - Output: Gene-level expression matrix (genes × samples)
-
-**Example output structure:**
-
-```         
-         GSM001  GSM002  GSM003  ...
-ACTB     10.5    11.2    10.8
-GATA3    7.3     8.1     7.5
-IL4      12.1    13.5    12.0
-...
-```
-
-### IV.D Log₂ Fold-Change Computation
-
-**Purpose:** Quantify gene expression change relative to baseline (Day 0 / pre-treatment).
-
-**Methodology:**
-
-1.  **Design matrix specification**
-    - For paired samples: `log2FC = log2(day_i_expression) - log2(day_0_expression)`
-    - For unpaired: t-test-derived effect size; standardized across conditions
-    - Handle missing baseline samples: Use condition-level mean or forward-fill if time gaps \< 7 days
-2.  **Per-sample computation**
-    - For each sample at timepoint *t*:
-      - Identify matched Day 0 baseline (same individual)
-      - Compute log₂FC per gene: `log2(exprs_t) - log2(exprs_0)`
-      - If no paired baseline: Use condition-level median Day 0 expression
-3.  **Long-format output**
-    - Convert to tidy format (one row per gene-sample pair)
-    - Columns: gene_symbol, sample_id, organism, timepoint, log2FC, condition, batch
-    - Advantages: Easy filtering, joining with metadata, compatible with ggplot2
-
-**Data structure:**
-
-```         
-| gene_symbol | sample_id | organism | timepoint | log2FC | condition          |
-|---|---|---|---|---|---|
-| IL6         | GSM001    | Mouse    | 1         | 2.3    | influenza_fluad_M1 |
-| IL6         | GSM002    | Mouse    | 3         | 3.1    | influenza_fluad_M3 |
-| TNF         | GSM001    | Mouse    | 1         | 1.5    | influenza_fluad_M1 |
-```
-
-**Quality checks on log₂FC:** - Mean should be ≈ 0 (symmetric up/down-regulation) - Outliers: \|log2FC\| \> 5 reviewed for data entry errors - Distribution check: Plot histogram; expect near-normal distribution
-
-------------------------------------------------------------------------
-
-## V. PER-CONDITION DIFFERENTIAL EXPRESSION ANALYSIS
-
-**Context:** Each condition (vaccine type, pathogen, injury) analyzed separately; human and mouse samples processed in parallel but independently.
-
-### V.A Differential Gene Expression via Limma
-
-**Purpose:** Identify genes with statistically significant expression changes between treated and untreated states.
-
-**Methodology:**
-
-1.  **Design matrix specification**
-
-    ``` r
-    # Example for influenza Fluad vaccine (per timepoint)
-    group <- factor(paste(metadata$organism, metadata$treatment, sep = "_"))
-    design <- model.matrix(~0 + group)
-    colnames(design) <- levels(group)
-    ```
-
-    - Rows: Samples
-    - Columns: Experimental conditions (e.g., "Human_Treated", "Mouse_Treated")
-    - Intercept: Set to 0 to get direct coefficient estimates
-
-2.  **Contrast specification**
-
-    - Compare treated vs. untreated:
-      - `contrast.matrix <- makeContrasts(Human_Treated - Human_Untreated, ...)`
-    - Per-organism per-timepoint contrasts:
-      - Day 1 vs. Day 0, Day 3 vs. Day 0, Day 7 vs. Day 0, etc.
-    - Separate contrasts for human vs. mouse to avoid species-confounded effects
-
-3.  **Linear model fitting**
-
-    ``` r
-    fit <- lmFit(expression_matrix, design)
-    fit <- contrasts.fit(fit, contrast.matrix)
-    fit <- eBayes(fit)  # Empirical Bayes variance moderation
-    ```
-
-    - Fits gene-wise linear regression
-    - Borrows information across genes for variance estimation
-    - Accounts for limited sample sizes (degrees of freedom \< 30 typically)
-
-4.  **Empirical Bayes Variance Moderation**
-
-    - **Problem:** Small sample sizes → gene-wise variances are noisy estimates
-    - **Solution:** Shrink gene-wise variances toward pooled posterior estimate
-    - **Effect:** Stabilizes t-statistics; improves power and ranking
-    - Implementation: `limma::eBayes()` with `trend = TRUE` for intensity-dependent variance
-
-5.  **Statistical Testing & Multiple Correction**
-
-    - Test null hypothesis: Log₂FC = 0 for each gene
-    - Output per gene:
-      - `logFC`: Estimated log₂ fold-change
-      - `t-statistic`: Ratio of logFC to standard error
-      - `p-value`: Two-tailed from t-distribution
-      - `adj.p-value`: Benjamini-Hochberg (BH) False Discovery Rate correction
-      - Confidence intervals (95% CI on logFC)
-
-6.  **Significance thresholds**
-
-    - Primary: `adj.p-value < 0.05` (5% FDR)
-    - Secondary: `|logFC| > 1` (2-fold change) for biological significance
-    - Output table ranked by t-statistic for downstream GSEA
-
-**DEG Output Table Structure:**
-
-| Column         | Description                            | Example         |
-|----------------|----------------------------------------|-----------------|
-| `gene_symbol`  | HGNC (human) or MGI (mouse) symbol     | IL6             |
-| `entrez_id`    | NCBI Entrez Gene ID                    | 3569            |
-| `logFC`        | Log₂ fold-change (treated vs. control) | 1.85            |
-| `AveExpr`      | Average log₂ expression across samples | 9.2             |
-| `t`            | Moderated t-statistic                  | 4.23            |
-| `p.value`      | Unadjusted p-value                     | 0.0001          |
-| `adj.p.value`  | BH-corrected p-value (FDR)             | 0.0234          |
-| `B`            | Log-odds of differential expression    | 2.1             |
-| `CI.L`, `CI.R` | 95% confidence interval bounds         | 1.2, 2.5        |
-| `organism`     | Human or Mouse                         | Mouse           |
-| `timepoint`    | Days post-treatment                    | 3               |
-| `condition`    | Condition identifier                   | influenza_fluad |
-
-### V.B Gene Set Enrichment Analysis (GSEA) via fgsea
-
-**Purpose:** Identify functional pathways or gene sets with coordinated expression changes (less dependent on arbitrary significance thresholds than individual DEG analysis).
-
-**Methodology:**
-
-1.  **Ranked gene list creation**
-
-    - Rank all genes by t-statistic (or logFC × sign(logFC)) from limma DEG analysis
-    - Rationale: t-statistic incorporates both effect size and statistical uncertainty
-    - Output: Numeric vector with gene names as names, sorted descending
-
-    ``` r
-    ranked_genes <- setNames(
-      limma_results$t,
-      limma_results$gene_symbol
-    ) |> sort(decreasing = TRUE)
-    ```
-
-2.  **Gene set definitions**
-
-    - Gene sets: Collections of genes with known functional relationships
-    - Sources in this project:
-      - **MSigDB Hallmarks** (50 predefined biological processes)
-      - **BTM modules** (346+ Blood Transcription Modules, see Section V.C)
-    - Format: Gene Matrix Transposed (GMT) or list object
-    - Inclusion criteria: Sets with 10–500 genes (too small: noise; too large: non-specific)
-
-3.  **Rank-rank enrichment scoring**
-
-    - For each gene set: Evaluate if member genes are over-represented in upper/lower ranks
-    - Statistic: Kolmogorov-Smirnov (KS) test adapted for ranking
-    - Metric: **Normalized Enrichment Score (NES)**
-      - Positive NES: Set members ranked high (upregulated)
-      - Negative NES: Set members ranked low (downregulated)
-      - \|NES\| \> 1.5 typically indicates meaningful enrichment
-
-4.  **FDR correction**
-
-    - Permute sample labels 1000 times; recompute NES distribution under null
-    - Empirical p-value: Proportion of permutations with \|NES\| \> observed
-    - Adjusted p-value: `padj <- p.adjust(p, method = "BH")`
-    - Threshold: `padj < 0.05` for significant enrichment
-
-**GSEA Output Structure:**
-
-| Column        | Description                         | Example          |
-|---------------|-------------------------------------|------------------|
-| `pathway`     | Gene set name                       | IMMUNE_RESPONSE  |
-| `pval`        | Nominal p-value                     | 0.001            |
-| `padj`        | BH-corrected p-value (FDR)          | 0.032            |
-| `ES`          | Enrichment Score (KS statistic)     | 0.52             |
-| `NES`         | Normalized Enrichment Score         | 2.14             |
-| `leadingEdge` | Gene set members driving enrichment | IL6, TNF, IFN... |
-| `log2err`     | Log2 error estimate                 | 0.12             |
-| `organism`    | Human or Mouse                      | Human            |
-| `timepoint`   | Days post-treatment                 | 3                |
-
-### V.C Single-Sample Gene Set Enrichment (ssGSEA) on Blood Transcription Modules
-
-**Purpose:** Score each sample's "activity level" for each BTM module (provides single-sample quantification without requiring group comparisons).
-
-**Blood Transcription Modules (BTMs) Overview:** - Source: Li et al. (Nature Immunology 2014, 2021) - Composition: 346 consensus modules representing immune cell types and functional processes - Annotation: Each module linked to: - Primary cell type (T cell, B cell, neutrophil, monocyte, etc.) - Functional annotation (activation, differentiation, type I interferon, etc.) - Cross-module grouping (16 immune groups, see CODEBOOK.md) - Gene set size: 10–100 genes per module (average \~25)
-
-**ssGSEA methodology:**
-
-1.  **Input:** Per-sample normalized expression matrix (genes × samples)
-
-2.  **Score computation (per sample, per BTM)**
-
-    - Calculate cumulative distribution of BTM member gene ranks
-    - Compare to background (all genes) distribution
-    - Output: Single numeric value per BTM per sample
-    - Implementation: `GSVA::gsva(..., method = "ssgsea")`
-
-3.  **Normalization:**
-
-    - Scores scaled to [0, 1] range (default in GSVA)
-    - Alternative: Z-score normalization across samples for each BTM
-
-4.  **Data structure:**
-
-    - Rows: BTM modules (346)
-    - Columns: Samples
-    - Values: ssGSEA score (0–1)
-    - Interpretation: High score = module members highly expressed in that sample
-
-**Advantages of ssGSEA over alternative methods:** - Rank-based: Robust to outlier expression values - Accounts for gene set size: Normalizes longer/shorter sets - Single-sample output: No group comparison required; can use as continuous predictor
-
-**Integration with metadata:** - Join ssGSEA scores with sample metadata - Enables per-sample-per-module correlation with timepoint, organism, treatment
-
-### V.D Cross-Species BTM and Hallmark Correlation
-
-**Purpose:** Quantify whether human and mouse show coordinated module-level responses to matched stimuli.
-
-**Methodology:**
-
-1.  **Per-condition aggregation**
-    - For each human vs. mouse condition pair (e.g., Influenza Fluad):
-      - Aggregate all human samples → compute mean ssGSEA per BTM per timepoint
-      - Aggregate all mouse samples → compute mean ssGSEA per BTM per timepoint
-2.  **Module-level correlation**
-    - For each timepoint (e.g., Day 3):
-      - Create vectors: Human_BTM_scores (346 modules) vs. Mouse_BTM_scores (346 modules)
-      - Compute Spearman rank correlation: `cor(human, mouse, method = "spearman")`
-      - Rationale: Rank correlation robust to expression outliers; respects module ranking
-3.  **Correlation matrix creation**
-    - Rows: Timepoints (0, 1, 3, 7, 14 days, etc.)
-    - Columns: Gene sets (BTMs, Hallmarks, other)
-    - Values: Spearman ρ or Pearson r
-    - Example interpretation: Day 7 Fluad → ρ = 0.68 (moderate-strong coordination)
-4.  **Statistical significance**
-    - Permutation test: Shuffle organism labels; recompute correlation
-    - P-value: Proportion of permutations with \|ρ\| \> observed
-    - Threshold: p \< 0.05 for significant correlation
-
-**Output visualization:** - Scatter plot: Human module score (x-axis) vs. Mouse module score (y-axis) - Color by module group (immune cell type or functional category) - Size by module size (gene count) - Regression line with 95% CI
-
-**Interpretation:** - High correlation (ρ \> 0.6): Strong module-level conservation; mouse accurately models human - Low correlation (ρ \< 0.3): Divergent module responses; caution in translating individual modules - Condition-dependent: Different stimuli may show different conservation levels
-
-------------------------------------------------------------------------
-
-## VI. UNIFIED CROSS-CONDITION ANALYSIS
-
-**Context:** After completing per-condition analysis (Section V) for all 7 conditions, consolidate results for integrated interpretation.
-
-### VI.A Aggregate Differential Expression Analysis
-
-**Step 1: DEG collation** - Combine DEG results from all conditions: - `influenza_fluad_human_mouse_dge_limma_degs.rds` - `hepatitisb_engerixb_human_mouse_dge_limma_degs.rds` - `ecoli_infection_human_mouse_dge_limma_degs.rds` - ... (all conditions) - Create unified DEG table: \~18,000–20,000 unique genes × 7 conditions × 2 organisms
-
-**Step 2: Shared vs. unique gene analysis** - For each condition, identify: - **Shared DEGs:** Genes significant in both human and mouse (adj.p \< 0.05) - **Human-only:** DEGs in human but not mouse - **Mouse-only:** DEGs in mouse but not human - **Neither:** Non-significant in both
-
-**Step 3: Overlap statistics** - **Fisher's exact test:** Test association between human and mouse DEG status - 2×2 contingency table: (DEG in human, DEG in mouse) - Null hypothesis: Organism and DEG status independent - Output: Odds ratio, p-value, confidence interval
-
-- **Jaccard index:** Measure similarity of DEG sets
-  - Formula: J = \|A ∩ B\| / \|A ∪ B\|
-  - Range: 0 (no overlap) to 1 (complete overlap)
-  - Example: Influenza Day 3, 500 human DEGs + 450 mouse DEGs, 300 shared → J = 300/650 = 0.46
-
-**Output table structure:**
-
-| Condition | Timepoint | Human_DEG_count | Mouse_DEG_count | Shared_count | Fisher_pval | Jaccard_index |
-|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
-| influenza_fluad | D1 | 245 | 189 | 98 | 0.003 | 0.27 |
-| influenza_fluad | D3 | 523 | 456 | 312 | \<0.001 | 0.46 |
-| hepatitisb_engerixb | D1 | 134 | 167 | 64 | 0.12 | 0.22 |
-
-### VI.B Rank-Rank Hypergeometric Overlap (RRHO2)
-
-**Purpose:** Visual identification of concordant and discordant human-mouse gene responses across full ranked lists (not just significant genes).
-
-**Methodology:**
-
-1.  **Ranked gene lists**
-    - For each condition × timepoint:
-      - Human list: Rank by t-statistic (descending)
-      - Mouse list: Rank by t-statistic (descending)
-    - Preserve full gene rankings (include non-significant genes)
-2.  **RRHO2 algorithm**
-    - Compare ranks at each position:
-      - For top 100 genes in human: How many appear in top 100 of mouse?
-      - For top 200 genes: How many in top 200?
-      - ... (iterate through all rank cutoffs)
-    - Hypergeometric test at each cutoff:
-      - Expected overlap by chance: (N_top / N_total)²
-      - Observed vs. expected: p-value
-      - Color code: Blue (more overlap than expected), Red (less overlap)
-3.  **Output: RRHO2 heatmap**
-    - Rows: Human gene ranks (1–n)
-    - Columns: Mouse gene ranks (1–n)
-    - Color intensity: -log10(p-value) from hypergeometric test
-    - Blue squares: Concordant region (same genes highly ranked in both)
-    - Red squares: Discordant region (different genes ranked highly)
-
-**Interpretation:** - Strong blue diagonal: High concordance; similar top-ranked genes - Off-diagonal red: Some genes upregulated in human but downregulated in mouse - Scattered pattern: Complex, condition-specific responses
-
-### VI.C Consolidated Cross-Condition Gene Set Enrichment
-
-**Step 1: Meta-GSEA (optional)** - Combine ranked gene lists across conditions using weighted Z-score approach - Raison d'être: Identify pathways consistently enriched across multiple stimuli
-
-**Step 2: Per-condition BTM/Hallmark summary** - Consolidate ssGSEA and GSEA results across all conditions - Table format: - Rows: Gene sets (BTM modules, Hallmarks) - Columns: Condition × Timepoint × Organism - Values: Mean NES or ssGSEA score - Coloring: Heatmap with high = red, low = blue
-
-**Step 3: Immune group summaries** - Aggregate BTM results by 16 immune groups (see CODEBOOK.md): - T cell modules - B cell modules - Neutrophil modules - Monocyte/macrophage modules - NK cell modules - Type I interferon modules - (etc.) - Compute mean enrichment per immune group per condition × timepoint
-
-**Output visualization: Immune response heatmap** - Rows: 16 immune groups - Columns: 7 conditions × 5 timepoints × 2 organisms - Cells: Mean BTM enrichment (z-score normalized within condition) - Shows: Which immune cell types are activated in each condition/organism/timepoint
-
-### VI.D Cross-Species Functional Equivalence Assessment
-
-**Primary metric: Translatability Index** - Composite measure combining: 1. Shared DEG overlap (Jaccard index) 2. Module-level correlation (Spearman ρ on ssGSEA scores) 3. RRHO2 concordance (proportion blue region) 4. Direction consistency (genes concordantly up/down regulated)
-
-**Calculation:**
-
-```         
-Translatability = 0.25×(Jaccard) + 0.25×(abs(Spearman_rho)) 
-                + 0.25×(RRHO2_concordance) + 0.25×(directional_consistency)
-```
-
-- Range: 0 (no translation) to 1 (perfect translation)
-- Interpretation:
-  - 0.7–1.0: High translational validity
-  - 0.5–0.7: Moderate (pathway-level may be conserved even if gene-level is not)
-  - \<0.5: Low; caution in translating findings
-
-**Condition ranking:** - Rank conditions by translatability index - Expected pattern: Strong infections/injuries (S. aureus, burn, trauma) \> mild vaccines
-
-------------------------------------------------------------------------
-
-## VII. MACHINE LEARNING & PREDICTIVE MODELING
-
-### VII.A Feature Selection from Functional Modules
-
-**Purpose:** Use Blood Transcription Modules (rather than individual genes) as features for machine learning, leveraging the finding that module-level responses are more conserved.
-
-**Step 1: BTM scoring matrix preparation** - Input: ssGSEA scores (346 BTMs × \~400 samples) - Metadata: Organism (human vs. mouse), condition, timepoint, response phenotype (if available) - Approach: Use BTM scores as feature matrix (346 features) - Rationale: Reduces dimensionality (\~20,000 genes → 346 modules); increases interpretability; removes noise
-
-**Step 2: Feature importance ranking (per condition)** - For each condition, rank BTMs by predictive power: - Method 1: Univariate t-test (BTM score \~ organism + treatment) - Method 2: Model-agnostic importance (e.g., permutation importance) - Threshold: Retain top 50–100 BTMs (or all with p \< 0.01)
-
-**Step 3: Feature engineering (optional)** - Create derived features: - Immune module group scores (mean of BTMs in same group) - Temporal features (rate of change Day 1→3, Day 3→7, etc.) - Organism-specific marker scores
-
-### VII.B FIT Model Training (Found In Translation)
-
-**Goal:** Build a machine learning model trained on mouse responses that can predict human responses.
-
-**Training data preparation:**
-
-1.  **Training set composition**
-    - **Source organism:** Mouse samples only
-    - **Response variable:** Some human-relevant phenotype (e.g., vaccine response level categorized as "high" vs. "low" responder, or continuous antibody titer if available)
-    - **Sample size:** All mouse samples for each condition (\~50–150 per condition)
-    - **Feature set:** 50–100 top BTM scores (or all 346)
-2.  **Response variable definition**
-    - **Option A:** Binary classification (responder vs. non-responder)
-      - Threshold: e.g., high responders = top quartile of human antibody response
-    - **Option B:** Continuous regression (predict antibody titer or protection level)
-    - **Option C:** Multi-class (low/moderate/high response)
-    - Note: Response phenotype must be measured in matched human cohort
-
-**Model training:**
-
-1.  **Cross-validation strategy**
-    - K-fold (K=5 or K=10) within mouse training data
-    - Ensures robust performance estimate; prevents overfitting
-    - Stratification: Maintain condition/timepoint balance across folds
-2.  **Algorithm selection**
-    - **Logistic regression** (baseline; interpretable coefficients)
-    - **Random Forest** (handles non-linearity; feature importance)
-    - **Elastic Net** (regularized regression; feature selection)
-    - **Support Vector Machine (SVM)** (non-linear classification; high-dimensional data)
-    - **Neural network** (if sufficient samples; requires careful validation)
-3.  **Hyperparameter tuning**
-    - Grid search or random search across reasonable parameter ranges
-    - Nested cross-validation: Inner loop (tune hyperparams) + Outer loop (estimate performance)
-    - Metric for optimization: Balanced accuracy (avg of sensitivity and specificity)
-4.  **Training output**
-    - Trained model object (saved as RDS)
-    - Feature importances (which BTMs drive predictions)
-    - Cross-validation performance metrics
-
-**Example: Logistic Regression BTM model**
-
-```         
-logit(P_responder) = β₀ + β₁×(BTM_1_score) + β₂×(BTM_2_score) + ... + β_k×(BTM_k_score)
-
-Output: Coefficients β_i indicate whether each BTM is predictive of response
-```
-
-### VII.C Cross-Species Prediction
-
-**Step 1: Apply trained model to human data** - Input: Human sample BTM scores (same feature set as training) - Model: Trained mouse-derived model - Output: Predicted response probability/score for each human sample
-
-**Step 2: Compare predicted vs. actual human response** - If human response phenotype is measured: - Calculate prediction accuracy, sensitivity, specificity, AUC-ROC - If unmeasured: - Generate predictions for hypothesis generation (to be validated experimentally)
-
-**Step 3: Condition-stratified evaluation** - Repeat Steps 1–2 for each condition separately - Expected: Predictions more accurate for conditions with high translational validity (infections \> mild vaccines)
-
-### VII.D Predictive Performance Benchmarking
-
-**Evaluation metrics (for binary classification):**
-
-| Metric | Formula | Interpretation |
-|------------------------|------------------------|------------------------|
-| **Accuracy** | (TP + TN) / (TP + TN + FP + FN) | Proportion correct |
-| **Sensitivity (Recall)** | TP / (TP + FN) | Proportion true responders correctly identified |
-| **Specificity** | TN / (TN + FP) | Proportion true non-responders correctly identified |
-| **Precision (PPV)** | TP / (TP + FP) | Among predictions "responder", % actually responders |
-| **F1-score** | 2 × (Precision × Recall) / (Precision + Recall) | Harmonic mean of precision/recall |
-| **AUC-ROC** | Integral under ROC curve | 0.5 = random; 1.0 = perfect |
-| **Matthews Corr. Coeff.** | (TP×TN − FP×FN) / √[(TP+FP)(TP+FN)(TN+FP)(TN+FN)] | Correlation; accounts for imbalanced classes |
-
-**ROC curve generation:** - Vary decision threshold from 0 to 1 - Plot: Sensitivity (true positive rate) vs. 1 − Specificity (false positive rate) - Interpretation: Curve closer to top-left = better; AUC summarizes overall performance
-
-**Benchmarking outputs:** - Per-condition ROC curves (human predicted vs. actual) - Performance comparison: All genes vs. BTM-only features - Organism subgroup analysis: Stratify by immune gene subsets if available
-
-**Expected findings:** - Mouse model predicts human responses best for high-stimulus conditions (acute infections) - Performance degrades for mild vaccines (lower translatability) - BTM-based features typically outperform individual gene approaches
-
-------------------------------------------------------------------------
-
-## VIII. OUTPUTS & REPRODUCIBILITY
-
-### VIII.A Key Data Artifacts
-
-**Expression & Differential Expression:** - `{condition}_human_mouse_exprs.rds` — Gene-level expression matrices (genes × samples) - `{condition}_human_mouse_dge_limma_degs.rds` — Limma DEG results with logFC, p-values, confidence intervals - `all_human_mouse_log2fc_sample_clean_long.rds` — Long-format per-sample log₂FC (for ggplot2 plotting)
-
-**Functional Enrichment:** - `{condition}_human_mouse_gsea_btm_results.rds` — GSEA results (BTMs per condition) - `{condition}_human_mouse_gsea_hallmarks_results.rds` — GSEA results (MSigDB Hallmarks) - `{condition}_human_mouse_dge_btm_mean_process.rds` — Mean log₂FC per BTM module per timepoint - `all_human_mouse_dge_btm_samples_log2fc_long.rds` — Per-sample BTM log₂FC scores
-
-**Correlation & Cross-Species:** - `{condition}_human_mouse_samples_btm_correlation_all_timepoints_summary.rds` — Spearman ρ per timepoint - `all_human_mouse_rrho2_results.rds` — RRHO2 overlap heatmaps (if computed) - `all_human_mouse_sharedgenes_fisher_jaccard.rds` — Jaccard indices and Fisher test results
-
-**Machine Learning:** - `fit_model_mouse_trained.rds` — Trained FIT model object - `all_fit_prediction_results.rds` — Predictions on human data with confidence scores - `roc_curve_data_*.rds` — ROC curve coordinates for plotting
-
-**Metadata & Annotations:** - `all_human_mouse_metadata.rds` — Complete sample metadata table - `btm_annotation_genes.csv` — BTM module definitions (gene-to-module mapping) - `msigdb_hallmarks_grouped_genes.csv` — Hallmark gene set definitions
-
-### VIII.B Publication-Ready Figures (534+ total)
-
-**Figure categories:**
-
-| Figure Type | Count | Description | Location |
-|------------------|------------------|------------------|------------------|
-| **Correlation scatter plots** | 50+ | Human vs. mouse BTM/Hallmark correlations per condition | `Figures/` |
-| **RRHO2 heatmaps** | 7 | Rank-rank hypergeometric overlap per condition | `Figures/Figures_Article/` |
-| **Volcano plots** | 35+ | DEG significance per condition × timepoint | `Figures/` |
-| **Demography plots** | 10+ | Sample counts, age distribution, sex ratios | `Figures/` |
-| **DEG overlap visualizations** | 15+ | Venn diagrams, bar charts of shared genes | `Figures/` |
-| **BTM enrichment heatmaps** | 20+ | Module activity per condition × timepoint | `Figures/` |
-| **ROC curves** | 15+ | ML prediction performance | `Figures/` |
-| **Module correlation plots** | 30+ | Spearman ρ per timepoint × condition | `Figures/` |
-| **Pathway enrichment charts** | 50+ | GSEA and ssGSEA results visualizations | `Figures/` |
-| **Supplementary/exploratory** | 300+ | QC plots, intermediate analyses, alternatives | `Figures/` |
-
-**Workflow diagram (Figure):** - Located: `Figures/diagram_animal.png` (included in README) - Shows: 7-step analysis pipeline with inputs/outputs
-
-### VIII.C Computational Reproducibility
-
-**Environment Management via renv:**
-
-1.  **renv.lock file** (963.9 KB)
-
-    - Captures exact versions of all R packages at specific time
-    - Includes CRAN + Bioconductor packages
-    - Reproducible across machines and time
-
-2.  **Package Snapshot:**
-
-    - R version: 4.5.2
-    - Bioconductor version: 3.22
-    - Total packages: 100+
-    - Key packages:
-      - tidyverse 2.0.0 (data wrangling)
-      - limma 3.66.0 (differential expression)
-      - GEOquery 2.78.0 (data download)
-      - clusterProfiler 4.18.4 (enrichment)
-      - fgsea 1.36.2 (GSEA)
-      - GSVA 2.4.4 (ssGSEA)
-      - biomaRt 2.66.1 (gene annotation)
-      - ComplexHeatmap 2.26.1 (heatmap visualization)
-      - RRHO2 (GitHub: RRHO2/RRHO2) — for rank-rank analysis
-
-3.  **Reproduction Instructions:**
-
-    ``` r
-    # Clone repository and restore environment (one-time setup)
-    git clone https://github.com/wapsyed/animals_vax_atlas.git
-    cd animals_vax_atlas
-    renv::restore()  # Installs all packages at exact recorded versions
-
-    # Run analysis notebooks in order (0 through 5)
-    # Each sources scripts_notebooks/required.R for dependencies
-    ```
-
-4.  **Seed Setting (for reproducibility):**
-
-    - All analyses use explicit random seeds where applicable (e.g., machine learning cross-validation)
-    - Ensures identical results across runs
-    - Seed values documented in notebooks
-
-### VIII.D Worked Example Script
-
-**File:** `example/example_btm_correlation.R` (5.1 KB)
-
-**Purpose:** Demonstrate minimal reproducible example for manuscript Figure 3 (cross-species BTM correlation).
-
-**Runtime:** \<2 minutes
-
-**Workflow:** 1. Load pre-computed BTM scores from `tables/` 2. Compute mean log₂FC per BTM per organism per timepoint 3. Generate scatter plot with Spearman correlation 4. Output: `Figures/example_btm_correlation_day7.png`
-
-**Advantages:** - Requires no GEO downloads (all input files pre-computed in repository) - Demonstrates complete workflow on small scale - Serves as template for users creating custom analyses
-
-------------------------------------------------------------------------
-
-## IX. STATISTICAL METHODS & PARAMETERS
-
-### IX.A Multiple Testing Correction
-
-**Benjamini-Hochberg (BH) False Discovery Rate (FDR):** - Used throughout for multiple testing adjustment - Controls expected proportion of false discoveries among rejected hypotheses - Threshold: FDR \< 0.05 (5% FDR) - Less stringent than Bonferroni; more appropriate for exploratory genomics
-
-### IX.B Threshold Values
-
-| Analysis | Parameter | Value | Rationale |
-|------------------|------------------|------------------|------------------|
-| **DEG significance** | adj.p-value (FDR) | \< 0.05 | Standard genomic threshold |
-| **DEG effect size** | \|logFC\| | \> 1 (optional) | Biologically meaningful \~2-fold change |
-| **GSEA significance** | padj | \< 0.05 | FDR-corrected enrichment |
-| **GSEA effect** | \|NES\| | \> 1.5 | Normalized enrichment magnitude |
-| **ssGSEA score** | Range | [0, 1] | Default GSVA normalization |
-| **Module correlation (Spearman ρ)** | Significance | p \< 0.05 | Significant correlation |
-| **Correlation strength** | ρ value | 0.6–1.0: strong; 0.3–0.6: moderate; 0–0.3: weak | Standard interpretation |
-| **RRHO2 p-value** | Threshold | \< 0.001 | Stringent overlap significance |
-
-### IX.C Algorithm Parameters
-
-**Limma DEG fitting:** - Trend variance adjustment: `trend = TRUE` (variance depends on expression level) - Multiple cores: Parallelized where possible
-
-**fgsea GSEA:** - Number of permutations: 1000 (default) - Minimum gene set size: 10 genes - Maximum gene set size: 500 genes
-
-**GSVA ssGSEA:** - Method: `"ssgsea"` (single-sample) - Min.sz: 10 (minimum set size) - Max.sz: 500 (maximum set size) - tau: 1 (weighting parameter; default) - Output normalization: [0, 1]
-
-**RRHO2:** - Alternative hypothesis: "greater" (more overlap than expected) - Bins: n_genes / 10 (number of bins for rank comparison) - Correction: Multiple testing corrected via FDR
-
-### IX.D Ortholog Mapping
-
-**Methodology:** - Source: NCBI Entrez Gene, HGNC (humans), MGI (mice) - Tool: biomaRt::getBM() from ENSEMBL - Criteria: 1:1 orthologs (confirmed homologous genes with single match) - Outgroup: Use sequence homology (BLAST alignment identity \> 70% as backup)
-
-**Ortholog stats:** - Total human protein-coding genes: \~20,000 - Total mouse protein-coding genes: \~20,000 - 1:1 orthologous pairs: \~18,000 (90% of genes) - Paralog-free pairs: Most analyses restrict to 1:1 orthologs
-
-------------------------------------------------------------------------
-
-## X. QUALITY ASSURANCE & VALIDATION
-
-### X.A Automated Data Validation
-
-**Performed during preprocessing:** 1. Dimension check: Expected number of genes/samples match file format 2. NA value check: Unexpected missing values flagged; extent quantified 3. Range check: Log₂-intensity values within expected range [typically 0–16] 4. Duplicate check: No duplicate sample IDs within condition 5. Metadata consistency: All samples have complete required metadata fields
-
-### X.B Manual Sanity Checks
-
-**After DEG analysis:** - Verify direction of known response genes (e.g., IL6 upregulated post-vaccination) - Inspect logFC distribution: Should be approximately symmetric around 0 - Compare effect sizes to published results from same datasets (if available)
-
-**After GSEA:** - Validate that expected pathways are enriched (e.g., interferon response in viral infections) - Check for batch effects or platform artifacts in enrichment patterns
-
-**Cross-species comparison:** - Verify ortholog mapping by spot-checking known genes (e.g., IL6, TNF, GATA3) - Examine correlation scatter plots for outliers or non-linear patterns
-
-### X.C Negative Control Analysis
-
-**Purpose:** Verify that non-biological expectations are not observed.
-
-- **Negative expectation 1:** Unrelated conditions should show low correlation
-  - Example: Influenza response genes should not predict Burn response
-  - Verification: Between-condition correlations should be near zero
-- **Negative expectation 2:** Shuffled data should not replicate findings
-  - Example: Randomize organism labels; rerun correlation analysis
-  - Verification: Shuffled correlation significantly lower than real correlation
-
-------------------------------------------------------------------------
-
-## XI. SUPPLEMENTARY PROTOCOLS
-
-### XI.A Data Sources & GEO Accessions (Reference Table)
-
-| Condition | Organism | GEO Accession | Study Title (abbreviated) | N_samples | Platform | Publication DOI |
-|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
-| Influenza (Fluad) | Human | GSE124689 | TIV+MF59 vaccine response in adults | \~50 | Illumina HT-12 | [10.1016/...] |
-| Influenza (Fluad) + Hepatitis B | Mouse | GSE120661 | Influenza and hepatitis B vaccination | \~100 | Agilent 8×60K | [10.1038/...] |
-| Hepatitis B (Engerix-B) | Human | GSE124533 | Hepatitis B vaccine response | \~50 | Illumina HT-12 | [10.1016/...] |
-| *S. aureus* infection | Human | GSE19668 | Acute S. aureus bacteremia | \~30 | Affymetrix HuGene | [10.1038/...] |
-| *E. coli* infection | Human | GSE33341 | Gram-negative sepsis (E. coli) | \~40 | Affymetrix HuGene | [10.1038/...] |
-| Burn injury | Human | Custom cohort | Burn injury transcriptomics | \~50 | Varies | [Internal] |
-| Trauma | Human | GSE36809 | Surgical trauma response | \~50 | Affymetrix HuGene | [10.1038/...] |
-| Burn + Quadrivalent vaccine | Mouse | GSE182858 | Combined burn and vaccination | \~100 | Illumina MouseWG-6 | [10.1038/...] |
-
-### XI.B Default Color Palettes (from required.R)
-
-**BTM Immune Groups (16 categories):** - T cell modules: Shades of blue - B cell modules: Shades of purple - Neutrophil modules: Shades of orange - Monocyte/macrophage modules: Shades of red - NK cell modules: Shades of green - (See CODEBOOK.md for complete palette)
-
-**Organisms:** - Human: Blue (#0077BE) - Mouse: Orange (#FF7F50)
-
-**Timepoints:** - Day 0: Gray - Day 1: Light color - Day 3: Medium color - Day 7: Dark color - (Specific hex codes in required.R)
-
-------------------------------------------------------------------------
-
-## XII. REFERENCES & FURTHER READING
-
-### XII.A Key Methods Papers
-
-1.  **Limma:** Ritchie et al. "limma powers differential expression analyses for RNA-sequencing and microarray studies" *Nucleic Acids Research* 2015
-2.  **GSEA:** Subramanian et al. "Gene set enrichment analysis: a knowledge-based approach for interpreting genome-wide expression profiles" *PNAS* 2005
-3.  **RRHO2:** Carstens et al. "RRHO2: Enhanced rank-rank hypergeometric overlap analysis" *Nature Methods* 2017 (approx.)
-4.  **BTMs:** Li et al. "Functional modules identify a training set of immune signaling interactions" *Nature Immunology* 2014, 2021
-5.  **BiomaRt:** Durinck et al. "BioMart and Bioconductor: a powerful approach to accessing biological databases" *Nature Methods* 2009
-
-### XII.B Software Packages
-
-- **Bioconductor:** <https://www.bioconductor.org/>
-- **limma:** <https://bioconductor.org/packages/limma/>
-- **fgsea:** <https://bioconductor.org/packages/fgsea/>
-- **GSVA:** <https://bioconductor.org/packages/GSVA/>
-- **clusterProfiler:** <https://bioconductor.org/packages/clusterProfiler/>
-- **biomaRt:** <https://bioconductor.org/packages/biomaRt/>
-- **tidyverse:** <https://www.tidyverse.org/>
-- **ComplexHeatmap:** <https://bioconductor.org/packages/ComplexHeatmap/>
-
-### XII.C Documentation
-
-- README.md — Project overview and quick-start guide
-- CODEBOOK.md — Data dictionary and naming conventions
-- This file (METHODOLOGY.md) — Complete technical methodology
-- example/example_btm_correlation.R — Worked example script
-
-------------------------------------------------------------------------
-
-## XIII. ACKNOWLEDGMENTS & CITATIONS
-
-For use in publications, cite as:
-
-> Wasim Aluísio Prates-Syed, Aline A. Lira, Nelson Cortes, *et al.* (2026). "From Mice to Humans: Functional Modules Improve the Translatability of Transcriptomic Responses." *Genes & Immunity*, [in review].
-
-For specific methods or data, see associated notebooks in `scripts_notebooks/`.
-
-------------------------------------------------------------------------
-
-**Document Version:** 1.0\
-**Last Updated:** 2026-06-02\
-**Maintainer:** Wasim Aluísio Prates-Syed\
-**License:** MIT
+### IX.B Code Availability & Reproducibility Scripts
+- **Primary GitHub Repository:** `https://github.com/wapsyed/animals_vax_atlas`
+- **Minimal Worked Example:** `example/example_btm_correlation.R` demonstrates end-to-end BTM correlation computation from cached tables in $< 2$ minutes.
+
+---
+
+## X. REFERENCES
+
+1. **BTMs:** Li S, et al. Molecular signatures of antibody responses derived from a systems biology approach. *Nature Immunology*. 2014;15(2):195-204.
+2. **limma:** Ritchie ME, et al. limma powers differential expression analyses for RNA-sequencing and microarray studies. *Nucleic Acids Research*. 2015;43(7):e47.
+3. **fgsea:** Korotkevich G, et al. Fast gene set enrichment analysis. *bioRxiv*. 2021; doi:10.1101/060012.
+4. **GSVA:** Hänzelmann S, Castelo R, Guinney J. GSVA: gene set variation analysis for microarray and RNA-seq data. *BMC Bioinformatics*. 2013;14:7.
+5. **Kimura Distance (K80):** Kimura M. A simple method for estimating evolutionary rates of base substitutions through comparative studies of nucleotide sequences. *J Mol Evol*. 1980;16(2):111-120.
+6. **ENCODE cCREs:** The ENCODE Project Consortium. Expanded encyclopaedias of DNA elements in the human and mouse genomes. *Nature*. 2020;583:699-710.
+7. **tidymodels:** Kuhn M, Wickham H. Tidymodels: a collection of packages for modeling and machine learning using tidyverse principles. *https://www.tidymodels.org*. 2020.

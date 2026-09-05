@@ -11,22 +11,23 @@
 
 ## Overview
 
-Mice are the dominant preclinical model in vaccine research, yet their translational value for human immune responses remains contested. This project systematically evaluates murine translatability across vaccination (Influenza, Hepatitis B), acute bacterial infection (*S. aureus*, *E. coli*), and sterile injury (burns and trauma) using publicly available blood transcriptome data from GEO/BioProject.
+Mice are the dominant preclinical model in vaccine research, yet their translational value for human immune responses remains contested. This project systematically evaluates murine translatability across vaccination (Influenza, Hepatitis B), acute bacterial infection (*S. aureus*, *E. coli*), and sterile injury (burns and trauma) using publicly available blood transcriptome data from GEO and BioProject.
 
-A key finding is that while individual orthologous gene correlations are often low, **higher-order pathway and module responses are highly conserved** between species. By shifting from a gene-level to a pathway-level analytical framework — using Blood Transcription Modules (BTMs) and rank-based statistics — murine models accurately predict human immune dynamics. Translational accuracy scales with stimulus intensity: acute infections and systemic injuries show the highest conservation, while milder vaccination stimuli reveal greater species-specific divergence. Divergent gene expression is linked to differences in *cis*-regulatory architecture, not protein sequence identity.
+A central finding of this project is that while individual orthologous gene correlations are often weak, **higher-order pathway and module responses are highly conserved** between species. By shifting from a gene-centric to a pathway-level analytical framework—using Blood Transcription Modules (BTMs), MSigDB Hallmarks, and rank-based statistics—murine models accurately predict human immune dynamics. Translational concordance scales with stimulus intensity: acute infections and systemic injuries show the highest cross-species conservation, whereas milder vaccination stimuli exhibit greater species-specific divergence. Furthermore, divergent gene expression is primarily governed by divergence in *cis*-regulatory promoter architecture rather than protein-coding sequence identity.
 
 ------------------------------------------------------------------------
 
 ## Conditions Covered
 
-| Challenge                         | Vaccine / Agent    | Organisms    |
-|-----------------------------------|--------------------|--------------|
-| Influenza                         | Fluad (TIV + MF59) | Human, Mouse |
-| Hepatitis B                       | Engerix B          | Human, Mouse |
-| *Staphylococcus aureus* infection | —                  | Human, Mouse |
-| *Escherichia coli* infection      | —                  | Human, Mouse |
-| Burn                              | —                  | Human, Mouse |
-| Trauma                            | —                  | Human, Mouse |
+| Challenge | Vaccine / Agent | Organisms | Human GEO | Mouse GEO | Platforms |
+|:---|:---|:---|:---|:---|:---|
+| Influenza | Fluad (TIV + MF59) | Human, Mouse | GSE124689 | GSE120661 | Illumina HumanHT-12, Agilent 8×60K |
+| Hepatitis B | Engerix B | Human, Mouse | GSE124533 | GSE120661 | Illumina HumanHT-12, Agilent 8×60K |
+| *Staphylococcus aureus* bacteremia | — | Human, Mouse | GSE19668 | GSE120661 | Affymetrix HuGene 1.0 ST, Agilent 8×60K |
+| *Escherichia coli* sepsis | — | Human, Mouse | GSE33341 | GSE120661 | Affymetrix HuGene 1.0 ST, Agilent 8×60K |
+| Burn injury | — | Human, Mouse | Clinical cohort | GSE182858 | Custom array, Illumina MouseWG-6 v2.0 |
+| Trauma | — | Human | GSE36809 | — | Affymetrix HuGene 1.0 ST |
+| Burn + Quadrivalent vaccine | — | Mouse | — | GSE182858 | Illumina MouseWG-6 v2.0 |
 
 ------------------------------------------------------------------------
 
@@ -34,137 +35,114 @@ A key finding is that while individual orthologous gene correlations are often l
 
 ![Flowchart](diagram_animal.png)
 
-The notebooks are designed to be run in order:
+The computational pipeline is structured into 9 modular R Markdown notebooks designed to be executed sequentially:
 
-1.  **`0_Data_Curation.Rmd`** — Searches BioProject for vaccination/immunization studies, filters by organism and design criteria, and produces a curated dataset list.
-
-2.  **`1_QualityControl.Rmd`** — Runs array quality metrics (AQM) to flag low-quality samples and outliers before integration.
-
-3.  **`2_Preprocessing.Rmd`** — Downloads ExpressionSets from GEO via `GEOquery`, applies quantile normalization, maps probes to gene symbols via `biomaRt`, and computes sample-level log2 fold-changes vs. Day 0 baseline.
-
-4.  **`3.1_Comparing_Human_Mouse_ByCondition.Rmd`** — Per-condition analysis (run once per dataset):
-
-    - Differential expression with `limma`
-    - GSEA and ssGSEA using BTMs and MSigDB Hallmarks
-    - Cross-species correlation of module NES scores and mean log2FCs per condition
-    - Shared/unique DEG analysis (Fisher/Jaccard statistics)
-
-5.  **`3.2_Comparing_Human_Mouse_UnifiedAnalyses.Rmd`** — Unified cross-condition analysis:
-
-    - Aggregates per-condition results across all pathogens
-    - Volcano plots, RRHO2 rank-rank hypergeometric overlap
-    - Summary correlation plots comparing human vs. mouse across all conditions and timepoints
-
-6.  **`4_Performance.Rmd`** — Evaluates mouse-to-human predictive performance via ROC curves across all conditions, stratified by all genes vs. immune gene subsets.
-
-7.  **`5_MachineLearning.Rmd`** — Builds machine learning classifiers for cross-species response prediction.
+1.  **`0_Data_Curation.Rmd`** — Programmatically scans and filters raw BioProject metadata from NCBI. Isolates time-course vaccination and infection studies, applying inclusion/exclusion criteria to remove oncology, autoimmune, or toxicology studies.
+2.  **`1_QualityControl.Rmd`** — Evaluates data fidelity using Array Quality Metrics (`arrayQualityMetrics`) and Relative Log Expression (RLE) distributions to identify sample-level outliers and technical variation.
+3.  **`2_Preprocessing_and_DGE.Rmd`** — Downloads ExpressionSets via `GEOquery`, normalizes array intensities (RMA for Affymetrix; Quantile normalization via `limma` for Illumina/Agilent), resolves probe redundancy by selecting the **probe with the maximum variance across samples**, and models differential expression with `limma` Empirical Bayes moderation (`adj. p-value <= 0.05`).
+4.  **`3.1_Comparing_Human_Mouse_DGE_analyses.Rmd`** — Executes cross-species gene-level comparative analyses. Computes macroevolutionary effect size delta ($\Delta \text{log}_2\text{FC} = \text{log}_2\text{FC}_H - \text{log}_2\text{FC}_M$), coefficient of variation (CV), sampling stability from downsampling, and inverse-variance statistical weights ($1 / (SE_H^2 + SE_M^2)$).
+5.  **`3.2_Comparing_Human_Mouse_GSEA.Rmd`** — Consolidates the multi-condition DGE data and runs unified pathway-level Gene Set Enrichment Analysis via `fgsea` on Blood Transcription Modules (BTMs) and MSigDB Hallmarks, using an exploratory threshold of $\text{padj} \le 0.25$, alongside single-sample GSEA (`GSVA/ssGSEA`).
+6.  **`3.3_Comparing_Human_Mouse_Functional_Analyses.Rmd`** — Evaluates higher-order functional conservation. Generates module-level NES and mean log₂FC cross-species correlations over time (**Figure 43a**), quantifies shared vs. species-specific leading-edge genes (LEGs) (**Figure 43c**), and plots rank conservation for core modules such as "immune activation - generic cluster" (**Figure 43d**).
+7.  **`4_Performance_EqualTImepoints.Rmd` & `4_Performance_DifferentTimepoints.rmd`** — Assesses murine predictive power for human module regulation. Generates ROC curves and computes Area Under the Curve (AUC) (**Figure 43b**) for matched (equal) timepoints and cross-temporal (different) timepoints, benchmarked against biological controls (e.g., Duchenne Muscular Dystrophy, DMD) and permutation null distributions.
+8.  **`5.1_EvolutionaryAnalysis_Protein.Rmd` & `5.2_EvolutionaryAnalysis_Regulation.Rmd`** — Dissects evolutionary determinants. Retrieves Ensembl BioMart coding sequences (CDS) and amino acid identity %, computes codon-level pairwise alignment and **Kimura 2-Parameter (K80) genetic distances**, and integrates ENCODE candidate Cis-Regulatory Elements (cCREs: PLS, pELS, dELS, and CTCF-bound sites) across GRCh38 and mm10 to assess promoter conservation.
+9.  **`6_Statistical_Modelling.Rmd`** — Builds multi-modal machine learning workflows using `tidymodels` (Random Forest via `ranger`, Elastic Net) combining coding sequence distance (`dist_k80`), amino acid identity, transcription factor networks, and promoter cCRE structures to model the genomic determinants of translatability.
 
 ------------------------------------------------------------------------
 
 ## Repository Structure
 
-```         
+``` text
 animals_vax_atlas/
 ├── scripts_notebooks/
-│   ├── required.R                   # Packages, theme, utility functions, palettes
-│   ├── 0_Data_Curation.Rmd
-│   ├── 1_QualityControl.Rmd
-│   ├── 2_Preprocessing.Rmd
-│   ├── 3.1_Comparing_Human_Mouse_ByCondition.Rmd
-│   ├── 3.2_Comparing_Human_Mouse_UnifiedAnalyses.Rmd
-│   ├── 4_Performance.Rmd
-│   ├── 5_MachineLearning.Rmd
-│   └── FIT_training_datasets.Rmd
-├── DataCuration/                    # Raw BioProject exports and manual annotation files
-├── tables/                          # Processed data (RDS, CSV) — main data store
-├── VaxGO/                           # Gene set files (BTMs, ImmuneGO, VaxSigDB, Hallmarks)
-├── Genomic/                         # Promoter sequences (FASTA)
-├── Figures/                         # Generated plots
-├── Figures_Article/                 # Publication-ready figures
-├── ArrayQM/                         # AQM HTML reports
-└── renv.lock                        # Package snapshot
+│   ├── required.R                           # Global libraries, theme_vaxgo, palettes, utility functions
+│   ├── 0_Data_Curation.Rmd                  # BioProject curation and filtering
+│   ├── 1_QualityControl.Rmd                 # ArrayQM and RLE quality control
+│   ├── 2_Preprocessing_and_DGE.Rmd          # GEO download, normalization, probe collapsing, limma DGE
+│   ├── 2_Preprocessing_and_DGE_Simplified.Rmd # Streamlined preprocessing and DGE pipeline
+│   ├── 3.1_Comparing_Human_Mouse_DGE_analyses.Rmd # Cross-species DGE comparison, noise & delta metrics
+│   ├── 3.2_Comparing_Human_Mouse_GSEA.Rmd   # fgsea & ssGSEA unified pipeline (BTMs, Hallmarks)
+│   ├── 3.3_Comparing_Human_Mouse_Functional_Analyses.Rmd # Functional correlations, LEGs, rank conservation (Fig 43a,c,d)
+│   ├── 4_Performance_EqualTImepoints.Rmd    # Equal-timepoint ROC/AUC classification (Fig 43b)
+│   ├── 4_Performance_DifferentTimepoints.rmd # Cross-temporal ROC/AUC benchmarking with controls
+│   ├── 5.1_EvolutionaryAnalysis_Protein.Rmd # Protein sequence identity and Kimura K80 CDS distance
+│   ├── 5.2_EvolutionaryAnalysis_Regulation.Rmd # ENCODE cCRE promoter/enhancer regulatory architecture
+│   ├── 6_Statistical_Modelling.Rmd          # tidymodels predictive modeling of translatability drivers
+│   └── FIT_training_datasets.Rmd            # Found In Translation (FIT) benchmarking
+├── tables/                                  # Intermediate and processed RDS/CSV data files
+│   ├── DataCuration/                        # BioProject search outputs and curation tables
+│   ├── Genomic/                             # ENCODE cCRE BED files (PLS, pELS, dELS, CTCF-bound)
+│   └── VaxGO/                               # Curated BTM, ImmuneGO, and Hallmark gene set definitions
+├── example/
+│   ├── example_btm_correlation.R            # Minimal reproducible script for cross-species BTM correlation
+│   └── example_btm_correlation_day7.png     # Example output plot
+├── Figures/                                 # Generated exploratory and diagnostic figures
+├── Figures_Article/                         # High-resolution, publication-ready figures
+├── ArrayQM/                                 # ArrayQualityMetrics HTML report directories
+└── renv.lock                                # Pinned R dependency environment snapshot
 ```
 
 ------------------------------------------------------------------------
 
 ## Gene Sets Used
 
-| Gene Set | Description |
-|----|----|
-| **BTMs** | Blood Transcription Modules (Li et al.) — immune cell-type and process modules |
-| **MSigDB Hallmarks** | Broad hallmark gene sets from MSigDB |
-| **ImmuneGO** | Custom mouse-adapted immune Gene Ontology annotations |
-| **VaxSigDB** | Vaccination signature gene sets |
+| Gene Set | Description | Source | Reference |
+|:---|:---|:---|:---|
+| **BTMs** | Blood Transcription Modules (346 consensus modules) | Li et al. | *Nat Immunol* 2014, 2021 |
+| **MSigDB Hallmarks** | 50 well-defined hallmark biological processes | Broad Institute | Liberzon et al., *Cell Syst* 2015 |
+| **ImmuneGO** | Mouse-adapted immune Gene Ontology annotations | VaxGO | Custom curated |
+| **VaxSigDB** | Curated vaccination response signatures | VaxGO | Custom curated |
 
 ------------------------------------------------------------------------
 
-## Software Requirements
+## Software & Reproducibility Environment
 
-| Component | Version |
-|----|----|
-| R | 4.5.2 |
-| Bioconductor | 3.22 |
-| OS | Linux (tested on Ubuntu/Zorin); macOS and Windows (WSL2) expected to work |
-| RAM | ≥ 16 GB recommended (large expression matrices in `tables/`) |
-| Disk | ≥ 5 GB for `tables/` |
+All package dependencies are managed via `renv`. Pinned core specifications:
 
-All R package versions are pinned via `renv.lock`. Key packages:
+| Component | Version | Description |
+|:---|:---|:---|
+| **R** | ≥ 4.5.2 | Base language environment |
+| **Bioconductor** | 3.22 | Genomic and microarray annotation suites |
+| **Operating System** | Linux (Ubuntu/Zorin); macOS and Windows (WSL2) compatible | Tested on 64-bit Linux |
+| **Hardware** | ≥ 16 GB RAM recommended | High-dimensional expression matrices |
 
-| Package         | Version | Source               |
-|-----------------|---------|----------------------|
-| tidyverse       | 2.0.0   | CRAN                 |
-| limma           | 3.66.0  | Bioconductor 3.22    |
-| GEOquery        | 2.78.0  | Bioconductor 3.22    |
-| clusterProfiler | 4.18.4  | Bioconductor 3.22    |
-| fgsea           | 1.36.2  | Bioconductor 3.22    |
-| GSVA            | 2.4.4   | Bioconductor 3.22    |
-| biomaRt         | 2.66.1  | Bioconductor 3.22    |
-| ComplexHeatmap  | 2.26.1  | Bioconductor 3.22    |
-| RRHO2           | —       | GitHub (RRHO2/RRHO2) |
+### Key Packages Pinning
 
-> **Note:** A Docker image is planned for a future release. For now, `renv` provides full package-level reproducibility.
+| Package | Version | Source | Key Usage |
+|:---|:---|:---|:---|
+| **tidyverse** | 2.0.0 | CRAN | Data wrangling, piping, and visualization |
+| **limma** | 3.66.0 | Bioconductor | Linear modeling, empirical Bayes moderation, quantile normalization |
+| **GEOquery** | 2.78.0 | Bioconductor | Programmatic retrieval of GEO datasets |
+| **fgsea** | 1.36.2 | Bioconductor | Fast Gene Set Enrichment Analysis |
+| **GSVA** | 2.4.4 | Bioconductor | Single-sample gene set enrichment (ssGSEA) |
+| **biomaRt** | 2.66.1 | Bioconductor | Cross-species orthology and Ensembl sequence retrieval |
+| **pwalign** | Bioconductor 3.22 | Bioconductor | Pairwise global sequence alignment |
+| **ape** | 5.8 | CRAN | DNAbin conversion and Kimura K80 distance calculation |
+| **tidymodels** | 1.2.0 | CRAN | Machine learning recipes, workflows, and evaluation |
+| **ranger** | 0.16.0 | CRAN | High-performance Random Forest implementation |
+| **ComplexHeatmap** | 2.26.1 | Bioconductor | High-dimensional heatmap visualizations |
+| **pROC** | 1.18.5 | CRAN | ROC curve and AUC generation |
 
 ------------------------------------------------------------------------
 
 ## Data Acquisition
 
-All **pre-processed intermediate files** are already provided in `tables/`, so for most analyses no raw data download is needed. Users who wish to re-run preprocessing from scratch can download the original datasets from GEO using the accessions below.
+All pre-processed intermediate files are archived in `tables/`, allowing downstream analyses (steps 3–6) to run without re-downloading raw files. Users wishing to replicate preprocessing from scratch can query the original accessions:
 
-| Condition | Organism | GEO Accession | Platform |
-|----|----|----|----|
-| Influenza (Fluad) + Hepatitis B (Engerix B) | Mouse | [GSE120661](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE120661) | Agilent 8×60K |
-| Influenza (Fluad) | Human | [GSE124689](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE124689) | Illumina HumanHT-12 |
-| Hepatitis B (Engerix B) | Human | [GSE124533](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE124533) | Illumina HumanHT-12 |
-| *S. aureus* infection | Human | [GSE19668](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE19668) | Affymetrix HuGene |
-| *E. coli* infection | Human | [GSE33341](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE33341) | Affymetrix HuGene |
-| Trauma | Human | [GSE36809](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE36809) | Affymetrix HuGene |
-| Burn + Quadrivalent vaccine | Mouse | [GSE182858](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE182858) | Illumina MouseWG-6 |
-
-Download example (run once; outputs saved to `tables/`):
-
-``` r
-library(GEOquery)
-library(here)
-
-gse <- getGEO("GSE120661", GSEMatrix = TRUE)
-eset <- gse[[1]]
-
-# Save expression matrix and metadata
-exprs(eset) |> as.data.frame() |> saveRDS(here("tables", "GSE120661_exprs.rds"))
-Biobase::pData(eset) |> write.csv(here("tables", "GSE120661_metadata.csv"))
-```
+| Condition | Organism | Accession | Platform | Platform ID |
+|:---|:---|:---|:---|:---|
+| Influenza (Fluad) + Hepatitis B | Mouse | [GSE120661](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE120661) | Agilent 8×60K | GPL21103 |
+| Influenza (Fluad) | Human | [GSE124689](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE124689) | Illumina HumanHT-12 v4.0 | GPL10558 |
+| Hepatitis B (Engerix B) | Human | [GSE124533](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE124533) | Illumina HumanHT-12 v4.0 | GPL10558 |
+| *S. aureus* infection | Human | [GSE19668](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE19668) | Affymetrix Human Gene 1.0 ST | GPL6244 |
+| *E. coli* infection | Human | [GSE33341](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE33341) | Affymetrix Human Gene 1.0 ST | GPL6244 |
+| Trauma | Human | [GSE36809](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE36809) | Affymetrix Human Gene 1.0 ST | GPL6244 |
+| Burn + Quadrivalent vaccine | Mouse | [GSE182858](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE182858) | Illumina MouseWG-6 v2.0 | GPL6887 |
 
 ------------------------------------------------------------------------
 
 ## Reproducing the Analysis
 
-### Prerequisites
-
-- R ≥ 4.5.2 installed ([download](https://cran.r-project.org/))
-- RStudio or any R IDE
-- Internet access only required for GEO downloads (`2_Preprocessing.Rmd`) and `biomaRt` queries
-
-### Step 0 — Clone and restore the environment
+### Step 0 — Setup Environment
 
 ``` bash
 git clone https://github.com/wapsyed/animals_vax_atlas.git
@@ -172,61 +150,38 @@ cd animals_vax_atlas
 ```
 
 ``` r
-# In R, from the project root:
-renv::restore()   # installs all packages at exact recorded versions
+# In R console:
+renv::restore()   # Restores exact package environment
 ```
 
-### Step 1–6 — Run notebooks in order
+### Notebook Execution Guide
 
-Each notebook sources `scripts_notebooks/required.R`, which loads all packages and defines the shared `theme_vaxgo` ggplot2 theme, color palettes, and utility functions.
+Each notebook sources `scripts_notebooks/required.R`, initializing the shared workspace, custom ggplot2 themes (`theme_vaxgo`), palettes, and utility functions.
 
-> Chunks marked `eval=FALSE` in the notebooks correspond to one-time download or heavy computation steps. Pre-computed outputs are already in `tables/` and can be loaded directly.
-
-| Step | Notebook | Key Inputs | Key Outputs | Est. time |
-|----|----|----|----|----|
-| 0 | `0_Data_Curation.Rmd` | `tables/animals_vaccines_bioproject_result.txt` | `tables/datacuration_step2.csv`, `DataCuration/AnimalVax_DataCuration_Annotated.csv` | \~10 min |
-| 1 | `1_QualityControl.Rmd` | `tables/*_eset.rds`, `tables/*_metadata.rds` | `ArrayQM/` reports, QC plots in `Figures/` | \~20 min |
-| 2 | `2_Preprocessing.Rmd` | GEO downloads or pre-saved `tables/*_exprs.rds` | `tables/*_eset.rds`, `tables/*_log2fc_sample_clean_long.rds` | \~60 min |
-| 3.1 | `3.1_Comparing_Human_Mouse_ByCondition.Rmd` | `tables/*_dge_limma_degs.rds`, `tables/btm_annotation_genes.csv`, `tables/msigdb_hallmarks_grouped_genes.csv` | `tables/*_gsea_btm_results.rds`, `tables/*_samples_btm_correlation_all_timepoints_summary.rds` | \~60 min |
-| 3.2 | `3.2_Comparing_Human_Mouse_UnifiedAnalyses.Rmd` | All `tables/*_gsea_*_results.rds` and `tables/*_correlation_*_summary.rds` from step 3.1 | `tables/all_human_mouse_*.rds`, unified figures | \~30 min |
-| 4 | `4_Performance.Rmd` | `tables/all_human_mouse_metadata.rds`, `tables/all_fit_prediction_results.rds` | `tables/roc_curve_data_*.rds`, ROC figures | \~30 min |
-| 5 | `5_MachineLearning.Rmd` | `tables/AllData_FIT_training_blood.rds` | Model objects, prediction outputs | \~20 min |
+| Step | Notebook | Key Inputs | Key Outputs | Est. Time |
+|:---|:---|:---|:---|:---|
+| **0** | `0_Data_Curation.Rmd` | `tables/DataCuration/animals_vaccines_bioproject_result.csv` | `tables/DataCuration/datacuration_step2.csv` | \~10 min |
+| **1** | `1_QualityControl.Rmd` | `tables/*_eset.rds`, `tables/*_metadata.rds` | `ArrayQM/` reports, RLE plots | \~20 min |
+| **2** | `2_Preprocessing_and_DGE.Rmd` | Raw GEO ExpressionSets or `tables/*_exprs.rds` | `tables/*_dge_limma_degs.rds`, `tables/*_log2fc_sample_clean_long.rds` | \~60 min |
+| **3.1** | `3.1_Comparing_Human_Mouse_DGE_analyses.Rmd` | `tables/all_human_mouse_dge_limma_degs.rds` | `tables/human_mouse_log2fc_avg_wide_all.rds`, divergence weights | \~30 min |
+| **3.2** | `3.2_Comparing_Human_Mouse_GSEA.Rmd` | `all_human_mouse_dge_limma_degs_matched_control.rds`, BTM & Hallmark CSVs | `tables/all_human_mouse_gsea_btm_results.rds`, `tables/*_gsea_mean_wide.rds` | \~45 min |
+| **3.3** | `3.3_Comparing_Human_Mouse_Functional_Analyses.Rmd` | `all_human_mouse_gsea_btm_results.rds`, `all_human_mouse_gsea_btm_legs.rds` | Module correlation over time (**Fig 43a**), LEG barplots (**Fig 43c**), Rank conservation (**Fig 43d**) | \~45 min |
+| **4** | `4_Performance_EqualTImepoints.Rmd` & `4_Performance_DifferentTimepoints.rmd` | `all_human_mouse_dge_limma_degs_matched_filtered.rds`, BTM annotations | ROC curves, AUC summary tables (**Fig 43b**), PR curves | \~40 min |
+| **5.1** | `5.1_EvolutionaryAnalysis_Protein.Rmd` | Ensembl BioMart CDS data, `all_alignments`, `all_human_mouse_gsea_btm_legs.rds` | `human_mouse_cds_distance.rds` (Kimura K80), protein identity vs $\Delta\text{log}_2\text{FC}$ | \~50 min |
+| **5.2** | `5.2_EvolutionaryAnalysis_Regulation.Rmd` | ENCODE cCRE BED files (`tables/Genomic/*`), gene TSS coords | `cres_type_homology_comparison_wide.rds`, promoter conservation plots | \~40 min |
+| **6** | `6_Statistical_Modelling.Rmd` | `human_mouse_statsmodelling_parameters_values.rds` | `tidymodels` Random Forest & Elastic Net models, VIP feature importance | \~30 min |
 
 ------------------------------------------------------------------------
 
-## Worked Example
+## Minimal Worked Example
 
-The script [`example/example_btm_correlation.R`](example/example_btm_correlation.R) reproduces the cross-species BTM correlation scatter plot (manuscript Figure 3) using only pre-computed files already present in `tables/`. No GEO download required. Runtime \< 2 minutes.
+The standalone script [`example/example_btm_correlation.R`](example/example_btm_correlation.R) reproduces the cross-species BTM correlation scatter plot using pre-computed tables in `< 2 minutes`:
 
 ``` r
 source(here::here("example", "example_btm_correlation.R"))
 ```
 
-What it does:
-
-1.  Loads limma DEG results (`influenza_fluad_human_mouse_dge_limma_degs.rds`) and BTM annotations
-2.  Computes mean log₂FC per BTM module for human and mouse separately
-3.  Plots human vs. mouse module responses at Day 7 with Spearman *r* annotation
-4.  Saves the figure to `Figures/example_btm_correlation_day7.png`
-
-------------------------------------------------------------------------
-
-## Key Data Files
-
-For full variable definitions, table schemas, file naming conventions, and color palettes, see the [CODEBOOK.md](CODEBOOK.md).
-
-Raw and intermediate data live in `tables/`. Key files:
-
-| File | Description |
-|----|----|
-| `all_human_mouse_metadata.rds` | Combined sample metadata across all conditions |
-| `all_degs_human_mouse.rds` | Pooled differential expression results |
-| `btm_annotation_genes.csv` | BTM gene set annotations |
-| `msigdb_hallmarks_grouped_genes.csv` | Hallmark gene set annotations |
-| `influenza_fluad_human_mouse_eset.rds` | Example integrated ExpressionSet (Fluad) |
-
-Processed files follow the naming convention:\
-`{pathogen}_{condition}_{organism}_{datatype}.rds`
+Outputs are saved directly to `Figures/example_btm_correlation_day7.png`.
 
 ------------------------------------------------------------------------
 
@@ -240,4 +195,4 @@ If you use this code or data, please cite:
 
 ## License
 
-See [LICENSE](LICENSE).
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
