@@ -12,14 +12,14 @@
 - **Central Hypothesis:** Higher-order biological structures—specifically functional pathways, Blood Transcription Modules (BTMs), and coordinated gene networks—are evolutionarily conserved across species, retaining high predictive fidelity even when individual gene effect sizes diverge.
 - **Key Findings:** 
   1. Shifting from gene-centric to pathway-level metrics substantially elevates cross-species concordance.
-  2. Translational fidelity scales monotonically with stimulus intensity: systemic injuries and acute bacterial infections show robust conservation, while milder vaccination stimuli reveal pronounced species-specific divergence.
-  3. Expression divergence between orthologs is driven by divergent *cis*-regulatory promoter architecture (ENCODE cCRE rewiring) rather than protein-coding sequence identity or codon evolution.
+  2. Translational fidelity scales monotonically with stimulus intensity: systemic injuries and acute bacterial infections show robust conservation, while milder vaccination stimuli exhibit greater species-specific divergence.
+  3. Expression divergence between orthologs is driven by divergent *cis*-regulatory promoter architecture rather than protein-coding sequence identity or codon evolution.
 
 ### I.B Study Design
-- **Comparative Design:** Parallel time-course blood transcriptomic profiling of matched biological perturbations across humans (*Homo sapiens*) and laboratory mice (*Mus musculus*).
+- **Comparative Design:** Parallel time-course blood transcriptomic profiling of matched perturbations across humans (*Homo sapiens*) and laboratory mice (*Mus musculus*).
 - **Perturbations Analyzed:** Six matched immune and injury conditions spanning viral-antigen vaccination, Gram-positive bacteremia, Gram-negative sepsis, and major sterile tissue trauma.
 - **Data Repositories:** Publicly available transcriptomic cohorts retrieved from the NCBI Gene Expression Omnibus (GEO) and NCBI BioProject databases.
-- **Analytical Trajectory:** Automated data curation $\to$ multi-level quality control $\to$ platform-specific normalization $\to$ maximum variance probe collapsing $\to$ linear modeling (limma DGE) $\to$ pathway enrichment (fgsea & ssGSEA) $\to$ macroevolutionary divergence modeling $\to$ predictive classification (ROC/AUC) $\to$ structural/regulatory evolutionary genomics $\to$ multi-modal statistical modeling (`tidymodels`).
+- **Analytical Trajectory:** Automated data curation $\to$ multi-level quality control $\to$ platform-specific normalization $\to$ maximum variance probe collapsing $\to$ linear modeling (limma DGE) $\to$ pathway enrichment (fgsea) $\to$ macroevolutionary divergence modeling $\to$ predictive classification (ROC/AUC) $\to$ structural/regulatory evolutionary genomics $\to$ multi-modal statistical modeling (`tidymodels`).
 
 ---
 
@@ -60,7 +60,7 @@
 
 ### III.A Array Quality Metrics & Outlier Detection
 Prior to integration, all expression datasets were evaluated for technical fidelity via `1_QualityControl.Rmd`:
-1. **ArrayQualityMetrics (`arrayQualityMetrics`):** Assessed distance matrices, boxplots of signal intensities, and pooled RNA degradation gradients.
+1. **ArrayQualityMetrics (`arrayQualitymetrics`):** Assessed distance matrices, boxplots of signal intensities, and pooled RNA degradation gradients.
 2. **Relative Log Expression (RLE):** 
    $$\text{RLE}_{gi} = \log_2(E_{gi}) - \operatorname{median}_{j}(\log_2(E_{gj}))$$
    Samples exhibiting anomalous interquartile range (IQR) divergence or median shifts $>2.5$ standard deviations from the cohort centroid were flagged and excluded.
@@ -69,7 +69,7 @@ Prior to integration, all expression datasets were evaluated for technical fidel
 ### III.B Platform-Specific Normalization
 Microarray intensity matrices were processed using technology-specific algorithms in `2_Preprocessing_and_DGE.Rmd`:
 - **Affymetrix Oligonucleotide Arrays (Human Gene 1.0 ST):** Raw probe cell intensity files (.CEL) were preprocessed with the **Robust Multi-array Average (RMA)** algorithm via `affy`/`oligo`, executing background correction, quantile normalization, and median-polish probe set summarization.
-- **Illumina BeadChips & Agilent Arrays:** Raw expression intensities were $\log_2$-transformed and subjected to **between-array quantile normalization** using `limma::normalizeBetweenArrays(method = "quantile")` to enforce identical empirical distributions across arrays while preserving relative biological rank orders.
+- **Illumina BeadChips & Agilent Arrays:** Expression matrices were $\log_2$-transformed and subjected to **between-array quantile normalization** using `limma::normalizeBetweenArrays(method = "quantile")` to enforce identical empirical distributions across arrays while preserving relative biological rank orders.
 
 ### III.C Probe-to-Gene Annotation & Maximum Variance Collapsing
 To map platform-specific probe identifiers to standardized gene nomenclatures (HGNC symbols for human; MGI symbols for mouse), annotation tables were retrieved via Bioconductor platform packages (`illuminaHumanv4.db`, `hugene10sttranscriptcluster.db`, `biomaRt`).
@@ -111,9 +111,6 @@ The primary analytical unit for immune response evaluation comprised 346 Blood T
 For each contrast, orthologous genes were ranked by their moderated $t$-statistic ($t_g$):
 $$\text{Rank}(g) = t_g$$
 Enrichment scores ($ES$) across BTMs and MSigDB Hallmarks (50 gene sets) were computed using `fgsea::fgsea()`, testing for non-random distribution of module members within the ranked transcriptome via an adaptive multi-level split Monte Carlo permutation scheme (1,000 to 10,000 permutations). Enrichment scores were normalized for gene set size ($NES$).
-
-### V.C Single-Sample Gene Set Enrichment Analysis (ssGSEA)
-To quantify module activation at individual sample resolution without requiring group-level contrast specification, single-sample GSEA was conducted using `GSVA::gsva(method = "ssgsea", ssgsea.norm = TRUE)`. For sample $s$ and module $m$, the ssGSEA score reflects the degree to which members of $m$ are coordinately up- or down-regulated relative to all other genes within that individual's transcriptome.
 
 ---
 
@@ -254,8 +251,13 @@ renv::restore()
 
 1. **BTMs:** Li S, et al. Molecular signatures of antibody responses derived from a systems biology approach. *Nature Immunology*. 2014;15(2):195-204.
 2. **limma:** Ritchie ME, et al. limma powers differential expression analyses for RNA-sequencing and microarray studies. *Nucleic Acids Research*. 2015;43(7):e47.
-3. **fgsea:** Korotkevich G, et al. Fast gene set enrichment analysis. *bioRxiv*. 2021; doi:10.1101/060012.
-4. **GSVA:** Hänzelmann S, Castelo R, Guinney J. GSVA: gene set variation analysis for microarray and RNA-seq data. *BMC Bioinformatics*. 2013;14:7.
-5. **Kimura Distance (K80):** Kimura M. A simple method for estimating evolutionary rates of base substitutions through comparative studies of nucleotide sequences. *J Mol Evol*. 1980;16(2):111-120.
-6. **ENCODE cCREs:** The ENCODE Project Consortium. Expanded encyclopaedias of DNA elements in the human and mouse genomes. *Nature*. 2020;583:699-710.
-7. **tidymodels:** Kuhn M, Wickham H. Tidymodels: a collection of packages for modeling and machine learning using tidyverse principles. *https://www.tidymodels.org*. 2020.
+3. **fgsea:** Korotkevich, G., Sukhov, V., Budin, N., Shpak, B., Artyomov, M. N., & Sergushichev, A. (2021). Fast gene set enrichment analysis. *bioRxiv*, doi:10.1101/060012.
+4. **biomaRt:** Durinck, S., Spellman, P. T., Birney, E., & Huber, W. (2009). Mapping identifiers for the integration of genomic datasets with the R/Bioconductor package biomaRt. *Nature Protocols*, 4(8), 1184-1191.
+5. **pwalign:** Pagès, H. (2024). *pwalign: Efficient pairwise sequence alignments*. R Package Version 1.0.0.
+6. **ape:** Paradis, E., & Schliep, K. (2019). ape 5.0: an environment for modern phylogenetics and evolutionary analyses in R. *Bioinformatics*, 35(3), 526-528.
+7. **ENCODE cCREs:** The ENCODE Project Consortium. (2020). Expanded encyclopaedias of DNA elements in the human and mouse genomes. *Nature*, 583, 699–710.
+8. **tidymodels:** Kuhn, M., & Wickham, H. (2020). *Tidymodels: a collection of packages for modeling and machine learning using tidyverse principles*. https://www.tidymodels.org
+9. **ranger:** Wright, M. N., & Ziegler, A. (2017). ranger: A fast implementation of random forests for high dimensional data in C++ and R. *Journal of Statistical Software*, 77(1), 1-17.
+10. **tidyverse:** Wickham, H., Averick, M., Bryan, J., Chang, W., McGowan, L. D., François, R., ... & Yutani, H. (2019). Welcome to the tidyverse. *Journal of Open Source Software*, 4(43), 1686.
+11. **ComplexHeatmap:** Gu, Z., Eils, R., & Schlesner, M. (2016). Complex heatmaps reveal patterns and correlations in multidimensional genomic data. *Bioinformatics*, 32(18), 2847-2849.
+12. **pROC:** Robin, X., Turck, N., Hainard, A., Tiberti, N., Lisacek, F., Sanchez, J. C., & Müller, M. (2011). pROC: an open-source package for R and S+ to analyze and compare ROC curves. *BMC Bioinformatics*, 12(1), 77.

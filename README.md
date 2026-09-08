@@ -20,14 +20,13 @@ A central finding of this project is that while individual orthologous gene corr
 ## Conditions Covered
 
 | Challenge | Vaccine / Agent | Organisms | Human GEO | Mouse GEO | Platforms |
-|:---|:---|:---|:---|:---|:---|
+|:-----------|:-----------|:-----------|:-----------|:-----------|:-----------|
 | Influenza | Fluad (TIV + MF59) | Human, Mouse | GSE124689 | GSE120661 | Illumina HumanHT-12, Agilent 8×60K |
 | Hepatitis B | Engerix B | Human, Mouse | GSE124533 | GSE120661 | Illumina HumanHT-12, Agilent 8×60K |
 | *Staphylococcus aureus* bacteremia | — | Human, Mouse | GSE19668 | GSE120661 | Affymetrix HuGene 1.0 ST, Agilent 8×60K |
 | *Escherichia coli* sepsis | — | Human, Mouse | GSE33341 | GSE120661 | Affymetrix HuGene 1.0 ST, Agilent 8×60K |
-| Burn injury | — | Human, Mouse | Clinical cohort | GSE182858 | Custom array, Illumina MouseWG-6 v2.0 |
+| Burn | — | Human, Mouse | Clinical cohort | GSE182858 | Custom array, Illumina MouseWG-6 v2.0 |
 | Trauma | — | Human | GSE36809 | — | Affymetrix HuGene 1.0 ST |
-| Burn + Quadrivalent vaccine | — | Mouse | — | GSE182858 | Illumina MouseWG-6 v2.0 |
 
 ------------------------------------------------------------------------
 
@@ -86,7 +85,7 @@ animals_vax_atlas/
 ## Gene Sets Used
 
 | Gene Set | Description | Source | Reference |
-|:---|:---|:---|:---|
+|:-----------------|:-----------------|:-----------------|:-----------------|
 | **BTMs** | Blood Transcription Modules (346 consensus modules) | Li et al. | *Nat Immunol* 2014, 2021 |
 | **MSigDB Hallmarks** | 50 well-defined hallmark biological processes | Broad Institute | Liberzon et al., *Cell Syst* 2015 |
 | **ImmuneGO** | Mouse-adapted immune Gene Ontology annotations | VaxGO | Custom curated |
@@ -99,7 +98,7 @@ animals_vax_atlas/
 All package dependencies are managed via `renv`. Pinned core specifications:
 
 | Component | Version | Description |
-|:---|:---|:---|
+|:-----------------------|:-----------------------|:-----------------------|
 | **R** | ≥ 4.5.2 | Base language environment |
 | **Bioconductor** | 3.22 | Genomic and microarray annotation suites |
 | **Operating System** | Linux (Ubuntu/Zorin); macOS and Windows (WSL2) compatible | Tested on 64-bit Linux |
@@ -108,7 +107,7 @@ All package dependencies are managed via `renv`. Pinned core specifications:
 ### Key Packages Pinning
 
 | Package | Version | Source | Key Usage |
-|:---|:---|:---|:---|
+|:-----------------|:-----------------|:-----------------|:-----------------|
 | **tidyverse** | 2.0.0 | CRAN | Data wrangling, piping, and visualization |
 | **limma** | 3.66.0 | Bioconductor | Linear modeling, empirical Bayes moderation, quantile normalization |
 | **GEOquery** | 2.78.0 | Bioconductor | Programmatic retrieval of GEO datasets |
@@ -129,14 +128,19 @@ All package dependencies are managed via `renv`. Pinned core specifications:
 All pre-processed intermediate files are archived in `tables/`, allowing downstream analyses (steps 3–6) to run without re-downloading raw files. Users wishing to replicate preprocessing from scratch can query the original accessions:
 
 | Condition | Organism | Accession | Platform | Platform ID |
-|:---|:---|:---|:---|:---|
-| Influenza (Fluad) + Hepatitis B | Mouse | [GSE120661](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE120661) | Agilent 8×60K | GPL21103 |
-| Influenza (Fluad) | Human | [GSE124689](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE124689) | Illumina HumanHT-12 v4.0 | GPL10558 |
-| Hepatitis B (Engerix B) | Human | [GSE124533](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE124533) | Illumina HumanHT-12 v4.0 | GPL10558 |
-| *S. aureus* infection | Human | [GSE19668](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE19668) | Affymetrix Human Gene 1.0 ST | GPL6244 |
-| *E. coli* infection | Human | [GSE33341](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE33341) | Affymetrix Human Gene 1.0 ST | GPL6244 |
-| Trauma | Human | [GSE36809](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE36809) | Affymetrix Human Gene 1.0 ST | GPL6244 |
-| Burn + Quadrivalent vaccine | Mouse | [GSE182858](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE182858) | Illumina MouseWG-6 v2.0 | GPL6887 |
+|:--------------|:--------------|:--------------|:--------------|:--------------|
+| Influenza (Fluad) + Hepatitis B | Mouse | GSE120661 | Agilent SurePrint G3 Mouse GE 8x60K Microarray | GPL10787 |
+| Influenza (Fluad) | Human | GSE124689 | Agilent-048908 8x60K whole genome | GPL21272 |
+| Hepatitis B (Engerix B) | Human | GSE124533 | Agilent-048908 8x60K whole genome | GPL21272 |
+| *S. aureus* infection | Mouse | GSE19668 | Affymetrix Mouse Genome 430 2.0 Array | GPL1261 |
+| *S. aureus* infection | Human | GSE33341 | Affymetrix Human Gene 1.0 ST | GPL6244 |
+| *E. coli* infection | Mouse | GSE33341 | Affymetrix Mouse Genome 430 2.0 Array | GPL1261 |
+| *E. coli* infection | Human | GSE33341 | Affymetrix Human Gene 1.0 ST | GPL6244 |
+| Burn | Mouse | GSE7404 | Affymetrix  Mouse 430.2 | GPL1261 |
+| Burn | Human | GSE37069 | Affymetrix Human Genome U133 Plus 2.0 Array | GPL570 |
+| Trauma | Mouse | GSE7404 | Affymetrix Mouse Genome 430 2.0 Array | GPL1261 |
+| Trauma | Human | GSE36809 | Affymetrix Human Gene 1.0 ST | GPL6244 |
+| Duchenne Muscular Dystrophy | Mouse | GSE1025 | Affymetrix Murine Genome U74A Version 2 Array | GLP81 |
 
 ------------------------------------------------------------------------
 
@@ -158,18 +162,18 @@ renv::restore()   # Restores exact package environment
 
 Each notebook sources `scripts_notebooks/required.R`, initializing the shared workspace, custom ggplot2 themes (`theme_vaxgo`), palettes, and utility functions.
 
-| Step | Notebook | Key Inputs | Key Outputs | Est. Time |
-|:---|:---|:---|:---|:---|
-| **0** | `0_Data_Curation.Rmd` | `tables/DataCuration/animals_vaccines_bioproject_result.csv` | `tables/DataCuration/datacuration_step2.csv` | \~10 min |
-| **1** | `1_QualityControl.Rmd` | `tables/*_eset.rds`, `tables/*_metadata.rds` | `ArrayQM/` reports, RLE plots | \~20 min |
-| **2** | `2_Preprocessing_and_DGE.Rmd` | Raw GEO ExpressionSets or `tables/*_exprs.rds` | `tables/*_dge_limma_degs.rds`, `tables/*_log2fc_sample_clean_long.rds` | \~60 min |
-| **3.1** | `3.1_Comparing_Human_Mouse_DGE_analyses.Rmd` | `tables/all_human_mouse_dge_limma_degs.rds` | `tables/human_mouse_log2fc_avg_wide_all.rds`, divergence weights | \~30 min |
-| **3.2** | `3.2_Comparing_Human_Mouse_GSEA.Rmd` | `all_human_mouse_dge_limma_degs_matched_control.rds`, BTM & Hallmark CSVs | `tables/all_human_mouse_gsea_btm_results.rds`, `tables/*_gsea_mean_wide.rds` | \~45 min |
-| **3.3** | `3.3_Comparing_Human_Mouse_Functional_Analyses.Rmd` | `all_human_mouse_gsea_btm_results.rds`, `all_human_mouse_gsea_btm_legs.rds` | Module correlation over time (**Fig 43a**), LEG barplots (**Fig 43c**), Rank conservation (**Fig 43d**) | \~45 min |
-| **4** | `4_Performance_EqualTImepoints.Rmd` & `4_Performance_DifferentTimepoints.rmd` | `all_human_mouse_dge_limma_degs_matched_filtered.rds`, BTM annotations | ROC curves, AUC summary tables (**Fig 43b**), PR curves | \~40 min |
-| **5.1** | `5.1_EvolutionaryAnalysis_Protein.Rmd` | Ensembl BioMart CDS data, `all_alignments`, `all_human_mouse_gsea_btm_legs.rds` | `human_mouse_cds_distance.rds` (Kimura K80), protein identity vs $\Delta\text{log}_2\text{FC}$ | \~50 min |
-| **5.2** | `5.2_EvolutionaryAnalysis_Regulation.Rmd` | ENCODE cCRE BED files (`tables/Genomic/*`), gene TSS coords | `cres_type_homology_comparison_wide.rds`, promoter conservation plots | \~40 min |
-| **6** | `6_Statistical_Modelling.Rmd` | `human_mouse_statsmodelling_parameters_values.rds` | `tidymodels` Random Forest & Elastic Net models, VIP feature importance | \~30 min |
+| Step | Notebook | Key Inputs | Key Outputs |
+|:--------------|:--------------|:--------------|:--------------|
+| **0** | `0_Data_Curation.Rmd` | `tables/DataCuration/animals_vaccines_bioproject_result.csv` | `tables/DataCuration/datacuration_step2.csv` |
+| **1** | `1_QualityControl.Rmd` | `tables/*_eset.rds`, `tables/*_metadata.rds` | `ArrayQM/` reports, RLE plots |
+| **2** | `2_Preprocessing_and_DGE.Rmd` | Raw GEO ExpressionSets or `tables/*_exprs.rds` | `tables/*_dge_limma_degs.rds`, `tables/*_log2fc_sample_clean_long.rds` |
+| **3.1** | `3.1_Comparing_Human_Mouse_DGE_analyses.Rmd` | `tables/all_human_mouse_dge_limma_degs.rds` | `tables/human_mouse_log2fc_avg_wide_all.rds`, divergence weights |
+| **3.2** | `3.2_Comparing_Human_Mouse_GSEA.Rmd` | `all_human_mouse_dge_limma_degs_matched_control.rds`, BTM & Hallmark CSVs | `tables/all_human_mouse_gsea_btm_results.rds`, `tables/*_gsea_mean_wide.rds` |
+| **3.3** | `3.3_Comparing_Human_Mouse_Functional_Analyses.Rmd` | `all_human_mouse_gsea_btm_results.rds`, `all_human_mouse_gsea_btm_legs.rds` | Module correlation over time (**Fig 43a**), LEG barplots (**Fig 43c**), Rank conservation (**Fig 43d**) |
+| **4** | `4_Performance_EqualTImepoints.Rmd` & `4_Performance_DifferentTimepoints.rmd` | `all_human_mouse_dge_limma_degs_matched_filtered.rds`, BTM annotations | ROC curves, AUC summary tables (**Fig 43b**), PR curves |
+| **5.1** | `5.1_EvolutionaryAnalysis_Protein.Rmd` | Ensembl BioMart CDS data, `all_alignments`, `all_human_mouse_gsea_btm_legs.rds` | `human_mouse_cds_distance.rds` (Kimura K80), protein identity vs $\Delta\text{log}_2\text{FC}$ |
+| **5.2** | `5.2_EvolutionaryAnalysis_Regulation.Rmd` | ENCODE cCRE BED files (`tables/Genomic/*`), gene TSS coords | `cres_type_homology_comparison_wide.rds`, promoter conservation plots |
+| **6** | `6_Statistical_Modelling.Rmd` | `human_mouse_statsmodelling_parameters_values.rds` | `tidymodels` Random Forest & Elastic Net models, VIP feature importance |
 
 ------------------------------------------------------------------------
 

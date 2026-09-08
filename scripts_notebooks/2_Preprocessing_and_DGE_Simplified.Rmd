@@ -1873,6 +1873,2432 @@ ecoli_human_subsampling$degs %>%
 ```
 
 
+#5. Burn and Trauma 
+
+
+##Download datasets
+
+### Human
+
+#### Trauma, Human (GSE36809)
+Clinical metadata were curated and standardized to ensure consistency across the dataset. The time elapsed since injury, originally recorded in hours, was converted to days and rounded to one decimal place. To account for the irregular temporal distribution of samples, timepoints were discretized into seven categorical bins: <1 day (Early Hours), 1–2 days, 2–5 days, 5–10 days, 10–18 days, 18–25 days, and >25 days. Samples were stratified into 'Trauma' and 'Control' groups based on subject identifiers. Rigorous quality control was applied by excluding samples explicitly flagged in the metadata for low RNA quality or incomplete temporal data. Finally, temporal bins were treated as ordered factors to facilitate downstream differential expression modeling.
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
+#Download datasets
+filename = "trauma_human"
+GSE_matrix <- getGEO(filename = here("tables", "GSE36809_series_matrix.txt.gz"), 
+                     GSEMatrix = T)
+
+#Get Expression Set
+eset <- GSE_matrix
+
+#Get metadata -------
+GSE_metadata = eset %>% Biobase::pData()
+
+#Select, clean, and standardize attributes
+GSE_metadata_annotated = GSE_metadata %>% 
+  select(geo_sample = "geo_accession",
+         sample_id = "source_name_ch1",
+         description = title,
+         tissue = `tissue:ch1`,
+         sex = `Sex:ch1`,
+         age = "age:ch1",
+         timepoint = `hours_since_injury:ch1`,
+         platform_id
+         ) %>% 
+  separate(sample_id, sep = ", ", into = c("subject_id", "delete")) %>% 
+  select(-delete) %>% 
+    mutate(timepoint = if_else(timepoint == "N/A", "0", timepoint),
+         timepoint = (as.numeric(timepoint)/24) %>% round(x = ., digits = 1),
+         subject_id = str_remove(subject_id, "Subject "),
+         geo = "GSE36809",
+         organism = "Human",
+         treatment = if_else(subject_id != "Control", "Trauma", "Control")) %>% 
+  filter(!description %in% c("Please notice that this sample with low RNA quality.", 
+                            "Sample from patients with incomplete time points.")) %>% 
+  mutate(
+    
+    # Binned timepoints
+    timepoints_new = case_when(
+      timepoint < 1            ~ "Early_Hours",
+      timepoint >= 1 & timepoint < 2  ~ "Day_1",
+      timepoint >= 2 & timepoint < 5  ~ "Day_3",
+      timepoint >= 5 & timepoint < 10 ~ "Day_7",
+      timepoint >= 10 & timepoint < 18 ~ "Day_14",
+      timepoint >= 18 & timepoint < 25 ~ "Day_21",
+      timepoint >= 25          ~ "Day_28",
+      TRUE                         ~ "Other"
+    ),
+    
+    #Explicit bins
+    timepoints_bin = case_when(
+      timepoint < 1            ~ "<Day_1",
+      timepoint >= 1 & timepoint < 2  ~ "Day_1_>=1 to <2",
+      timepoint >= 2 & timepoint < 5  ~ "Day_3_>=2 to <5",
+      timepoint >= 5 & timepoint < 10 ~ "Day_7_>=5 to <10",
+      timepoint >= 10 & timepoint < 18 ~ "Day_14_>=10 to <18",
+      timepoint >= 18 & timepoint < 25 ~ "Day_21_>=18 to <25",
+      timepoint >= 25          ~ "Day_28_>25",
+      TRUE                         ~ "Other"
+    ),
+    
+    timepoints_new = factor(timepoints_new, levels = c("Early_Hours", "Day_1", "Day_3", "Day_7", "Day_14", "Day_21", "Day_28"))
+  )
+
+
+
+GSE_metadata_annotated %>% 
+  group_by(subject_id)%>%
+  arrange(subject_id, timepoint) %>%
+  View()
+
+GSE_metadata_annotated %>% 
+  filter(subject_id != "Control") %>% 
+  group_by(subject_id)%>%
+  summarise(n_timepoints = n()) %>% 
+  arrange(subject_id, n_timepoints) %>% 
+  filter(n_timepoints > 1) # -10 participants
+
+
+GSE_metadata_annotated %>% 
+  group_by(timepoints_new, treatment)%>%
+  summarise(n_sample = n()) %>% 
+  arrange(timepoints_new) %>% 
+# Create ggplot object: maps data to aesthetic (x = expression value)
+  ggplot() +
+  aes(x = timepoints_new,
+      size = n_sample,
+      y = treatment,
+      color = treatment) +
+# Add scatter plot points: each point represents a sample in PCA/MDS space
+  geom_point()
+
+GSE_metadata_annotated_filtered = GSE_metadata_annotated %>% 
+  filter(timepoints_new %in% c("Early_Hours", "Day_1", "Day_3", "Day_7"))
+
+
+#Save metadata
+write_csv(GSE_metadata_annotated_filtered, file = here("tables", paste0(filename, "_metadata.csv")))
+
+#Get counts matrix ------
+GSE_exprs <- eset %>% exprs()
+
+#Save as RDS
+GSE_exprs %>% 
+  as.data.frame() %>% 
+  select(GSE_metadata_annotated_filtered$geo_sample) %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+  saveRDS(here("tables", paste0(filename, "_exprs.rds")))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+#### Burn, Human (GSE37069)
+
+Download the raw dataset from GEO using GEOquery.
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
+#Download datasets
+filename = "burn_human"
+GSE_matrix <- getGEO(filename = here("tables", "GSE37069_series_matrix.txt.gz"), 
+                     GSEMatrix = T)
+
+#Get Expression Set
+eset <- GSE_matrix
+
+#Get metadata -------
+GSE_metadata = eset %>% Biobase::pData()
+
+#Select, clean, and standardize attributes
+GSE_metadata_annotated = GSE_metadata %>% 
+  select(geo_sample = "geo_accession",
+         treatment = "source_name_ch1",
+         organism = organism_ch1,
+         age = `age:ch1`,
+         tissue = `tissue:ch1`,
+         sex = `Sex:ch1`,
+         timepoint = `hours_since_injury:ch1`,
+         platform_id,
+         ) %>% 
+  separate(treatment, sep = ", ", into = c("subject_id", "delete")) %>% 
+  select(-delete) %>% 
+    mutate(subject_id = str_remove(subject_id, "Subject "),
+           timepoint = if_else(timepoint == "N/A", "0", timepoint),
+         timepoint = (as.numeric(timepoint)/24) %>% round(x = ., digits = 1),
+         geo = "GSE37069",
+         treatment = if_else(subject_id != "Control", "Burn", "Control")) %>% 
+  mutate(
+    
+    # Binned timepoints
+    timepoints_new = case_when(
+      timepoint < 1            ~ "Early_Hours",
+      timepoint >= 1 & timepoint < 2  ~ "Day_1",
+      timepoint >= 2 & timepoint < 5  ~ "Day_3",
+      timepoint >= 5 & timepoint < 10 ~ "Day_7",
+      timepoint >= 10 & timepoint < 18 ~ "Day_14",
+      timepoint >= 18 & timepoint < 25 ~ "Day_21",
+      timepoint >= 25          ~ "Day_28",
+      TRUE                         ~ "Other"
+    ),
+    
+    #Explicit bins
+    timepoints_bin = case_when(
+      timepoint < 1            ~ "<Day_1",
+      timepoint >= 1 & timepoint < 2  ~ "Day_1_>=1 to <2",
+      timepoint >= 2 & timepoint < 5  ~ "Day_3_>=2 to <5",
+      timepoint >= 5 & timepoint < 10 ~ "Day_7_>=5 to <10",
+      timepoint >= 10 & timepoint < 18 ~ "Day_14_>=10 to <18",
+      timepoint >= 18 & timepoint < 25 ~ "Day_21_>=18 to <25",
+      timepoint >= 25          ~ "Day_28_>25",
+      TRUE                         ~ "Other"
+    ),
+    
+    timepoints_new = factor(timepoints_new, levels = c("Early_Hours", "Day_1", "Day_3", "Day_7", "Day_14", "Day_21", "Day_28"))
+  )
+
+
+GSE_metadata_annotated %>% 
+  group_by(timepoints_new, treatment)%>%
+  summarise(n_sample = n()) %>% 
+  arrange(timepoints_new) %>% 
+# Create ggplot object: maps data to aesthetic (x = expression value)
+  ggplot() +
+  aes(x = timepoints_new,
+      size = n_sample,
+      y = treatment,
+      color = treatment) +
+# Add scatter plot points: each point represents a sample in PCA/MDS space
+  geom_point()
+
+GSE_metadata_annotated %>%
+  group_by(timepoint, treatment)%>%
+  summarise(n_sample = n()) %>%
+  arrange(timepoint) %>%
+# Create ggplot object: maps data to aesthetic (x = expression value)
+  ggplot() +
+  aes(x = timepoint,
+      color = treatment) +
+# Plot histogram: visualises the distribution of expression values for quality control
+  geom_histogram()
+
+GSE_metadata_annotated_filtered = GSE_metadata_annotated %>% 
+  filter(timepoints_new %in% c("Early_Hours", "Day_1", "Day_3", "Day_7"))
+  
+
+#Save metadata
+write_csv(GSE_metadata_annotated_filtered, file = here("tables", paste0(filename, "_metadata.csv")))
+
+#Get counts matrix ------
+GSE_exprs <- eset %>% exprs()
+
+#Save as RDS
+GSE_exprs %>% 
+  as.data.frame() %>% 
+  select(GSE_metadata_annotated_filtered$geo_sample) %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+  saveRDS(here("tables", paste0(filename, "_exprs.rds")))
+
+```
+
+### Mouse
+#### Trauma and Burn, Mouse (GSE7404)
+
+Download the raw dataset from GEO using GEOquery.
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, echo=TRUE, cache = TRUE}
+#Download datasets
+filename = "trauma_burn_mouse"
+GSE_matrix <- getGEO(filename = here("tables", "GSE7404_series_matrix.txt.gz"), 
+                     GSEMatrix = T)
+
+#Get Expression Set
+eset <- GSE_matrix
+
+#Get metadata -------
+GSE_metadata = eset %>% Biobase::pData()
+
+#Select, clean, and standardize attributes
+GSE_metadata_annotated = GSE_metadata %>% 
+  select(geo_sample = "geo_accession",
+         sample_id = "source_name_ch1",
+         participant_description = title,
+         characteristics = characteristics_ch1,
+         timepoint = `time:ch1`,
+         genetic = `genetic background:ch1`,
+         tissue = `source_name_ch1`,
+         organism = organism_ch1,
+         description = description,
+         # sex = `Sex:ch1`,
+         platform_id
+         ) %>% 
+# Filter to PBMC samples only: restricts analysis to peripheral blood mononuclear cells
+  filter(tissue == "mouse leukocytes") %>% 
+  fill(genetic, .direction = "up") %>% 
+  mutate(treatment = case_when(str_detect(description, "burn") ~ "Burn", 
+                               str_detect(description, "trauma") ~ "Trauma", 
+                               str_detect(description, "LPS") ~ "LPS",
+                               T~description),
+         treatment = if_else(str_detect(participant_description, "Sham"), paste0(treatment, "_", "Control"), treatment),
+         tissue = str_remove(tissue, "mouse "), 
+         sex = "male",
+         geo = "GSE7404") %>% 
+  extract(
+    col = participant_description, 
+    into = c("timepoint", "participant_id"), 
+    regex = "(\\d+\\s?(?:day|Day|hr))\\s+(rep\\s?\\d+)", 
+    remove = T 
+  ) %>% 
+  mutate(timepoint = str_replace(timepoint, "hr", "Hour") %>% str_replace("day", "Day"),
+         timepoint = fct_reorder(timepoint, parse_number(timepoint))) %>% 
+  select(geo_sample, participant_id, timepoint, sex, 
+         strain = genetic, tissue, organism, treatment, platform_id) 
+
+
+GSE_metadata_annotated %>% 
+  group_by(timepoint, treatment)%>%
+  summarise(n_sample = n()) %>% 
+  arrange(timepoint) %>% 
+# Create ggplot object: maps data to aesthetic (x = expression value)
+  ggplot() +
+  aes(x = timepoint,
+      size = n_sample,
+      y = treatment,
+      color = treatment) +
+# Add scatter plot points: each point represents a sample in PCA/MDS space
+  geom_point()
+  
+
+#Save metadata
+write_csv(GSE_metadata_annotated, file = here("tables", paste0(filename, "_metadata.csv")))
+
+#Get counts matrix ------
+GSE_exprs <- eset %>% exprs()
+
+#Save as RDS
+GSE_exprs %>% as.data.frame() %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+  saveRDS(here("tables", paste0(filename, "_exprs.rds")))
+
+```
+
+
+##Annotate genes
+
+#### Mouse datasets
+
+##### Trauma and Burn
+
+Import previously saved analysis results for combined processing.
+
+```{r}
+#Import datasets
+mouse_exprs = readRDS(here("tables", "trauma_burn_mouse_exprs.rds")) %>% 
+  as.matrix() %>%
+  { log2(. + 1) } %>% 
+  as.data.frame()
+mouse_metadata = read_csv(file = here("tables", "trauma_burn_mouse_metadata.csv")) %>% 
+  mutate(status = if_else(str_detect(treatment, "_Control"), "Control", "Treated"),
+         treatment = str_remove(treatment, "_Control"))
+
+#Inputs
+filename = "trauma_burn_mouse"
+
+#Annotate genes ------
+#Mouse -----
+#Annotate data and calculate log2fc
+mouse_exprs_metadata  = mouse_exprs %>% 
+  rownames_to_column("probe_id") %>% 
+  pivot_longer(cols = 2:145,
+               names_to = "geo_sample",
+               values_to = "value_raw") %>% 
+# Attach sample metadata (participant ID, timepoint, condition) to expression values by GEO sample ID
+  inner_join(mouse_metadata, 
+             by = "geo_sample") 
+
+#Get value from day 0 and calculate Log2FC (non-paired)
+mouse_exprs_log2fc_sample = mouse_exprs_metadata %>% 
+  filter(status == "Control") %>% 
+  select(probe_id, treatment, timepoint, subject_num = participant_id, value_raw_ref = value_raw) %>% 
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() %>% 
+# Group by probe ID to collapse multiple probe-to-gene mappings later
+  group_by(timepoint, treatment, probe_id) %>% 
+  summarise(value_raw_ref = mean(value_raw_ref)) %>% 
+  ungroup() %>% 
+# Attach sample metadata (participant ID, timepoint, condition) to expression values by GEO sample ID
+  inner_join(mouse_exprs_metadata %>% 
+               filter(status != "Control"),
+             by = join_by("probe_id", "treatment", "timepoint")) %>% 
+  # Compute log2 fold-change relative to baseline
+mutate(log2fc = value_raw - value_raw_ref) %>% 
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() 
+
+#Check duplicates
+mouse_exprs_log2fc_sample %>% 
+  filter(participant_id == "rep 1",
+         treatment == "Burn",
+         probe_id == "1415670_at")
+```
+
+
+Annotate probes with gene symbols by querying the Ensembl BioMart database.
+
+```{r}
+########### Filter and annotate probes -----
+# Configure Ensembl BioMart
+ensembl_mart <- useMart("ensembl")
+# Select the mouse genome (mmusculus_gene_ensembl) as the annotation dataset in BioMart
+ensembl_mart <- useDataset("mmusculus_gene_ensembl", mart = ensembl_mart)
+
+# Get probe IDs from expression matrix
+gene_id <- rownames(mouse_exprs) %>% unique()
+
+# listAttributes(ensembl_mart) %>% View()
+# Annotate data
+annot <- getBM(
+  attributes = c("affy_mouse430_2",
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "mgi_symbol",
+                 "description"),
+  filters = "affy_mouse430_2", #Probes
+  values = gene_id,
+  mart = ensembl_mart)
+
+# Load mouse-to-human orthology lookup
+# (Install orthology package if needed)
+# library(devtools)
+# devtools::install_github('shenorrLabTRDF/FIT.mouse2man')
+library(FIT.mouse2man)
+HS_MM_Symbol_Entrez = FIT.mouse2man::HS_MM_Symbol_Entrez %>% 
+# Standardise column names to snake_case using janitor::clean_names for consistent tidyverse syntax
+  clean_names() %>% 
+  rename(mouse_entrez = mouse_ortholog)
+
+#Get annotations for each probe 
+### Filter probes with highest median expression
+mouse_log2summary = mouse_exprs %>% #20,845 probes
+  as.data.frame() %>% 
+  rownames_to_column("probe_id") %>% 
+  rename(probe = probe_id) %>% 
+# Reshape expression data from wide (columns = samples) to long (rows = probe × sample) format for tidyverse workflows
+  pivot_longer(cols = -probe,
+               names_to = "sample",
+               values_to = "expression") %>% 
+# Group by probe ID to collapse multiple probe-to-gene mappings later
+  group_by(probe) %>% 
+  summarise(median = median(expression, na.rm = T)) %>%  
+# Join BioMart gene annotation to expression data by probe ID: adds gene symbol, Entrez ID, and description
+  inner_join(annot %>% 
+              rename(probe = affy_mouse430_2), 
+            by = "probe") %>%  #24.009 rows
+  # Collapse to one row per Ensembl ID
+  group_by(ensembl_gene_id) %>% 
+  # Keep probe with highest median expression per gene
+  slice_max(median, n = 1) %>%
+  ungroup() %>% 
+  select(-ensembl_gene_id) %>% 
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() %>% 
+  
+  # Collapse to one row per Entrez ID
+  group_by(entrezgene_id) %>% 
+  # Keep probe with highest median expression per gene
+  slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
+  ungroup() %>% 
+  rename(mouse_entrez = entrezgene_id) %>% 
+  
+  # Join human orthologs, collapse to one row per HGNC symbol
+  inner_join(HS_MM_Symbol_Entrez, by = c("mouse_entrez", "mgi_symbol")) %>% 
+# Group by human gene symbol: after orthology mapping, collapse mouse genes that map to the same human gene
+  group_by(hgnc_symbol) %>% 
+  # Keep probe with highest median expression per gene
+  slice_max(median, n = 1)  %>% #14.396
+  ungroup()
+
+# Remove HGNC symbols with multiple MGI mappings
+hgnc_symbol_dupes = mouse_log2summary %>% 
+  #filter out ensembl id with multiple mgi_symbols
+  get_dupes(hgnc_symbol)
+
+mouse_log2summary = mouse_log2summary %>% 
+  select(probe, hgnc_symbol) %>% 
+# Remove genes with ambiguous human symbol mappings: retains only one-to-one mouse-to-human orthologs
+  filter(!hgnc_symbol %in% c(hgnc_symbol_dupes$hgnc_symbol %>% unique())) 
+
+# Build filtered expression matrix with human symbols
+
+# Join expression with annotation, keep only mapped probes
+mouse_log2_filtered_probes = mouse_exprs %>% 
+  rownames_to_column("probe_id") %>% 
+  as.data.frame() %>% 
+  rename(probe = probe_id) %>% 
+# Join expression data with annotation by probe ID: adds gene symbols to raw probe-level measurements
+  inner_join(mouse_log2summary, by = "probe") %>%   #214,396
+  select(human_symbol = hgnc_symbol,
+         probe,
+         c(mouse_metadata %>% 
+             pull(geo_sample)))
+#Check
+mouse_log2_filtered_probes %>% dim()
+mouse_log2_hgnc_symbol = mouse_log2_filtered_probes 
+# Identify duplicated gene symbols: marks genes that map to multiple Entrez IDs or probes for removal
+mouse_log2_hgnc_symbol %>% get_dupes(human_symbol)
+
+#Save
+mouse_log2_hgnc_symbol %>% saveRDS(file = here("tables", paste0(filename, "_exprs_hgnc_symbol.rds")))
+
+mouse_log2_hgnc_symbol = readRDS(file = here("tables", paste0(filename, "_exprs_hgnc_symbol.rds")))
+
+mouse_exprs_log2fc_sample = mouse_exprs_log2fc_sample %>% 
+  rename(probe = probe_id) %>% 
+  inner_join(mouse_log2_hgnc_symbol %>% 
+               select(human_symbol, probe),
+             by = join_by(probe))
+
+mouse_exprs_log2fc_sample %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+  saveRDS(here("tables", "trauma_burn_mouse_log2fc_sample_clean_long.rds"))
+
+```
+
+
+
+
+####Human datasets
+##### Trauma
+
+Import previously saved analysis results for combined processing.
+
+```{r}
+#Import datasets
+human_exprs = readRDS(here("tables", "trauma_human_exprs.rds"))
+human_metadata = read_csv(file = here("tables", "trauma_human_metadata.csv"))
+
+#Inputs
+filename = "trauma_human"
+
+#Annotate genes ------
+#Mouse -----
+#Annotate data and calculate log2fc
+human_exprs_metadata  = human_exprs %>% 
+  rownames_to_column("probe_id") %>% 
+  pivot_longer(cols = 2:681,
+               names_to = "geo_sample",
+               values_to = "value_raw") %>% 
+# Attach sample metadata (participant ID, timepoint, condition) to expression values by GEO sample ID
+  inner_join(human_metadata, 
+             by = "geo_sample")
+
+#Get value from day 0 and calculate Log2FC (non-paired)
+human_exprs_log2fc_sample = human_exprs_metadata %>% 
+# Filter to the treatment of interest: removes control/saline samples from this branch
+  filter(treatment == "Control") %>% 
+  select(probe_id, treatment, value_raw_ref = value_raw) %>% 
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() %>% 
+# Group by probe ID to collapse multiple probe-to-gene mappings later
+  group_by(probe_id) %>% 
+  summarise(value_raw_ref = mean(value_raw_ref)) %>% 
+  ungroup() %>% 
+# Attach sample metadata (participant ID, timepoint, condition) to expression values by GEO sample ID
+  inner_join(human_exprs_metadata %>% 
+               filter(treatment != "Control"),
+             by = join_by("probe_id")) %>% 
+  # Compute log2 fold-change relative to baseline
+mutate(log2fc = value_raw - value_raw_ref) %>% 
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() 
+
+human_trauma_log2fc_sample = human_exprs_log2fc_sample
+
+#Check for duplicates
+human_exprs_log2fc_sample %>% 
+  filter(description == "Blood, subject 15429976, hours since injury 5.8",
+         probe_id == "1007_s_at")
+```
+
+
+Annotate probes with gene symbols by querying the Ensembl BioMart database.
+
+```{r}
+########### Filter and annotate probes -----
+# Configure Ensembl BioMart
+ensembl_mart <- useMart("ensembl")
+ensembl_mart <- useDataset("hsapiens_gene_ensembl", mart = ensembl_mart)
+
+# Get probe IDs from expression matrix
+gene_id <- rownames(human_exprs) %>% unique()
+
+# listAttributes(ensembl_mart) %>% View()
+# Annotate data
+annot <- getBM(
+  attributes = c("affy_hg_u133_plus_2",
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "hgnc_symbol",
+                 "description"),
+  filters = "affy_hg_u133_plus_2", #Probes
+  values = gene_id,
+  mart = ensembl_mart) %>% #Standardize
+  rename(probe = affy_hg_u133_plus_2,
+                     entrezgene_id = entrezgene_id,
+                     human_symbol = hgnc_symbol,
+                     ensembl_id = ensembl_gene_id)
+
+#Filter genes with highest median expression
+human_log2summary = human_exprs %>% 
+  rownames_to_column("probe") %>% 
+# Reshape expression data from wide (columns = samples) to long (rows = probe × sample) format for tidyverse workflows
+  pivot_longer(cols = -probe,
+               names_to = "sample",
+               values_to = "expression") %>% 
+# Group by probe ID to collapse multiple probe-to-gene mappings later
+  group_by(probe) %>% 
+  summarise(median = median(expression, na.rm = T)) %>%  
+# Join BioMart gene annotation to expression data by probe ID: adds gene symbol, Entrez ID, and description
+  inner_join(annot, 
+            by = "probe") %>% 
+  
+  # Collapse to one row per Ensembl ID
+  group_by(ensembl_id) %>% 
+  # Keep probe with highest median expression per gene
+  slice_max(median, n = 1) %>%
+  ungroup() %>% 
+  select(-ensembl_id) %>% 
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() %>% 
+  
+  # Collapse to one row per Entrez ID
+  group_by(entrezgene_id) %>% 
+  # Keep probe with highest median expression per gene
+  slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
+  ungroup()  
+
+
+#Filter out genes with multiple hgnc_symbols
+hgnc_symbol_dupes = human_log2summary %>% 
+  #filter ensembl id with multiple hgnc_symbols
+  get_dupes(human_symbol)
+
+human_log2summary = human_log2summary %>% 
+  filter(!human_symbol %in% c(hgnc_symbol_dupes$human_symbol %>% unique())) 
+
+# Build filtered expression matrix with human symbols
+
+# Join expression with annotation, keep only mapped probes
+human_log2_filtered_probes = human_exprs %>% 
+  as.data.frame() %>% 
+  rownames_to_column("probe") %>% 
+# Join expression data with annotation by probe ID: adds gene symbols to raw probe-level measurements
+  inner_join(human_log2summary, by = "probe") %>%   #214,396
+  select(human_symbol, probe,
+         c(human_metadata$geo_sample)) %>% 
+  drop_na()
+#18124
+human_log2_filtered_probes %>% dim()
+
+human_log2_filtered_probes = human_log2_filtered_probes 
+
+human_log2_filtered_probes %>% 
+# Identify duplicated gene symbols: marks genes that map to multiple Entrez IDs or probes for removal
+  get_dupes(human_symbol)
+
+#Save 
+human_log2_filtered_probes %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+  saveRDS(here("tables", "trauma_human_exprs_hgnc_symbol.rds"))
+
+human_log2_filtered_probes =
+# Load dataset from disk or GEO: reads pre-saved expression matrix / metadata into the R environment
+  readRDS(here("tables", "trauma_human_exprs_hgnc_symbol.rds"))
+
+#Annotate probes from log2fc table
+human_exprs_log2fc_sample = human_trauma_log2fc_sample %>% 
+  rename(probe = probe_id) %>% 
+  inner_join(human_log2_filtered_probes %>% 
+               select(probe,
+                      human_symbol),
+             by = "probe")
+
+human_exprs_log2fc_sample %>% head()
+
+human_exprs_log2fc_sample %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+  saveRDS(here("tables", "trauma_human_log2fc_sample_clean_long.rds"))
+
+
+```
+
+
+
+##### Burn
+
+Import previously saved analysis results for combined processing.
+
+```{r}
+#Import datasets
+human_exprs = readRDS(here("tables", "burn_human_exprs.rds")) #Log2 values
+human_metadata = read_csv(file = here("tables", "burn_human_metadata.csv"))
+
+#Inputs
+filename = "burn_human"
+
+#Annotate genes ------
+#Mouse -----
+#Annotate data and calculate log2fc
+human_exprs_metadata  = human_exprs %>% 
+  rownames_to_column("probe_id") %>% 
+  pivot_longer(cols = 2:329,
+               names_to = "geo_sample",
+               values_to = "value_raw") %>% 
+# Attach sample metadata (participant ID, timepoint, condition) to expression values by GEO sample ID
+  inner_join(human_metadata, 
+             by = "geo_sample")
+
+#Get value from day 0 and calculate Log2FC (non-paired)
+human_exprs_log2fc_sample = human_exprs_metadata %>% 
+# Filter to the treatment of interest: removes control/saline samples from this branch
+  filter(treatment == "Control") %>% 
+  select(probe_id, treatment, value_raw_ref = value_raw) %>% 
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() %>% 
+# Group by probe ID to collapse multiple probe-to-gene mappings later
+  group_by(probe_id) %>% 
+  summarise(value_raw_ref = mean(value_raw_ref)) %>% 
+  ungroup() %>% 
+# Attach sample metadata (participant ID, timepoint, condition) to expression values by GEO sample ID
+  inner_join(human_exprs_metadata %>% 
+               filter(treatment != "Control"),
+             by = join_by("probe_id")) %>% 
+  # Compute log2 fold-change relative to baseline
+mutate(log2fc = value_raw - value_raw_ref) %>% 
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() 
+
+#Save
+human_burn_log2fc_sample = human_exprs_log2fc_sample
+
+#Check for duplicates
+human_exprs_log2fc_sample %>% 
+  filter(subject_id == "11710452",
+         probe_id == "1007_s_at")
+
+########### Filter and annotate probes -----
+# Configure Ensembl BioMart
+ensembl_mart <- useMart("ensembl")
+ensembl_mart <- useDataset("hsapiens_gene_ensembl", mart = ensembl_mart)
+
+# Get probe IDs from expression matrix
+gene_id <- rownames(human_exprs) %>% unique()
+
+# listAttributes(ensembl_mart) %>% View()
+# Annotate data
+annot <- getBM(
+  attributes = c("affy_hg_u133_plus_2",
+                 "ensembl_gene_id",
+                 "entrezgene_id",
+                 "hgnc_symbol",
+                 "description"),
+  filters = "affy_hg_u133_plus_2", #Probes
+  values = gene_id,
+  mart = ensembl_mart) %>% #Standardize
+  rename(probe = affy_hg_u133_plus_2,
+                     entrezgene_id = entrezgene_id,
+                     human_symbol = hgnc_symbol,
+                     ensembl_id = ensembl_gene_id)
+
+#Filter genes with highest median expression
+human_log2summary = human_exprs %>% 
+  rownames_to_column("probe") %>% 
+# Reshape expression data from wide (columns = samples) to long (rows = probe × sample) format for tidyverse workflows
+  pivot_longer(cols = -probe,
+               names_to = "sample",
+               values_to = "expression") %>% 
+# Group by probe ID to collapse multiple probe-to-gene mappings later
+  group_by(probe) %>% 
+  summarise(median = median(expression, na.rm = T)) %>%  
+# Join BioMart gene annotation to expression data by probe ID: adds gene symbol, Entrez ID, and description
+  inner_join(annot, 
+            by = "probe") %>% 
+  
+  # Collapse to one row per Ensembl ID
+  group_by(ensembl_id) %>% 
+  # Keep probe with highest median expression per gene
+  slice_max(median, n = 1) %>%
+  ungroup() %>% 
+  select(-ensembl_id) %>% 
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() %>% 
+  
+  # Collapse to one row per Entrez ID
+  group_by(entrezgene_id) %>% 
+  # Keep probe with highest median expression per gene
+  slice_max(median, n = 1) %>%  #21.863 probes/entrez_ids
+  ungroup()  
+
+
+#Filter out genes with multiple hgnc_symbols
+hgnc_symbol_dupes = human_log2summary %>% 
+  #filter ensembl id with multiple hgnc_symbols
+  get_dupes(human_symbol)
+
+human_log2summary = human_log2summary %>% 
+  filter(!human_symbol %in% c(hgnc_symbol_dupes$human_symbol %>% unique())) 
+
+# Build filtered expression matrix with human symbols
+
+# Join expression with annotation, keep only mapped probes
+human_log2_filtered_probes = human_exprs %>% 
+  as.data.frame() %>% 
+  rownames_to_column("probe") %>% 
+# Join expression data with annotation by probe ID: adds gene symbols to raw probe-level measurements
+  inner_join(human_log2summary, by = "probe") %>%   #214,396
+  select(human_symbol, probe,
+         c(human_metadata$geo_sample))
+#18196
+human_log2_filtered_probes %>% dim()
+
+human_log2_filtered_probes = human_log2_filtered_probes 
+
+human_log2_filtered_probes %>% 
+# Identify duplicated gene symbols: marks genes that map to multiple Entrez IDs or probes for removal
+  get_dupes(human_symbol)
+
+#Save 
+human_log2_filtered_probes %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+  saveRDS(here("tables", "burn_human_exprs_hgnc_symbol.rds"))
+
+
+#Annotate probes with log2fc
+human_exprs_log2fc_sample = human_exprs_log2fc_sample %>% 
+  rename(probe = probe_id) %>% 
+  inner_join(human_log2_filtered_probes %>% 
+               select(probe,
+                      human_symbol),
+             by = "probe")
+
+human_exprs_log2fc_sample %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+saveRDS(here("tables", "burn_human_log2fc_sample_clean_long.rds"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Differential expression
+
+### Mouse
+#### Burn
+##### Limma
+
+
+Calculate array weights and fit a Limma model with SVA-adjusted design matrix.
+
+```{r}
+# Load data
+mouse_log2_hgnc_symbol = readRDS(file = here("tables", "trauma_burn_mouse_exprs_hgnc_symbol.rds"))
+mouse_metadata = read_csv(file = here("tables", "trauma_burn_mouse_metadata.csv")) %>% 
+  filter(str_detect(treatment, "Burn"))
+
+#Create Expression Set
+eset_mouse <- ExpressionSet(
+  assayData = mouse_log2_hgnc_symbol %>% 
+# Move identifier column to row names: required format for ExpressionSet and Limma (matrix must have rownames)
+    column_to_rownames("human_symbol") %>% 
+    select(all_of(mouse_metadata$geo_sample)) %>%
+    as.matrix(),
+# Convert metadata to AnnotatedDataFrame: formal phenotype data structure required by ExpressionSet
+  phenoData = AnnotatedDataFrame(mouse_metadata %>% 
+# Move identifier column to row names: required format for ExpressionSet and Limma (matrix must have rownames)
+                                   column_to_rownames("geo_sample") %>% 
+                                   mutate(condition = paste0(treatment, "_", timepoint))))
+
+# Filter low-expressed genes (log2 > 6 in >= 5 samples)
+# Extract raw expression matrix from the ExpressionSet: probes in rows, samples in columns
+genes_to_keep <- exprs(eset_mouse) %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), ~ . > 6)) %>% 
+  rowSums() %>% 
+  { . >= 5 }
+
+eset_filtered <- eset_mouse[genes_to_keep, ]
+
+design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
+                       eset_filtered) 
+
+
+# --- 2. Sample Weighting Diagnostic ---
+aw <- arrayWeights(eset_filtered, design)
+
+# Barplot of array weights: visual diagnostic to identify low-quality arrays (bars near zero indicate problematic samples)
+barplot(aw, 
+        names.arg = eset_filtered$condition, 
+        main = "Sample Weights Diagnostic (with SVA)", 
+        ylab = "Weight", 
+        las = 2, 
+        cex.names = 0.7, 
+        col = "skyblue")
+
+# --- 3. Linear Modeling (Limma) ---
+fit <- lmFit(eset_filtered, design, weights = aw)
+
+# --- 4. Contrast Matrix & Empirical Bayes ---
+# We compare Burn vs Control at each specific timepoint
+cont_matrix <- makeContrasts(
+  Burn_2h = conditionBurn_2.Hour - conditionBurn_Control_2.Hour,
+  Burn_D1 = conditionBurn_1.Day  - conditionBurn_Control_1.Day,
+  Burn_D3 = conditionBurn_3.Day  - conditionBurn_Control_3.Day,
+  Burn_D7 = conditionBurn_7.Day  - conditionBurn_Control_7.Day,
+  levels = design
+)
+
+# Apply contrasts to the fitted model
+fit2 <- contrasts.fit(fit, cont_matrix)
+
+# Using trend=TRUE and robust=TRUE to handle mean-variance trends and outliers
+fit2 <- eBayes(fit2, trend = TRUE, robust = TRUE)
+
+# Diagnostic: Check the residual variance trend
+plotSA(fit2, main = "Sigma vs Abundance (SVA + Weights Applied)")
+
+# --- 5. DEG Extraction & Result Formatting ---
+results_list <- lapply(1:ncol(fit2), function(i) {
+# Extract differentially expressed genes using the treat method (tests whether log2FC exceeds a minimum threshold, not just non-zero)
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+})
+
+# Combine all results into a clean, tidy dataframe
+all_degs_mouse_burn <- bind_rows(results_list) %>% 
+# Standardise column names to snake_case using janitor::clean_names for consistent tidyverse syntax
+  clean_names() %>%
+  rename(human_symbol = symbol,
+         mean_l2fc = log_fc,
+         ci_upper = ci_r,
+         ci_lower = ci_l,
+         condition = comparison) %>%
+# Tag rows as Mouse: required for downstream faceting when combining Mouse and Human results
+  mutate(organism = "Mouse")
+
+# Summary of Significant DEGs (Adj P-Value <= 0.05)
+all_degs_mouse_burn %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+# Count the number of differentially expressed genes (adj.p ≤ 0.05) per comparison
+  summarise(n_degs = n())
+	
+#Save
+# all_degs_mouse_burn %>% saveRDS(file = here("tables", "burn_mouse_dge_limma_degs.rds"))
+
+```
+
+
+pvalues distribution
+```{r fig.height=3, fig.width=10}
+all_degs_mouse_burn %>% 
+  separate(condition, into = c("pathogen", "timepoint"), remove = F, sep = "_") %>% 
+# Create ggplot object: maps data to aesthetic (x = expression value)
+  ggplot() +
+  aes(x = p_value) +
+# Plot histogram: visualises the distribution of expression values for quality control
+  geom_histogram(binwidth = 0.05, fill = "steelblue", color = "white") +
+# Create faceted plot: split data into sub-panels by condition or organism for side-by-side comparison
+  facet_wrap(~timepoint, scales = "free", nrow=1) +
+# Set informative axis labels, legend titles, and overall plot title
+  labs(title = "p-value distribution, post-Limma", x = "P-value", y = "Count") +
+# Apply project-specific ggplot theme: consistent fonts, gridlines, and legend styling across all figures
+  theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 8),
+          axis.text.y = element_text(size = 8),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+          panel.spacing = unit(0, "lines"),
+          plot.margin = margin(0, 0.5, 0, 0.5, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.margin=margin(0,0,0,0),
+          legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.title = element_text(size = 10),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+    ) +
+  guides(color = guide_legend(override.aes = list(size = 5, alpha = 1, shape = 16)))
+
+
+all_degs_mouse_burn %>% 
+  separate(condition, into = c("pathogen", "timepoint"), remove = F, sep = "_") %>% 
+# Create ggplot object: maps data to aesthetic (x = expression value)
+  ggplot() +
+  aes(x = adj_p_val) +
+# Plot histogram: visualises the distribution of expression values for quality control
+  geom_histogram(binwidth = 0.05, fill = "steelblue", color = "white") +
+# Create faceted plot: split data into sub-panels by condition or organism for side-by-side comparison
+  facet_wrap(~timepoint, scales = "free", nrow=1) +
+# Set informative axis labels, legend titles, and overall plot title
+  labs(title = "p-adj value distribution, post-Limma", x = "P-value", y = "Count") +
+# Apply project-specific ggplot theme: consistent fonts, gridlines, and legend styling across all figures
+  theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0,  hjust = 0.5, vjust = 1, size = 8),
+          axis.text.y = element_text(size = 8),
+          strip.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5, size = 10),
+          strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5, size = 10),
+          panel.spacing = unit(0, "lines"),
+          plot.margin = margin(0, 0.5, 0, 0.5, unit = "cm"),
+          legend.position = "top",
+          legend.direction = "horizontal",
+          legend.margin=margin(0,0,0,0),
+          legend.box.margin=margin(0,0,-10,0),
+          legend.text = element_text(size = 10, hjust = 0),
+          legend.title = element_text(size = 10),
+          ggh4x.facet.nestline = element_line(colour = "black", linetype = 1)
+    ) +
+  guides(color = guide_legend(override.aes = list(size = 5, alpha = 1, shape = 16)))
+```
+
+
+
+
+Create an MDS plot to visualize sample clustering by condition and timepoint.
+```{r}
+#MDS plot
+# Extract MDS coordinates without plotting
+mds_res <- plotMDS(eset_filtered, plot = FALSE)
+
+# 2. Build data.frame keeping column names from the ExpressionSet
+df_mds <- data.frame(
+  Sample    = colnames(eset_filtered), 
+  X         = mds_res$x,
+  Y         = mds_res$y,
+  Condition = eset_filtered$condition,
+  timepoint = eset_filtered$timepoint
+) %>% 
+  mutate(group = if_else(str_detect(Condition, "Control"), "Control", "Burn"))
+
+# Plotar
+ggplot(df_mds, aes(x = X, y = Y, color = group, shape = timepoint)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = Sample), vjust = -1, size = 3) + # Optional: display sample label
+  theme_minimal() +
+# Set informative axis labels, legend titles, and overall plot title
+  labs(title = "MDS Plot - Mouse Burn Study",
+       x = "Leading logFC dim 1",
+       y = "Leading logFC dim 2")
+
+```
+
+
+Perform PCA on the filtered expression data to assess variance structure.
+```{r}
+# 1. Compute PCA on transposed expression matrix
+# Note: t() transposes so samples are in rows
+# Transpose expression matrix (samples in rows, genes in columns) for PCA
+pca_matrix <- t(exprs(eset_filtered))
+pca_res <- prcomp(pca_matrix, scale. = TRUE)
+
+# 2. Calculate variance explained for each axis
+vars <- round(100 * pca_res$sdev^2 / sum(pca_res$sdev^2), 1)
+
+# 3. Build data.frame following MDS logic
+df_pca <- data.frame(
+  Sample    = colnames(eset_filtered),
+  PC1       = pca_res$x[,1],
+  PC2       = pca_res$x[,2],
+  Condition = eset_filtered$condition,
+  timepoint = eset_filtered$timepoint
+) %>% 
+  mutate(group = if_else(str_detect(Condition, "Control"), "Control", "Burn"))
+
+# 4. Plotar com ggplot2
+ggplot(df_pca, aes(x = PC1, y = PC2, color = group, shape = timepoint)) +
+  geom_point(size = 4, alpha = 0.8) +
+  # Add ellipses around main groups (Burn vs Control)
+  stat_ellipse(aes(group = group), linetype = 2, size = 0.5) + 
+  theme_minimal() +
+  labs(
+    title = "PCA Plot - Mouse Burn Study",
+    x = paste0("PC1 (", vars[1], "%)"),
+    y = paste0("PC2 (", vars[2], "%)"),
+    color = "Treatment Group",
+    shape = "Timepoint/Condition"
+  ) +
+  # Opcional: Melhora a diferenciação visual se houver muitos shapes
+  scale_shape_manual(values = c(15, 16, 17, 18, 7, 8, 9, 10))
+```
+
+
+
+##### T test
+Load the Burn mouse dataset from saved RDS files.
+
+```{r}
+# Load data
+mouse_exprs = readRDS(file = here("tables", "trauma_burn_mouse_exprs_hgnc_symbol.rds"))
+mouse_metadata = read_csv(file = here("tables", "trauma_burn_mouse_metadata.csv"))
+log2fc_sample = readRDS(here("tables", "trauma_burn_mouse_log2fc_sample_clean_long.rds"))
+
+log2fc_sample_symbol = log2fc_sample %>% 
+  inner_join(mouse_exprs %>% 
+               select(human_symbol, probe_id = probe),
+             by = "probe_id") %>% 
+  select(-probe_id) %>% 
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() %>% 
+# Filter to the treatment of interest: removes control/saline samples from this branch
+  filter(treatment == "Burn")
+
+log2fc_unpaired_ttest = log2fc_sample_symbol %>%
+  group_by(human_symbol, timepoint) %>%
+  summarise(
+    res = list(t.test(value_raw, value_raw_ref, paired = F, alternative = "two.sided", var.equal = F)),
+    pval = res[[1]]$p.value,
+    diff = res[[1]]$estimate[1] - res[[1]]$estimate[2],
+    .groups = "drop"
+  ) %>%
+# Apply Benjamini-Hochberg (FDR) correction to raw p-values: controls the expected proportion of false discoveries among rejected hypotheses
+  mutate(padj = p.adjust(pval, method = "BH"),
+         test = "t-Test",
+         paired = "Unpaired"
+         )
+
+log2fc_unpaired_ttest %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+  saveRDS(file = here("tables", "burn_mouse_log2fc_paired_unpaired_ttest.rds"))
+
+```
+
+
+####Trauma
+
+##### Limma
+Run Limma differential expression analysis on the trauma mouse dataset with unpaired samples.
+```{r}
+# Load data
+mouse_log2_hgnc_symbol = readRDS(file = here("tables", "trauma_burn_mouse_exprs_hgnc_symbol.rds"))
+mouse_metadata = read_csv(file = here("tables", "trauma_burn_mouse_metadata.csv")) %>% 
+  filter(str_detect(treatment, "Trauma"))
+
+#Create Expression Set
+eset_mouse <- ExpressionSet(
+  assayData = mouse_log2_hgnc_symbol %>% 
+# Move identifier column to row names: required format for ExpressionSet and Limma (matrix must have rownames)
+    column_to_rownames("human_symbol") %>% 
+    select(all_of(mouse_metadata$geo_sample)) %>%
+    #Check if expression is log2 transformed
+    as.matrix(),
+# Convert metadata to AnnotatedDataFrame: formal phenotype data structure required by ExpressionSet
+  phenoData = AnnotatedDataFrame(mouse_metadata %>% 
+# Move identifier column to row names: required format for ExpressionSet and Limma (matrix must have rownames)
+                                   column_to_rownames("geo_sample") %>% 
+                                   mutate(condition = paste0(treatment, "_", timepoint))))
+
+#Check if expression is log2 transformed
+# Extract raw expression matrix from the ExpressionSet: probes in rows, samples in columns
+exprs(eset_mouse) #values must be in the 0-16 range typically
+
+# Filter low-expressed genes (log2 > 6 in >= 5 samples)
+# Extract raw expression matrix from the ExpressionSet: probes in rows, samples in columns
+genes_to_keep <- exprs(eset_mouse) %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), ~ . > 6)) %>% 
+  rowSums() %>% 
+  { . >= 5 }
+
+eset_filtered <- eset_mouse[genes_to_keep, ]
+
+# Build design matrix
+design <- model.matrix(~ condition + 0, # 0 defines the way we compare the samples
+                       eset_filtered) 
+
+# Ensure syntactically valid column names: replaces spaces/special characters with dots for model.matrix compatibility
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+# Estimate sample-specific quality weights using arrayWeights: down-weights arrays with excessive noise to improve statistical power
+aw <- arrayWeights(eset_filtered, design)
+# Barplot of array weights: visual diagnostic to identify low-quality arrays (bars near zero indicate problematic samples)
+barplot(aw, 
+        names.arg = eset_filtered$condition, # Label x-axis with condition names
+        main = "Sample Weights Diagnostic", 
+        ylab = "Weight", 
+        las = 2,           # Rotate x-axis labels 90 degrees
+        cex.names = 0.7,   # Reduce font size when many labels
+        col = "skyblue")
+
+# Fit linear model
+fit <- lmFit(eset_filtered, 
+             design, weights = aw) 
+
+# List available conditions
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+# Define contrasts
+colnames(design) <- make.names(colnames(design))
+
+# Define contrasts of interest: specify which group means to subtract (e.g. Treatment − Control) to test specific hypotheses
+cont_matrix <- makeContrasts(
+  # --- Trauma Comparisons ---
+  Trauma_2h = conditionTrauma_2.Hour - conditionTrauma_Control_2.Hour,
+  Trauma_D1 = conditionTrauma_1.Day  - conditionTrauma_Control_1.Day,
+  Trauma_D3 = conditionTrauma_3.Day  - conditionTrauma_Control_3.Day,
+  Trauma_D7 = conditionTrauma_7.Day  - conditionTrauma_Control_7.Day,
+  levels = design
+)
+
+# Apply contrasts to the fitted model
+fit2 <- contrasts.fit(fit, cont_matrix)
+# Apply empirical Bayes moderation to shrink gene-wise variances toward a common value: improves stability for low-variance genes
+fit2 <- eBayes(fit2, trend = T, robust = T)
+
+# Check whether high-weight genes distort the fit
+plotSA(fit2, main = "Sigma vs Abundance (Weights Applied)")
+
+# Extract DEGs for every contrast
+
+## For every contrast
+# Iterate over each contrast column: extract DEGs from every comparison in one pass
+results_list <- lapply(1:ncol(fit2), function(i) {
+# Extract differentially expressed genes using the treat method (tests whether log2FC exceeds a minimum threshold, not just non-zero)
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+  })
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs and clean dataset
+all_degs_mouse = all_contrasts_degs %>% 
+# Reorder columns: place comparison/condition column first for readability
+  select(comparison, everything()) %>% 
+# Tag rows as Mouse: required for downstream faceting when combining Mouse and Human results
+  mutate(organism = "Mouse") %>% 
+# Select all columns: ensures clean column order with key identifier first
+  select(condition = comparison, everything()) %>% 
+# Standardise column names to snake_case using janitor::clean_names for consistent tidyverse syntax
+  clean_names() %>% 
+  rename(human_symbol = symbol,
+         mean_l2fc = log_fc,
+         ci_upper = ci_r,
+         ci_lower = ci_l)
+
+all_degs_mouse$condition %>% unique()
+	
+# #Save
+all_degs_mouse %>% saveRDS(file = here("tables", "trauma_mouse_dge_limma_degs.rds"))
+
+all_degs_mouse %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+# Count the number of differentially expressed genes (adj.p ≤ 0.05) per comparison
+  summarise(n_degs = n())
+
+```
+
+
+
+##### T test
+Load the Burn mouse dataset from saved RDS files.
+
+```{r}
+# Load data
+mouse_exprs = readRDS(file = here("tables", "trauma_burn_mouse_exprs_hgnc_symbol.rds"))
+mouse_metadata = read_csv(file = here("tables", "trauma_burn_mouse_metadata.csv"))
+log2fc_sample = readRDS(here("tables", "trauma_burn_mouse_log2fc_sample_clean_long.rds"))
+
+log2fc_sample_symbol = log2fc_sample %>% 
+  inner_join(mouse_exprs %>% 
+               select(human_symbol, probe_id = probe),
+             by = "probe_id") %>% 
+  select(-probe_id) %>% 
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() %>% 
+# Filter to the treatment of interest: removes control/saline samples from this branch
+  filter(treatment == "Trauma")
+
+log2fc_unpaired_ttest = log2fc_sample_symbol %>%
+  group_by(human_symbol, timepoint) %>%
+  summarise(
+    # row_ttests is fast within small groups or on matrices
+    res = list(t.test(value_raw, value_raw_ref, paired = F, alternative = "two.sided", var.equal = F)),
+    pval = res[[1]]$p.value,
+    diff = res[[1]]$estimate[1] - res[[1]]$estimate[2],
+    .groups = "drop"
+  ) %>%
+# Apply Benjamini-Hochberg (FDR) correction to raw p-values: controls the expected proportion of false discoveries among rejected hypotheses
+  mutate(padj = p.adjust(pval, method = "BH"),
+         test = "t-Test",
+         paired = "Unpaired"
+         )
+
+log2fc_unpaired_ttest %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+  saveRDS(file = here("tables", "trauma_mouse_log2fc_paired_unpaired_ttest.rds"))
+
+```
+
+
+
+
+### Human
+#### Burn
+##### Limma
+Run Limma differential expression analysis on the burn human dataset with unpaired samples.
+```{r}
+# Load data
+human_log2_hgnc_symbol = readRDS(file = here("tables", "burn_human_exprs_hgnc_symbol.rds"))
+human_metadata = read_csv(file = here("tables", "burn_human_metadata.csv")) %>% 
+      mutate(
+        condition = paste0(treatment, "_", timepoints_new),
+        condition = fct_relevel(condition, "Control_Early_Hours"),
+        sex = fct_relevel(sex, "F"),
+        age = scale(age)
+      )
+    
+#Create Expression Set
+eset_human <- ExpressionSet(
+  assayData = human_log2_hgnc_symbol %>% 
+# Move identifier column to row names: required format for ExpressionSet and Limma (matrix must have rownames)
+    column_to_rownames("human_symbol") %>% 
+    select(all_of(human_metadata$geo_sample)) %>%
+    #Check if expression is log2 transformed
+    as.matrix(),
+# Convert metadata to AnnotatedDataFrame: formal phenotype data structure required by ExpressionSet
+  phenoData = AnnotatedDataFrame(human_metadata %>% 
+# Move identifier column to row names: required format for ExpressionSet and Limma (matrix must have rownames)
+                                   column_to_rownames("geo_sample")))
+
+#Check if expression is log2 transformed
+# Extract raw expression matrix from the ExpressionSet: probes in rows, samples in columns
+exprs(eset_human) #values must be in the 0-16 range typically
+
+# Filter low-expressed genes (log2 > 6 in >= 5 samples)
+# Extract raw expression matrix from the ExpressionSet: probes in rows, samples in columns
+genes_to_keep <- exprs(eset_human) %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), ~ . > 6)) %>% 
+  rowSums() %>% 
+  { . >= 5 }
+
+eset_filtered <- eset_human[genes_to_keep, ]
+
+# Build design matrix
+design <- model.matrix(~ condition + age + sex + 0, 
+                       eset_filtered) 
+
+# Ensure syntactically valid column names: replaces spaces/special characters with dots for model.matrix compatibility
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+# Estimate sample-specific quality weights using arrayWeights: down-weights arrays with excessive noise to improve statistical power
+aw <- arrayWeights(eset_filtered, design)
+# Barplot of array weights: visual diagnostic to identify low-quality arrays (bars near zero indicate problematic samples)
+barplot(aw, 
+        names.arg = eset_filtered$condition, 
+        main = "Sample Weights Diagnostic", 
+        ylab = "Weight", 
+        las = 2,          
+        cex.names = 0.7,   
+        col = "skyblue")
+
+# Fit linear model
+fit <- lmFit(eset_filtered, 
+             design, weights = aw) 
+
+# List available conditions
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+# Define contrasts
+colnames(design) <- make.names(colnames(design))
+
+# Define contrasts of interest: specify which group means to subtract (e.g. Treatment − Control) to test specific hypotheses
+cont_matrix <- makeContrasts(
+  # --- Burn Comparisons ---
+  Burn_Early = conditionBurn_Early_Hours - conditionControl_Early_Hours,
+  Burn_D1 = conditionBurn_Day_1  - conditionControl_Early_Hours,
+  Burn_D3 = conditionBurn_Day_3  - conditionControl_Early_Hours,
+  Burn_D7 = conditionBurn_Day_7  - conditionControl_Early_Hours,
+  levels = design
+)
+
+# Apply contrasts to the fitted model
+fit2 <- contrasts.fit(fit, cont_matrix)
+# Apply empirical Bayes moderation to shrink gene-wise variances toward a common value: improves stability for low-variance genes
+fit2 <- eBayes(fit2, trend = T, robust = T)
+
+# Diagnostic plot: scatterplot of log2 residual variance vs average expression (should show no strong trend after moderation)
+plotSA(fit2, main = "Sigma vs Abundance (Weights Applied)")
+
+# Extract DEGs for every contrast
+## For every contrast
+# Iterate over each contrast column: extract DEGs from every comparison in one pass
+results_list <- lapply(1:ncol(fit2), function(i) {
+# Extract differentially expressed genes using the treat method (tests whether log2FC exceeds a minimum threshold, not just non-zero)
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+  })
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs and clean dataset
+all_degs_human = all_contrasts_degs %>% 
+# Reorder columns: place comparison/condition column first for readability
+  select(comparison, everything()) %>% 
+# Tag rows as Human: required for downstream faceting when combining Mouse and Human results
+  mutate(organism = "Human") %>% 
+# Select all columns: ensures clean column order with key identifier first
+  select(condition = comparison, everything()) %>% 
+# Standardise column names to snake_case using janitor::clean_names for consistent tidyverse syntax
+  clean_names() %>% 
+  rename(human_symbol = symbol,
+         mean_l2fc = log_fc,
+         ci_upper = ci_r,
+         ci_lower = ci_l)
+
+all_degs_human$condition %>% unique()
+	
+# #Save
+all_degs_human %>% saveRDS(file = here("tables", "burn_human_dge_limma_degs.rds"))
+
+all_degs_human %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+# Count the number of differentially expressed genes (adj.p ≤ 0.05) per comparison
+  summarise(n_degs = n())
+
+```
+
+##### Subsampling 
+
+Run the subsampling loop to assess the impact of cohort composition on differential expression results.
+
+```{r Subsampling loop}
+# Load required R package: makes its functions available in the current session
+library(tidyverse)
+library(limma)
+library(here)
+library(janitor)
+
+## 1. Load Data & Prepare ExpressionSet
+human_log2_hgnc_symbol <- readRDS(file = here("tables", "burn_human_exprs_hgnc_symbol.rds"))
+human_metadata <- read_csv(file = here("tables", "burn_human_metadata.csv")) %>%  
+  mutate(
+    condition = paste0(treatment, "_", timepoints_new),
+    condition = fct_relevel(condition, "Control_Early_Hours")
+  )
+
+# Build an ExpressionSet container: assayData = expression matrix, phenoData = sample-level covariates for Limma
+eset_human <- ExpressionSet(
+  assayData = human_log2_hgnc_symbol %>% 
+# Move identifier column to row names: required format for ExpressionSet and Limma (matrix must have rownames)
+    column_to_rownames("human_symbol") %>% 
+    select(all_of(human_metadata$geo_sample)) %>%
+    as.matrix(),
+# Convert metadata to AnnotatedDataFrame: formal phenotype data structure required by ExpressionSet
+  phenoData = AnnotatedDataFrame(human_metadata %>% column_to_rownames("geo_sample"))
+)
+
+# Filtering genes with intensity > 6 (log2) in at least 5 samples
+# Extract raw expression matrix from the ExpressionSet: probes in rows, samples in columns
+genes_to_keep <- exprs(eset_human) %>%
+  as.data.frame() %>%
+  mutate(across(everything(), ~ . > 6)) %>%
+  rowSums() %>%
+  { . >= 5 }
+
+eset_filtered <- eset_human[genes_to_keep, ]
+meta_df <- as_tibble(pData(eset_filtered), rownames = "sample_id")
+# Extract raw expression matrix from the ExpressionSet: probes in rows, samples in columns
+expr_matrix <- exprs(eset_filtered)
+unique_participants <- meta_df$sample_id %>% unique()
+
+# Slices exactly n_per_condition arrays per distinct biological state grouping
+draw_stratified_samples <- function(metadata, n_per_condition = 5) {
+  valid_draw <- FALSE
+  attempts <- 0
+  
+  while(!valid_draw) {
+    attempts <- attempts + 1
+    if(attempts > 2000) stop("Could not find a mathematically stable stratified sample subset.")
+    
+    # Draw exactly n_per_condition independent samples (sample_id) from EACH group
+    sub_meta <- metadata %>%
+      group_by(condition) %>%
+      slice_sample(n = n_per_condition, replace = FALSE) %>%
+      ungroup() %>%
+      mutate(
+        condition = as.factor(condition),
+        sex = as.factor(sex)
+      )
+    
+    # Check 1: Verify all 5 categorical clinical groups are captured in the slice
+    has_all_conditions <- (length(unique(sub_meta$condition)) == 5)
+    
+    # Check 2: Verify both Sexes are captured to avoid model matrix collinearity
+    has_sex_diversity   <- (length(unique(sub_meta$sex)) > 1)
+    
+    if(has_all_conditions && has_sex_diversity) {
+      # Aligned precisely with the original design: condition + age + sex + 0
+      test_design <- model.matrix(~ condition + age + sex + 0, data = sub_meta)
+      colnames(test_design) <- make.names(colnames(test_design))
+      
+      # Confirm the subset design matrix is full rank (invertible)
+      bad_coefs <- limma::nonEstimable(test_design)
+      if(is.null(bad_coefs)) {
+        valid_draw <- TRUE
+      }
+    }
+  }
+  return(sub_meta)
+}
+
+# ==============================================================================
+# 3. RUN MULTI-ITERATION SIMULATION LOOP (DIRECT SAMPLE ESTIMATION)
+# ==============================================================================
+n_iterations <- 200 
+samples_per_group <- 5  # 5 control + (5 samples * 4 timepoints) = 25 total samples per iteration
+
+# Set random seed for reproducibility: ensures that subsampling draws the same iterations across runs
+set.seed(123) 
+
+df_global_runs <- tibble(iteration = 1:n_iterations) %>%
+  mutate(
+    # Draw sample configurations via the corrected stratified logic
+    sampled_metadata = map(iteration, ~ draw_stratified_samples(meta_df, n_per_condition = samples_per_group)),
+    
+# Apply Limma to each subsample: fits a linear model per iteration to assess DEG stability
+    limma_results = map(sampled_metadata, ~ {
+      sub_meta <- .x
+      sub_expr <- expr_matrix[, sub_meta$sample_id]
+      
+      # Build the multivariable model matrix identical to your original code
+      design_sub <- model.matrix(~ condition + age + sex + 0, data = sub_meta)
+      colnames(design_sub) <- make.names(colnames(design_sub))
+      
+      # Compute localized array weights natively at the sample level
+      aw_sub <- arrayWeights(sub_expr, design_sub)
+      
+      # Fit linear model directly without block correlation factors
+      fit_sub <- lmFit(sub_expr, design = design_sub, weights = aw_sub)
+      
+      # Define directional mathematical contrasts matching column identities
+      cont.matrix <- makeContrasts(
+        Burn_Early = conditionBurn_Early_Hours - conditionControl_Early_Hours,
+        Burn_D1    = conditionBurn_Day_1  - conditionControl_Early_Hours,
+        Burn_D3    = conditionBurn_Day_3  - conditionControl_Early_Hours,
+        Burn_D7    = conditionBurn_Day_7  - conditionControl_Early_Hours,
+        levels = design_sub
+      )
+      
+      # Apply contrasts to the fitted model
+fit2_sub <- contrasts.fit(fit_sub, cont.matrix)
+# Apply empirical Bayes moderation to shrink gene-wise variances toward a common value: improves stability for low-variance genes
+      fit2_sub <- eBayes(fit2_sub, robust = TRUE, trend = TRUE)
+      
+      res_list <- lapply(1:ncol(fit2_sub), function(i) {
+        # Extract DEGs for this contrast using topTreat
+        df_res <- topTreat(fit2_sub, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE)
+        df_res$symbol <- rownames(df_res)
+        df_res$comparison <- colnames(fit2_sub)[i]
+        rownames(df_res) <- NULL
+        return(df_res)
+      })
+      
+# Row-bind all contrast results into a single data frame: combines list of per-contrast results into a tidy DEG table
+      do.call(rbind, res_list)
+    })
+  )
+
+# ==============================================================================
+# 4. POST-SIMULATION COMPILATION & SIGNIFICANCE SUMMARIES
+# ==============================================================================
+burn_human_subsampled_degs <- df_global_runs %>%
+  select(iteration, limma_results) %>%
+# Unnest the list-column of Limma results into a flat data frame: one row per gene × comparison × iteration
+  unnest(limma_results) %>%
+# Standardise column names to snake_case using janitor::clean_names for consistent tidyverse syntax
+    clean_names() %>%
+    #Calculate errors by iteration
+  mutate(
+    se_iteration = abs(log_fc / t),
+    sd_iteration = se_iteration / sqrt(0.4) # N = 5
+  ) %>% 
+  group_by(comparison, symbol) %>%
+  summarise(
+    p_value = median(p_value),
+    adj_p_val = median(adj_p_val),
+    mean_l2fc = median(log_fc),
+    sd_sampling_stability = sd(log_fc),
+    se = median(se_iteration),
+    sd = median(sd_iteration),
+    ci_lower = median(ci_l),
+    ci_upper = median(ci_r),
+    t = median(t),
+    b = median(b),
+    ave_expr = median(ave_expr),
+    pct_iterations_significant = mean(adj_p_val <= 0.05) * 100,
+    .groups = "drop"
+  ) %>%
+  rename(human_symbol = symbol, condition = comparison) %>%
+# Tag rows as Human: required for downstream faceting when combining Mouse and Human results
+  mutate(organism = "Human") 
+
+# Save Downsampled DEGs Output Object
+burn_human_subsampled_degs %>% saveRDS(file = here("tables", "burn_human_dge_subsampled_degs.rds"))
+
+# Print Robust Differential Expression Signatures Summary
+burn_human_subsampled_degs %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarise(n_robust_degs = n()) %>%
+  print()
+```
+
+
+Demographics
+Visualise the demographic composition (age, sex, race) across subsampling iterations to confirm balance.
+Visualise demographic composition across subsampling iterations.
+```{r fig.height=5, fig.width=8}
+# Load required R package: makes its functions available in the current session
+library(tidyverse)
+# Load required R package: makes its functions available in the current session
+library(patchwork)
+
+# ==============================================================================
+# 1. PROCESS SIMULATION ITERATIONS DATA (RAW METRICS)
+# ==============================================================================
+demographics_summary <- df_global_runs %>%
+  select(iteration, sampled_metadata) %>%
+  unnest(sampled_metadata) %>%
+# Extract demographic columns (age, sex, race) per iteration for visualisation
+  select(iteration, sample_id, age, sex) %>%
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() %>%
+  group_by(iteration) %>%
+  summarise(
+    mean_age   = mean(age, na.rm = TRUE), 
+    prop_male  = mean(sex == "male", na.rm = TRUE),
+    .groups    = "drop"
+  ) %>%
+  mutate(iteration = factor(iteration, levels = 1:max(iteration)))
+
+# ==============================================================================
+# 2. BUILD TOP PANEL: SUBSAMPLING RUNS (n=5 PER ITERATION)
+# ==============================================================================
+
+# Initialise ggplot with aesthetic mappings: defines variables for x-axis, y-axis, colour, and fill
+plot_age <- ggplot(demographics_summary, aes(x = "Mean Age", y = iteration)) +
+# Add tile layer: creates a heatmap-like grid where colour encodes numeric values (e.g. mean age per iteration)
+  geom_tile(aes(fill = mean_age), color = "white", linewidth = 0.6) +
+# Add text annotation to tiles: displays the numeric mean age value inside each tile
+  geom_text(aes(label = sprintf("%.1f", mean_age)), 
+            color = "white", fontface = "bold", size = 3.5) +
+# Apply viridis continuous colour scale: perceptually uniform colour mapping for numeric fill values
+  scale_fill_viridis_c(option = "mako", name = "Mean Age\n(Years)", direction = -1) +
+# Configure x-axis: set position, expansion, breaks, and labels
+  scale_x_discrete(position = "top", expand = c(0.01, 0.01)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+# Apply project-specific ggplot theme: consistent fonts, gridlines, and legend styling across all figures
+  theme_vaxgo() +
+# Customise theme elements: remove/minimise gridlines, adjust axis text, and fine-tune legend placement
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold"),
+    panel.grid   = element_blank(),
+    legend.position = "left"
+  ) +
+# Set informative axis labels, legend titles, and overall plot title
+  labs(y = "Subsampling Iterations (n=5)")
+
+plot_sex <- demographics_summary %>%
+  select(iteration, Male = prop_male) %>%
+  mutate(Female = 1 - Male) %>%
+  pivot_longer(cols = c(Male, Female), names_to = "Sex", values_to = "Proportion") %>%
+# Initialise ggplot with aesthetic mappings: defines variables for x-axis, y-axis, colour, and fill
+  ggplot(aes(x = Proportion, y = iteration, fill = Sex)) +
+# Add stacked bar chart: shows proportional distribution of categories (sex or race) per iteration
+  geom_col(width = 0.75, position = "stack") +
+# Apply manual colour scale: uses predefined colour palette (typically from project's colour scheme)
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+# Configure x-axis: set position, expansion, breaks, and labels
+  scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+# Apply project-specific ggplot theme: consistent fonts, gridlines, and legend styling across all figures
+  theme_vaxgo() +
+# Customise theme elements: remove/minimise gridlines, adjust axis text, and fine-tune legend placement
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank()
+  ) +
+# Set informative axis labels, legend titles, and overall plot title
+  labs(x = "Sex Distribution")
+
+
+# Configure patchwork layout: assign relative widths to sub-plots for balanced display
+top_panel <- plot_age + plot_sex + plot_layout(widths = c(1, 1))
+
+# ==============================================================================
+# 3. BUILD BOTTOM PANEL: ORIGINAL TOTAL COHORT BASELINE (N=100)
+# ==============================================================================
+original_demographics <- human_metadata %>%
+  mutate(age = str_remove(age, "y") %>% as.numeric(),
+         sex = case_when(sex == "F" ~ "Female",
+                         sex == "M" ~ "Male",
+                         T~sex)) %>% 
+  select(geo_sample, age, sex) %>%
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct()
+
+# Initialise ggplot with aesthetic mappings: defines variables for x-axis, y-axis, colour, and fill
+base_age <- ggplot(original_demographics, aes(x = age)) +
+# Add density plot: smooth distribution of age values for the full cohort baseline
+  geom_density(fill = "#3182bd", alpha = 0.4, color = "black", linewidth = 0.8) +
+# Add vertical dashed line at the cohort mean age: reference for comparing subsample distributions
+  geom_vline(xintercept = mean(original_demographics$age, na.rm = TRUE), 
+             color = "black", linetype = "dashed", linewidth = 0.8) +
+# Create faceted plot: split data into sub-panels by condition or organism for side-by-side comparison
+  facet_wrap(~"Age") +
+# Configure x-axis: set position, expansion, breaks, and labels
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+# Apply project-specific ggplot theme: consistent fonts, gridlines, and legend styling across all figures
+  theme_vaxgo() +
+# Customise theme elements: remove/minimise gridlines, adjust axis text, and fine-tune legend placement
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 9),
+    axis.title.x = element_text(face = "bold", size = 9)
+  ) +
+# Set informative axis labels, legend titles, and overall plot title
+  labs(x = "Age (Years)", y = "Density")
+
+base_sex <- original_demographics %>%
+  dplyr::count(sex) %>%
+# Convert counts to proportions: facilitates stacked bar charts of demographic distributions
+  mutate(Proportion = n / sum(n)) %>%
+# Initialise ggplot with aesthetic mappings: defines variables for x-axis, y-axis, colour, and fill
+  ggplot(aes(x = Proportion, y = "Original\nCohort", fill = sex)) +
+# Create faceted plot: split data into sub-panels by condition or organism for side-by-side comparison
+  facet_wrap(~"Original\nCohort") +
+  geom_col(width = 0.6, position = "stack", show.legend = FALSE) +
+# Apply manual colour scale: uses predefined colour palette (typically from project's colour scheme)
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+# Configure x-axis: set position, expansion, breaks, and labels
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0, 0)) +
+# Apply project-specific ggplot theme: consistent fonts, gridlines, and legend styling across all figures
+  theme_vaxgo() +
+# Customise theme elements: remove/minimise gridlines, adjust axis text, and fine-tune legend placement
+  theme(
+    axis.title = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+# Configure patchwork layout: assign relative widths to sub-plots for balanced display
+bottom_panel <- base_age + base_sex + plot_layout(widths = c(1, 1))
+
+# ==============================================================================
+# 4. STITCH COMPLETE GRAPHICAL CANVAS
+# ==============================================================================
+final_canvas <- top_panel / bottom_panel + 
+  plot_layout(heights = c(4, 1), guides = "collect") +
+# Add overall title to the combined figure using patchwork
+  plot_annotation(title = "Burn Injury, Human Cohort Validation")
+
+print(final_canvas)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+##### T test
+Load the Burn human dataset from saved RDS files.
+
+```{r}
+# Load data
+human_exprs = readRDS(file = here("tables", "burn_human_exprs_hgnc_symbol.rds"))
+human_metadata = read_csv(file = here("tables", "burn_human_metadata.csv"))
+burn_human_log2fc_sample = readRDS(here("tables", "burn_human_log2fc_sample_clean_long.rds"))
+
+log2fc_sample_symbol = burn_human_log2fc_sample %>% 
+  inner_join(human_exprs %>% 
+               select(human_symbol, probe_id = probe),
+             by = "probe_id") %>% 
+  select(-probe_id) %>% 
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() 
+
+log2fc_unpaired_ttest = log2fc_sample_symbol %>%
+  group_by(human_symbol, timepoints_new) %>%
+  summarise(
+    res = list(t.test(value_raw, value_raw_ref, paired = F, alternative = "two.sided", var.equal = F)),
+    pval = res[[1]]$p.value,
+    diff = res[[1]]$estimate[1] -  res[[1]]$estimate[2],
+    .groups = "drop"
+  ) %>%
+# Apply Benjamini-Hochberg (FDR) correction to raw p-values: controls the expected proportion of false discoveries among rejected hypotheses
+  mutate(padj = p.adjust(pval, method = "BH"),
+         test = "t-Test",
+         paired = "Unpaired"
+         )
+
+log2fc_unpaired_ttest %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+  saveRDS(file = here("tables", "burn_human_log2fc_unpaired_ttest.rds"))
+
+```
+
+####Trauma
+##### Limma
+Run unpaired statistical tests comparing each timepoint to baseline.
+
+```{r}
+# Load data
+human_log2_hgnc_symbol = readRDS(file = here("tables", "trauma_human_exprs_hgnc_symbol.rds"))
+outliers = readRDS(file = here("tables", "trauma_human_metadata_outliers.rds"))
+
+human_metadata = read_csv(file = here("tables", "trauma_human_metadata.csv")) %>% 
+  mutate(
+        condition = paste0(treatment, "_", timepoints_new),
+        condition = fct_relevel(condition, "Control_Early_Hours"),
+        sex = fct_relevel(sex, "F"),
+        age = scale(age)
+      ) %>% 
+  filter(!subject_id %in% c(outliers))
+
+#Create Expression Set
+eset_human <- ExpressionSet(
+  assayData = human_log2_hgnc_symbol %>% 
+    select(-probe) %>% 
+# Move identifier column to row names: required format for ExpressionSet and Limma (matrix must have rownames)
+    column_to_rownames("human_symbol") %>% 
+    select(all_of(human_metadata$geo_sample)) %>%
+    #Check if expression is log2 transformed
+    as.matrix(),
+# Convert metadata to AnnotatedDataFrame: formal phenotype data structure required by ExpressionSet
+  phenoData = AnnotatedDataFrame(human_metadata %>% 
+# Move identifier column to row names: required format for ExpressionSet and Limma (matrix must have rownames)
+                                   column_to_rownames("geo_sample")))
+
+#Check if expression is log2 transformed
+# Extract raw expression matrix from the ExpressionSet: probes in rows, samples in columns
+exprs(eset_human) #values must be in the 0-16 range typically
+
+# Filter low-expressed genes (log2 > 6 in >= 5 samples)
+# Extract raw expression matrix from the ExpressionSet: probes in rows, samples in columns
+genes_to_keep <- exprs(eset_human) %>% 
+  as.data.frame() %>% 
+  mutate(across(everything(), ~ . > 6)) %>% 
+  rowSums() %>% 
+  { . >= 5 }
+
+eset_filtered <- eset_human[genes_to_keep, ]
+
+# Build design matrix
+design <- model.matrix(~ condition + age + sex + 0,
+                       eset_filtered) 
+
+# Ensure syntactically valid column names: replaces spaces/special characters with dots for model.matrix compatibility
+colnames(design) <- make.names(colnames(design))  # Avoids blank spaces
+
+# aw <- arrayWeights(eset_filtered, design)
+# 
+# barplot(aw, 
+#         names.arg = eset_filtered$condition, 
+#         main = "Sample Weights Diagnostic", 
+#         ylab = "Weight", 
+#         las = 2,           
+#         cex.names = 0.7,  
+#         col = "skyblue")
+
+# Fit linear model
+fit <- lmFit(eset_filtered, 
+             design, 
+             # weights = aw
+             ) 
+
+# List available conditions
+colnames(design) %>% 
+  as.data.frame() %>% 
+  arrange(.)
+
+# Define contrasts
+colnames(design) <- make.names(colnames(design))
+
+# Define contrasts of interest: specify which group means to subtract (e.g. Treatment − Control) to test specific hypotheses
+cont_matrix <- makeContrasts(
+  # --- Trauma Comparisons ---
+  Trauma_Early = conditionTrauma_Early_Hours - conditionControl_Early_Hours,
+  Trauma_D1 = conditionTrauma_Day_1  - conditionControl_Early_Hours,
+  Trauma_D3 = conditionTrauma_Day_3  - conditionControl_Early_Hours,
+  Trauma_D7 = conditionTrauma_Day_7  - conditionControl_Early_Hours,
+  levels = design
+)
+
+# Apply contrasts to the fitted model
+fit2 <- contrasts.fit(fit, cont_matrix)
+# Apply empirical Bayes moderation to shrink gene-wise variances toward a common value: improves stability for low-variance genes
+fit2 <- eBayes(fit2, 
+               # trend = T, #Does not need trend
+               robust = T
+               )
+
+# Check whether high-weight genes distort the fit
+plotSA(fit2, main = "Sigma vs Abundance (Weights Applied)")
+
+# Extract DEGs for every contrast
+
+## For every contrast
+# Iterate over each contrast column: extract DEGs from every comparison in one pass
+results_list <- lapply(1:ncol(fit2), function(i) {
+# Extract differentially expressed genes using the treat method (tests whether log2FC exceeds a minimum threshold, not just non-zero)
+  topTreat(fit2, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE) %>%
+    mutate(comparison = colnames(fit2)[i]) %>% 
+    rownames_to_column("symbol")
+  })
+
+# Combine all results
+all_contrasts_degs <- bind_rows(results_list)
+
+# Get all DEGs and clean dataset
+all_degs_human = all_contrasts_degs %>% 
+# Reorder columns: place comparison/condition column first for readability
+  select(comparison, everything()) %>% 
+# Tag rows as Human: required for downstream faceting when combining Mouse and Human results
+  mutate(organism = "Human") %>% 
+# Select all columns: ensures clean column order with key identifier first
+  select(condition = comparison, everything()) %>% 
+# Standardise column names to snake_case using janitor::clean_names for consistent tidyverse syntax
+  clean_names() %>% 
+  rename(human_symbol = symbol,
+         mean_l2fc = log_fc,
+         ci_upper = ci_r,
+         ci_lower = ci_l)
+
+all_degs_human$condition %>% unique()
+	
+# #Save
+all_degs_human %>% saveRDS(file = here("tables", "trauma_human_dge_limma_degs.rds"))
+
+all_degs_human %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+# Count the number of differentially expressed genes (adj.p ≤ 0.05) per comparison
+  summarise(n_degs = n())
+
+```
+
+
+###### Subsampling
+
+Run the subsampling loop to assess the impact of cohort composition on differential expression results.
+
+```{r Subsampling loop}
+# Load required R package: makes its functions available in the current session
+library(tidyverse)
+library(limma)
+library(here)
+library(janitor)
+
+## 1. Load Data, Filter Outliers, & Prepare ExpressionSet
+human_log2_hgnc_symbol <- readRDS(file = here("tables", "trauma_human_exprs_hgnc_symbol.rds"))
+outliers <- readRDS(file = here("tables", "trauma_human_metadata_outliers.rds"))
+
+human_metadata <- read_csv(file = here("tables", "trauma_human_metadata.csv")) %>%  
+  mutate(
+    condition = paste0(treatment, "_", timepoints_new),
+    condition = fct_relevel(condition, "Control_Early_Hours")
+  ) %>% 
+  filter(!subject_id %in% c(outliers))
+
+# Build an ExpressionSet container: assayData = expression matrix, phenoData = sample-level covariates for Limma
+eset_human <- ExpressionSet(
+  assayData = human_log2_hgnc_symbol %>% 
+    select(-probe) %>% 
+# Move identifier column to row names: required format for ExpressionSet and Limma (matrix must have rownames)
+    column_to_rownames("human_symbol") %>% 
+    select(all_of(human_metadata$geo_sample)) %>%
+    as.matrix(),
+# Convert metadata to AnnotatedDataFrame: formal phenotype data structure required by ExpressionSet
+  phenoData = AnnotatedDataFrame(human_metadata %>% column_to_rownames("geo_sample"))
+)
+
+# Filtering genes with intensity > 6 (log2) in at least 5 samples
+# Extract raw expression matrix from the ExpressionSet: probes in rows, samples in columns
+genes_to_keep <- exprs(eset_human) %>%
+  as.data.frame() %>%
+  mutate(across(everything(), ~ . > 6)) %>%
+  rowSums() %>%
+  { . >= 5 }
+
+eset_filtered <- eset_human[genes_to_keep, ]
+
+# Extract core matrix references for safe downsampling slices
+meta_df <- honest_df <- as_tibble(pData(eset_filtered), rownames = "sample_id")
+# Extract raw expression matrix from the ExpressionSet: probes in rows, samples in columns
+expr_matrix <- exprs(eset_filtered)
+
+# Slices exactly n_per_condition independent samples (sample_id) from EACH group
+draw_stratified_samples <- function(metadata, n_per_condition = 5) {
+  valid_draw <- FALSE
+  attempts <- 0
+  
+  while(!valid_draw) {
+    attempts <- attempts + 1
+    if(attempts > 2000) stop("Could not find a mathematically stable stratified sample subset.")
+    
+    # Draw exactly n_per_condition independent arrays per condition group
+    sub_meta <- metadata %>%
+      group_by(condition) %>%
+      slice_sample(n = n_per_condition, replace = FALSE) %>%
+      ungroup() %>%
+      mutate(
+        condition = as.factor(condition),
+        sex = as.factor(sex)
+      )
+    
+    # Check 1: Verify all 5 categorical clinical groups are captured in the slice
+    has_all_conditions <- (length(unique(sub_meta$condition)) == 5)
+    
+    # Check 2: Verify both Sexes are captured to avoid model matrix collinearity
+    has_sex_diversity   <- (length(unique(sub_meta$sex)) > 1)
+    
+    if(has_all_conditions && has_sex_diversity) {
+      # Aligned precisely with original design: condition + age + sex + 0
+      test_design <- model.matrix(~ condition + age + sex + 0, data = sub_meta)
+      colnames(test_design) <- make.names(colnames(test_design))
+      
+      bad_coefs <- limma::nonEstimable(test_design)
+      if(is.null(bad_coefs)) {
+        valid_draw <- TRUE
+      }
+    }
+  }
+  return(sub_meta)
+}
+
+# ==============================================================================
+# 3. RUN MULTI-ITERATION SIMULATION LOOP (DIRECT SAMPLE ESTIMATION)
+# ==============================================================================
+n_iterations <- 200 
+samples_per_group <- 5  # 5 control + (5 samples * 4 timepoints) = 25 total samples per iteration
+
+# Set random seed for reproducibility: ensures that subsampling draws the same iterations across runs
+set.seed(123) 
+
+df_global_runs <- tibble(iteration = 1:n_iterations) %>%
+  mutate(
+# Apply the sampling function to each iteration: generates a list-column of sampled metadata sets
+    sampled_metadata = map(iteration, ~ draw_stratified_samples(meta_df, n_per_condition = samples_per_group)),
+    
+# Apply Limma to each subsample: fits a linear model per iteration to assess DEG stability
+    limma_results = map(sampled_metadata, ~ {
+      sub_meta <- .x
+      sub_expr <- expr_matrix[, sub_meta$sample_id]
+      
+# Build design matrix for linear modelling: encodes group membership and covariates (sex, age, race) for Limma
+      design_sub <- model.matrix(~ condition + age + sex + 0, data = sub_meta)
+      colnames(design_sub) <- make.names(colnames(design_sub))
+      
+      # Fit linear model directly without block correlation factors or array weights
+      fit_sub <- lmFit(sub_expr, design = design_sub)
+      
+# Define contrasts of interest: specify which group means to subtract (e.g. Treatment − Control) to test specific hypotheses
+      cont.matrix <- makeContrasts(
+        Trauma_Early = conditionTrauma_Early_Hours - conditionControl_Early_Hours,
+        Trauma_D1    = conditionTrauma_Day_1  - conditionControl_Early_Hours,
+        Trauma_D3    = conditionTrauma_Day_3  - conditionControl_Early_Hours,
+        Trauma_D7    = conditionTrauma_Day_7  - conditionControl_Early_Hours,
+        levels = design_sub
+      )
+      
+      # Apply contrasts to the fitted model
+fit2_sub <- contrasts.fit(fit_sub, cont.matrix)
+      # robust = TRUE as original setup, trend = FALSE since trend was deactivated
+      fit2_sub <- eBayes(fit2_sub, robust = TRUE, trend = FALSE)
+      
+      res_list <- lapply(1:ncol(fit2_sub), function(i) {
+        # Extract DEGs for this contrast using topTreat
+        df_res <- topTreat(fit2_sub, coef = i, adjust = "fdr", p.value = 1, number = Inf, confint = TRUE)
+        df_res$symbol <- rownames(df_res)
+        df_res$comparison <- colnames(fit2_sub)[i]
+        rownames(df_res) <- NULL
+        return(df_res)
+      })
+      
+# Row-bind all contrast results into a single data frame: combines list of per-contrast results into a tidy DEG table
+      do.call(rbind, res_list)
+    })
+  )
+
+# ==============================================================================
+# 4. POST-SIMULATION COMPILATION & SIGNIFICANCE SUMMARIES
+# ==============================================================================
+trauma_human_subsampled_degs <- df_global_runs %>%
+  select(iteration, limma_results) %>%
+# Unnest the list-column of Limma results into a flat data frame: one row per gene × comparison × iteration
+  unnest(limma_results) %>%
+# Standardise column names to snake_case using janitor::clean_names for consistent tidyverse syntax
+    clean_names() %>%
+    #Calculate errors by iteration
+  mutate(
+    se_iteration = abs(log_fc / t),
+    sd_iteration = se_iteration / sqrt(0.4) # N = 5
+  ) %>% 
+  group_by(comparison, symbol) %>%
+  summarise(
+    p_value = median(p_value),
+    adj_p_val = median(adj_p_val),
+    mean_l2fc = median(log_fc),
+    sd_sampling_stability = sd(log_fc),
+    se = median(se_iteration),
+    sd = median(sd_iteration),
+    ci_lower = median(ci_l),
+    ci_upper = median(ci_r),
+    t = median(t),
+    b = median(b),
+    ave_expr = median(ave_expr),
+    pct_iterations_significant = mean(adj_p_val <= 0.05) * 100,
+    .groups = "drop"
+  ) %>%
+  rename(human_symbol = symbol, condition = comparison) %>%
+# Tag rows as Human: required for downstream faceting when combining Mouse and Human results
+  mutate(organism = "Human")
+
+# Save Downsampled DEGs Object
+trauma_human_subsampled_degs %>% saveRDS(file = here("tables", "trauma_human_dge_subsampled_degs.rds"))
+
+# Print Robust Differential Expression Summary Count
+trauma_human_subsampled_degs %>% 
+  group_by(condition) %>%
+  filter(adj_p_val <= 0.05) %>% 
+  summarise(n_robust_degs = n()) %>%
+  print()
+
+```
+
+
+
+Demographics
+Visualise the demographic composition (age, sex, race) across subsampling iterations to confirm balance.
+Visualise demographic composition across subsampling iterations.
+```{r fig.height=5, fig.width=8}
+# Load required R package: makes its functions available in the current session
+library(tidyverse)
+# Load required R package: makes its functions available in the current session
+library(patchwork)
+
+# ==============================================================================
+# 1. PROCESS SIMULATION ITERATIONS DATA (RAW METRICS)
+# ==============================================================================
+demographics_summary <- df_global_runs %>%
+  select(iteration, sampled_metadata) %>%
+  unnest(sampled_metadata) %>%
+# Extract demographic columns (age, sex, race) per iteration for visualisation
+  select(iteration, sample_id, age, sex) %>%
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() %>%
+  group_by(iteration) %>%
+  summarise(
+    mean_age   = mean(age, na.rm = TRUE), 
+    prop_male  = mean(sex == "male" | sex == "M", na.rm = TRUE),
+    .groups    = "drop"
+  ) %>%
+  mutate(iteration = factor(iteration, levels = 1:max(iteration)))
+
+# ==============================================================================
+# 2. BUILD TOP PANEL: SUBSAMPLING RUNS (n=5 PER GROUP-CONDITION SPECIFICATION)
+# ==============================================================================
+
+# Initialise ggplot with aesthetic mappings: defines variables for x-axis, y-axis, colour, and fill
+plot_age <- ggplot(demographics_summary, aes(x = "Mean Age", y = iteration)) +
+# Add tile layer: creates a heatmap-like grid where colour encodes numeric values (e.g. mean age per iteration)
+  geom_tile(aes(fill = mean_age), color = "white", linewidth = 0.6) +
+# Add text annotation to tiles: displays the numeric mean age value inside each tile
+  geom_text(aes(label = sprintf("%.1f", mean_age)), 
+            color = "white", fontface = "bold", size = 3.5) +
+# Apply viridis continuous colour scale: perceptually uniform colour mapping for numeric fill values
+  scale_fill_viridis_c(option = "mako", name = "Mean Age\n(Years)", direction = -1) +
+# Configure x-axis: set position, expansion, breaks, and labels
+  scale_x_discrete(position = "top", expand = c(0.01, 0.01)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+# Apply project-specific ggplot theme: consistent fonts, gridlines, and legend styling across all figures
+  theme_vaxgo() +
+# Customise theme elements: remove/minimise gridlines, adjust axis text, and fine-tune legend placement
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold"),
+    panel.grid   = element_blank(),
+    legend.position = "left"
+  ) +
+# Set informative axis labels, legend titles, and overall plot title
+  labs(y = "Subsampling Iterations (n=5)")
+
+plot_sex <- demographics_summary %>%
+  select(iteration, Male = prop_male) %>%
+  mutate(Female = 1 - Male) %>%
+  pivot_longer(cols = c(Male, Female), names_to = "Sex", values_to = "Proportion") %>%
+# Initialise ggplot with aesthetic mappings: defines variables for x-axis, y-axis, colour, and fill
+  ggplot(aes(x = Proportion, y = iteration, fill = Sex)) +
+# Add stacked bar chart: shows proportional distribution of categories (sex or race) per iteration
+  geom_col(width = 0.75, position = "stack") +
+# Apply manual colour scale: uses predefined colour palette (typically from project's colour scheme)
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+# Configure x-axis: set position, expansion, breaks, and labels
+  scale_x_continuous(position = "top", expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0.01, 0.01)) +
+# Apply project-specific ggplot theme: consistent fonts, gridlines, and legend styling across all figures
+  theme_vaxgo() +
+# Customise theme elements: remove/minimise gridlines, adjust axis text, and fine-tune legend placement
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank()
+  ) +
+# Set informative axis labels, legend titles, and overall plot title
+  labs(x = "Sex Distribution")
+
+# Configure patchwork layout: assign relative widths to sub-plots for balanced display
+top_panel <- plot_age + plot_sex + plot_layout(widths = c(1, 1))
+
+# ==============================================================================
+# 3. BUILD BOTTOM PANEL: ORIGINAL TOTAL COHORT BASELINE (N=100)
+# ==============================================================================
+original_demographics <- human_metadata %>%
+  mutate(age = str_remove(age, "y") %>% as.numeric(),
+         sex = case_when(sex == "F" ~ "Female",
+                         sex == "M" ~ "Male",
+                         TRUE ~ sex)) %>% 
+  select(geo_sample, age, sex) %>%
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct()
+
+# Initialise ggplot with aesthetic mappings: defines variables for x-axis, y-axis, colour, and fill
+base_age <- ggplot(original_demographics, aes(x = age)) +
+# Add density plot: smooth distribution of age values for the full cohort baseline
+  geom_density(fill = "#3182bd", alpha = 0.4, color = "black", linewidth = 0.8) +
+# Add vertical dashed line at the cohort mean age: reference for comparing subsample distributions
+  geom_vline(xintercept = mean(original_demographics$age, na.rm = TRUE), 
+             color = "black", linetype = "dashed", linewidth = 0.8) +
+# Create faceted plot: split data into sub-panels by condition or organism for side-by-side comparison
+  facet_wrap(~"Age") +
+# Configure x-axis: set position, expansion, breaks, and labels
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+# Apply project-specific ggplot theme: consistent fonts, gridlines, and legend styling across all figures
+  theme_vaxgo() +
+# Customise theme elements: remove/minimise gridlines, adjust axis text, and fine-tune legend placement
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(face = "bold", size = 9),
+    axis.title.x = element_text(face = "bold", size = 9)
+  ) +
+# Set informative axis labels, legend titles, and overall plot title
+  labs(x = "Age (Years)", y = "Density")
+
+base_sex <- original_demographics %>%
+  dplyr::count(sex) %>%
+# Convert counts to proportions: facilitates stacked bar charts of demographic distributions
+  mutate(Proportion = n / sum(n)) %>%
+# Initialise ggplot with aesthetic mappings: defines variables for x-axis, y-axis, colour, and fill
+  ggplot(aes(x = Proportion, y = "Original\nCohort", fill = sex)) +
+# Create faceted plot: split data into sub-panels by condition or organism for side-by-side comparison
+  facet_wrap(~"Original\nCohort") +
+  geom_col(width = 0.6, position = "stack", show.legend = FALSE) +
+# Apply manual colour scale: uses predefined colour palette (typically from project's colour scheme)
+  scale_fill_manual(values = c("Male" = "#3182bd", "Female" = "#fa9fb5")) +
+# Configure x-axis: set position, expansion, breaks, and labels
+  scale_x_continuous(expand = c(0, 0), breaks = c(0, 0.5, 1)) +
+  scale_y_discrete(expand = c(0, 0)) +
+# Apply project-specific ggplot theme: consistent fonts, gridlines, and legend styling across all figures
+  theme_vaxgo() +
+# Customise theme elements: remove/minimise gridlines, adjust axis text, and fine-tune legend placement
+  theme(
+    axis.title = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+# Configure patchwork layout: assign relative widths to sub-plots for balanced display
+bottom_panel <- base_age + base_sex + plot_layout(widths = c(1, 1))
+
+# ==============================================================================
+# 4. STITCH COMPLETE GRAPHICAL CANVAS
+# ==============================================================================
+final_canvas <- top_panel / bottom_panel + 
+  plot_layout(heights = c(4, 1), guides = "collect") +
+# Add overall title to the combined figure using patchwork
+  plot_annotation(title = "Trauma Injury, Human Cohort Validation")
+
+print(final_canvas)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+##### T test
+Load the Trauma human dataset from saved RDS files.
+
+```{r}
+# Load data
+human_exprs = readRDS(file = here("tables", "trauma_human_exprs_hgnc_symbol.rds"))
+human_metadata = read_csv(file = here("tables", "trauma_human_metadata.csv"))
+trauma_human_log2fc_sample = readRDS(here("tables", "trauma_human_log2fc_sample_clean_long.rds"))
+
+log2fc_sample_symbol = trauma_human_log2fc_sample %>% 
+  select(-probe) %>% 
+# Remove duplicate rows: eliminates redundant probe-to-gene mappings (one probe may match multiple transcript clusters)
+  distinct() 
+
+log2fc_unpaired_ttest = log2fc_sample_symbol %>%
+  drop_na(.) %>% 
+  group_by(human_symbol, timepoints_new) %>%
+  select(human_symbol, timepoints_new, value_raw, value_raw_ref, log2fc) %>% 
+
+  summarise(
+    res = list(t.test(value_raw, value_raw_ref, paired = F, alternative = "two.sided", var.equal = F)),
+    pval = res[[1]]$p.value,
+    diff = res[[1]]$estimate[1] -  res[[1]]$estimate[2],
+    .groups = "drop"
+  ) %>%
+# Apply Benjamini-Hochberg (FDR) correction to raw p-values: controls the expected proportion of false discoveries among rejected hypotheses
+  mutate(padj = p.adjust(pval, method = "BH"),
+         test = "t-Test",
+         paired = "Unpaired"
+         )
+
+log2fc_unpaired_ttest %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+  saveRDS(file = here("tables", "trauma_human_log2fc_unpaired_ttest.rds"))
+
+log2fc_unpaired_ttest %>% 
+  filter(padj <= 0.05) %>% 
+  dplyr::count(timepoints_new)
+
+```
+
+
+## Combine datasets
+
+Combine differential expression results from human and mouse datasets for cross-species comparison.
+
+```{r}
+
+###### DEGs
+#Burn
+all_degs_human_burn = readRDS(here("tables", "burn_human_dge_subsampled_degs.rds")) %>% 
+  mutate(pathogen = "Burn", treatment = "Burn",
+         timepoint = str_remove(condition, "Burn_") %>% 
+           str_replace("Early", "Early hours") %>% 
+           str_replace("D", "Day "))
+
+all_degs_mouse_burn = readRDS(here("tables", "burn_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Burn", treatment = "Burn",
+         timepoint = str_remove(condition, "Burn_") %>% 
+           str_replace("D", "Day "),
+         se = abs(mean_l2fc / t),
+         #N = 4
+         sd = se / sqrt(4))
+
+# Merge DEG results from all conditions into a unified table: enables cross-pathogen comparison of transcriptional responses
+all_degs_human_mouse_burn = bind_rows(all_degs_human_burn,
+                                      all_degs_mouse_burn)
+
+all_degs_human_mouse_burn %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+  saveRDS(file = here("tables", "burn_human_mouse_dge_limma_degs.rds"))
+
+
+#Trauma
+all_degs_human_trauma = readRDS(here("tables", "trauma_human_dge_subsampled_degs.rds")) %>% 
+  mutate(pathogen = "Trauma", treatment = "Trauma",
+         timepoint = str_remove(condition, "Trauma_") %>% 
+           str_replace("Early", "Early hours") %>% 
+           str_replace("D", "Day "))
+
+all_degs_mouse_trauma = readRDS(here("tables", "trauma_mouse_dge_limma_degs.rds")) %>% 
+  mutate(pathogen = "Trauma", treatment = "Trauma",
+         timepoint = str_remove(condition, "Trauma_") %>% 
+           str_replace("D", "Day "),
+         se = abs(mean_l2fc / t),
+         #N = 4
+         sd = se / sqrt(4))
+
+# Merge DEG results from all conditions into a unified table: enables cross-pathogen comparison of transcriptional responses
+all_degs_human_mouse_trauma = bind_rows(all_degs_human_trauma,
+                                      all_degs_mouse_trauma)
+
+all_degs_human_mouse_trauma %>% 
+# Save R object to disk in native RDS format: preserves data types and structure for fast loading
+  saveRDS(file = here("tables", "trauma_human_mouse_dge_limma_degs.rds"))
+
+
+
+```
+
+
+
+
 # 6. Duchenne
 
 ## Mouse
