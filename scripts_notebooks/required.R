@@ -14,7 +14,7 @@ cran_pkgs <- c(
   "ggpp", "corto", "Hmisc", "patchwork", "tidymodels", "TidyDensity", "forcats", "deeptime",
   "GGally", "ggbeeswarm", "geomtextpath", "ggfx", "rstatix", "matrixTests",  "seqinr", "ape",
   "pkgconfig", "wCorr", "weights", "ggpubr", "rstatix", "emmeans", "effectsize", "coin", "ggtext",
-  "ranger", "gghalves", "pROC"
+  "ranger", "gghalves", "pROC", "PRROC"
 )
 
 bioc_pkgs <- c(

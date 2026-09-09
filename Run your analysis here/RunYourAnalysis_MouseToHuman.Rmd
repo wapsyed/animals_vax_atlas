@@ -1,0 +1,314 @@
+---
+title: "RunYourAnalysis_MouseToHuman"
+output: html_document
+---
+
+
+```{r message=FALSE, warning=FALSE}
+# Install R package from CRAN (one-time setup; eval = FALSE in the chunk header)
+install.packages("here")
+# Load required R package: makes its functions available in the current session
+library(here)
+# Source project-level scripts: loads shared libraries, colour palettes, and utility functions
+source(here("scripts_notebooks", "required.R"))
+```
+
+# Prepare features table
+Please ensure that your input is a table containing the following columns: pathogen, treatment, timepoint, hgnc_symbol, mean_l2fc, ci_lower, ci_upper, ave_expr, t, p_value, adj_p_val, b, se, sd, inverse_se, organism, and condition, where the condition column represents the combination of organism_pathogen_timepoint.
+```{r}
+# Gene expression data
+# A table containing pathogen, treatment, timepoint, hgnc_symbol, mean_l2fc, ci_lower, ci_upper, ave_expr, t, p_value, adj_p_val, b, se, sd, inverse_se, organism, and condition
+dge_input =  readRDS(here("Run your analysis here", "example_dge_result.rds")) %>% 
+  mutate(inverse_se = 1/se)
+
+#Protein identity
+alignments_human2mouse_all = readRDS(file = here("tables", "alignments_human2mouse_all.rds"))
+#Distance
+human_mouse_cds_distance = readRDS(file = here::here("tables", "human_mouse_cds_distance.rds")) 
+#Transcription factors
+gene_tf_shared_unique = readRDS(file = here("tables", "gene_tf_shared_unique.rds"))
+# CREs
+cres_type_homology_comparison_wide = 
+  readRDS(file = here("tables", "cres_type_homology_comparison_wide.rds"))
+#BTMs annotation
+btm_annotation_genes <- read_csv(here("tables", "btm_annotation_genes.csv")) %>% 
+  select(hgnc_symbol = symbol, process, group, subgroup) %>% 
+  distinct()
+
+btm_annotation_genes_others = bind_rows(
+  btm_annotation_genes,
+  #Add non-BTM genes
+  dge_btm_process_genes_input %>% 
+    select(hgnc_symbol) %>% 
+    anti_join(btm_annotation_genes %>% 
+                select(hgnc_symbol) %>% 
+                distinct(),
+              by = "hgnc_symbol") %>% 
+    mutate(process = "Not-BTM",
+           group = "Not-BTM",
+           subgroup = "Not-BTM")
+  )
+btm_annotation_genes_wide = btm_annotation_genes_others %>% 
+  select(hgnc_symbol, group) %>% 
+  group_by(hgnc_symbol, group) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = group,
+              values_from = n) %>% 
+  column_to_rownames("hgnc_symbol") %>% 
+  as.matrix() %>% 
+  replace(is.na(.), 0) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("hgnc_symbol")
+
+#Merge features ===========
+#Wide format
+human_mouse_gene_annotation_wide = 
+  #Annotate with CDS distance (Kimura)
+  human_mouse_cds_distance %>% select(hgnc_symbol, dist_k80) %>% 
+  #Annotate with AA identity %
+  inner_join(alignments_human2mouse_all,
+             by = join_by("hgnc_symbol" == "gene")) %>% 
+  #Annotate with BTMs 
+  inner_join(btm_annotation_genes_wide,
+             by = "hgnc_symbol") %>% 
+  #Annotate with TFs
+  inner_join(gene_tf_shared_unique,
+             by = join_by("hgnc_symbol" == "gene")) %>% 
+  #Annotate with CRES
+  inner_join(cres_type_homology_comparison_wide %>% 
+               select(hgnc_symbol, 'n_total_cres_gene':'pct_match_ctcf_PLS_CTCF-bound'),
+             by = join_by(hgnc_symbol)) 
+
+#Merge features to a long format
+human_mouse_gene_annotation_long = 
+  #Annotate with CDS distance (Kimura)
+  human_mouse_cds_distance %>% select(hgnc_symbol, dist_k80) %>% 
+  pivot_longer(cols = dist_k80, names_to = "variable", values_to = "value") %>% 
+    mutate(layer = "Kimura distance") %>% 
+  #Annotate with AA identity %
+  bind_rows(alignments_human2mouse_all %>% 
+              rename(hgnc_symbol = gene) %>% 
+               pivot_longer(cols = identity_human2mouse, names_to = "variable", values_to = "value")) %>% 
+    mutate(layer = "Protein sequence identity") %>% 
+
+  #Annotate with TFs
+  bind_rows(gene_tf_shared_unique %>% 
+               rename(hgnc_symbol = gene) %>% 
+               pivot_longer(cols = pct_tf_unique:n_tf_total, names_to = "variable", values_to = "value") %>% 
+              mutate(layer = "Transcription factor")) %>% 
+  #Annotate with CRES
+  bind_rows(cres_type_homology_comparison_wide %>% 
+              mutate(layer = "CREs") %>% 
+              pivot_longer(cols = c('n_total_cres_gene':'pct_match_ctcf_PLS_CTCF-bound'), 
+                           names_to = "variable",
+                           values_to = "value") %>% 
+              select(hgnc_symbol, layer, variable, value)
+              ) %>% 
+  #Annotate with mouse symbol and ensembl ID
+  left_join(human_mouse_cds_distance %>% 
+              select(hgnc_symbol, mgi_symbol, mouse_ensembl, human_ensembl),
+            by = "hgnc_symbol")
+  
+
+#Annotate with gene expression ==========
+#Wide format
+dge_stats_annotated_layers_wide = dge_input %>%   
+            inner_join(human_mouse_gene_annotation_wide,
+             by = join_by(hgnc_symbol))
+ 
+#Long format
+dge_stats_annotated_layers = dge_input %>%   
+            inner_join(human_mouse_gene_annotation_long,
+             by = join_by(hgnc_symbol)) 
+
+
+#Save
+dge_stats_annotated_layers_wide %>%
+  saveRDS(file = here("Run your analysis here", "dge_stats_annotated_layers_wide.rds"))
+
+dge_stats_annotated_layers %>%
+  saveRDS(file = here("Run your analysis here", "dge_stats_annotated_layers.rds"))
+
+#Print
+dge_stats_annotated_layers
+```
+
+
+# GSEA
+
+Rank genes with a composite metric (log2FC x -log(adj_p_val)) and run
+GSEA against the BTM gene sets across all conditions simultaneously.
+
+```{r message=FALSE, warning=FALSE}
+# Prepare BTM term-to-gene mapping for GSEA --------
+term2gene <- btm_annotation_genes %>%
+  select(process, genes = hgnc_symbol)
+
+# Build ranked gene list with composite metric --------
+# Metric: log2FC * -log(adj_p_val) — balances effect size and significance
+df_genes2GSEA <- dge_input %>%
+  distinct() %>%
+  #Rename
+  select(condition,
+         genes = hgnc_symbol, log2fold_change = mean_l2fc, adj_p_val) %>%
+  filter(!is.na(genes), !is.na(log2fold_change)) %>%
+  mutate(log2fold_change_logp = log2fold_change * -log(adj_p_val)) %>%
+  select(condition, genes, 
+         #Rank metric
+         rank = log2fold_change_logp)
+
+# Run GSEA across all conditions using autoGSEA (iterates over conditions internally) --------
+gsea_output <- autoGSEA(df = df_genes2GSEA,
+                         TERM2GENE = term2gene,
+                         geneset_name = "BTMs")
+
+# Clean GSEA output and merge with experiment metadata --------
+gsea_results <- gsea_output$gsea %>%
+  as.data.frame() %>%
+  clean_names() %>%
+  rename(process = id) %>%
+  filter(!is.na(process)) %>%
+  rownames_to_column("del") %>% 
+  select(-del, -description) %>%
+    rename(p_adjust_gsea = p_adjust,
+         q_value_gsea = qvalue,
+         rank_gsea = rank) %>% 
+  #Merge with experiment metadata 
+  inner_join(dge_input %>% 
+               select(pathogen, treatment, timepoint, condition, organism) %>% 
+               distinct(),
+             by = "condition") 
+
+
+
+#Check
+gsea_results
+
+
+#Save
+saveRDS(gsea_results, here("Run your analysis here", "example_gsea_btm_results.rds"))
+```
+
+
+
+```{r}
+#Filter padjusted from GSEA
+filter_padjust_gsea = 0.25
+
+#Get LEGs and merge with DGE stats
+legs = gsea_results %>%
+  separate_rows(core_enrichment, sep = "/") %>%
+  mutate(hgnc_symbol = core_enrichment,
+         is_leg = "LEG") %>% 
+  inner_join(dge_input,
+               by = join_by(organism, pathogen, treatment, timepoint, condition, hgnc_symbol))
+
+legs %>% 
+  dplyr::count(process, is_leg)
+
+#Complete with not LEGs and group by process
+not_legs =  btm_annotation_genes %>% 
+  anti_join(dge_gsea_results, 
+            by = join_by(hgnc_symbol, process))  %>% 
+  #Get values for not-LEGs
+  #GSEA results
+  inner_join(gsea_results %>%
+    select(process:organism, -core_enrichment) %>%
+    distinct(),
+    by = "process") %>% 
+   #Merge with experiment metadata 
+  full_join(dge_input,
+               by = join_by(organism, pathogen, treatment, timepoint, condition, hgnc_symbol)) %>% 
+  mutate(is_leg = "Not LEG",
+         process = if_else(is.na(process), "Not-BTM", process),
+         group = if_else(is.na(group), "Not-BTM", group),
+         subgroup = if_else(is.na(subgroup), "Not-BTM", subgroup))
+
+#Merge
+legs_notlegs = bind_rows(legs, not_legs)
+
+
+legs_notlegs %>% 
+  dplyr::count(process, is_leg)
+
+legs_notlegs %>% 
+  saveRDS(here("Run your analysis here", "example_dge_gsea_results_legs.rds"))
+
+```
+
+
+
+Visualize
+```{r}
+#Annotate with biomol layers
+min_max <- function(x) {
+  if (all(is.na(x))) return(x)
+  (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+}
+
+#Add layers
+legs_notlegs_layers = legs_notlegs %>% 
+  inner_join(human_mouse_gene_annotation_wide,
+             by = join_by(hgnc_symbol))  %>% 
+  select(process:subgroup, dist_k80, identity_human2mouse, pct_tf_shared, n_tf_total, n_type_PLS, n_type_dELS, n_type_pELS, `pct_match_ctcf_PLS_CTCF-bound`) 
+
+#Calculate score
+legs_notlegs_layers_score = legs_notlegs_layers %>% 
+  mutate(
+    # --- Tier 1: Expression Metrics (Highest Importance: Weight = 3.0) ---
+    w_dge = 3.0 * (min_max(log1p(inverse_se)) + min_max(abs(mean_l2fc))),
+    
+    # --- Tier 2: Sequence & TF Conservation (High Importance: Weight = 2.0) ---
+    w_seq_tf = 2.0 * (
+      min_max(identity_human2mouse) + 
+      min_max(pct_tf_shared) + 
+      min_max(log1p(n_tf_total))
+    ),
+    
+    # --- Tier 3: Cis-Regulatory Elements & CTCF (Moderate Importance: Weight = 1.0) ---
+    w_cre = 1.0 * (
+      min_max(n_type_PLS) + 
+      min_max(n_type_dELS) + 
+      min_max(n_type_pELS) + 
+      min_max(`pct_match_ctcf_PLS_CTCF-bound`)
+    ),
+    
+    # --- Penalty: Kimura Distance (Weight = -2.5) ---
+    w_penalty = -2.5 * min_max(dist_k80),
+    
+    # Combined raw score
+    score_raw = w_dge + w_seq_tf + w_cre + w_penalty,
+    
+    # Rescale final score from 0 to 100
+    score = min_max(score_raw) * 100
+  ) %>% 
+  select(-starts_with("w_"), -score_raw)
+
+# Select process to get LEGs
+select_process = "immune activation - generic cluster"
+
+legs_notlegs_layers %>% 
+  filter(process == select_process) %>%
+  group_by(organism, treatment, pathogen, process) %>% 
+  mutate(rank_log2fc = rank(mean_l2fc * -log10(adj_p_val))) %>% 
+  ggplot() +
+  aes(x = score,
+      y = rank_log2fc,
+      fill = is_leg) +
+  scale_y_reverse() +
+  geom_point(aes(size = score),
+             pch = 21) +
+  theme_vaxgo() +
+  labs(x = "Score",
+       y = "Log2FC, ranks (Mouse)",
+       title = "Log2FC ranks vs. Score")
+
+
+```
+
+
+
+
+
+

@@ -19,6 +19,7 @@ library(tidymodels)
 # Gene expression
 dge_btm_process_genes_diff_bygene_clean_filtered =  readRDS(file = here("tables", "dge_btm_process_genes_diff_bygene_clean_filtered.rds"))
 
+
 #Protein identity
 alignments_human2mouse_all = readRDS(file = here("tables", "alignments_human2mouse_all.rds"))
 
@@ -66,34 +67,62 @@ btm_annotation_genes_wide = btm_annotation_genes_others %>%
 cres_type_homology_comparison_wide = 
   readRDS(file = here("tables", "cres_type_homology_comparison_wide.rds"))
 
-#Merge features (All parameters)===========
-human_mouse_parameters_values = 
+#Merge features ==========
+#By genes only
+gene_annotated_layers = 
   #Annotate with CDS distance (Kimura)
   human_mouse_cds_distance %>% select(hgnc_symbol, dist_k80) %>% 
   #Annotate with AA identity %
   inner_join(alignments_human2mouse_all,
              by = join_by("hgnc_symbol" == "gene")) %>% 
-  #Annotate with BTMs 
-  inner_join(btm_annotation_genes_wide,
-             by = "hgnc_symbol") %>% 
   #Annotate with TFs
   inner_join(gene_tf_shared_unique,
              by = join_by("hgnc_symbol" == "gene")) %>% 
   #Annotate with CRES
   inner_join(cres_type_homology_comparison_wide,
              by = join_by(hgnc_symbol)) %>% 
+     #Annotate with BTMs 
+  inner_join(btm_annotation_genes_wide,
+             by = "hgnc_symbol")
+
+#Save
+# gene_annotated_layers %>% 
+#   saveRDS(file = here("tables", "human_mouse_statsmodelling_gene_annotated_layers.rds"))
+
+#All parameters
+human_mouse_parameters_values = 
+  gene_annotated_layers %>% 
   #Annotate with gene expression
-  inner_join(dge_btm_process_genes_diff_bygene_clean_filtered,
+  inner_join(dge_btm_process_genes_diff_bygene_clean_filtered %>% 
+               select(!c(p_adj_mouse, status_original, process)) %>% 
+               distinct(),
              by = join_by(hgnc_symbol)) 
 
 human_mouse_parameters_values
 
 #Save
-human_mouse_parameters_values %>% 
-  saveRDS(file = here("tables", "human_mouse_statsmodelling_parameters_values.rds"))
+# human_mouse_parameters_values %>% 
+#   saveRDS(file = here("tables", "human_mouse_statsmodelling_parameters_values.rds"))
 
 human_mouse_parameters_values %>% 
   glimpse()
+
+
+
+#Create features for regression and classification
+human_mouse_features_regression = human_mouse_parameters_values %>% 
+  select(-status) %>% 
+  distinct() %>% 
+  select(treatment:abs_log2fc_diff,inverse_se_mouse, hgnc_symbol, everything())
+human_mouse_features_regression
+
+human_mouse_features_classification_legs = human_mouse_parameters_values %>% 
+  drop_na(status) %>% 
+  filter(status %in% c("Shared", "Not-shared")) %>% 
+  mutate(status = fct_relevel(status, "Not-shared")) %>% 
+  select(treatment:inverse_se_mouse, inverse_se_mouse, hgnc_symbol, status, everything()) %>% 
+  select(!c(abs_log2fc_diff)) 
+human_mouse_features_classification_legs
 
 ```
 
@@ -1758,7 +1787,497 @@ performance_plots %>%
 
 
 
+# Create Scores
 
+```{r}
+#Import
+#Multilayer table
+gene_annotated_layers = 
+  readRDS(file = here("tables", "human_mouse_statsmodelling_gene_annotated_layers.rds"))
+
+#Gene expression + BTMs results
+dge_btm_process_genes_diff_bygene_clean_filtered =  readRDS(file = here("tables", "dge_btm_process_genes_diff_bygene_clean_filtered.rds"))
+
+#Logistic coefficients
+logit_coefs = readRDS(file = here::here("Models", "master_class_coefs.rds"))
+
+#Random forest importance
+rf_importance <- readRDS(file = here::here("Models", "master_class_var_imp.rds"))
+
+#Annotate with status by organism ==========
+legs_notlegs_layers = dge_btm_process_genes_diff_bygene_clean_filtered %>% 
+  filter(treatment %in% c("Infection", "Injury")) %>% 
+  #Annotate with layers
+  inner_join(gene_annotated_layers,
+             by = "hgnc_symbol")  %>%
+  filter(status != "All genes")
+
+#Select model to use corresponding weights =========
+select_model = "Full + BTM"
+
+
+#Calculate score
+# 1. Dynamic feature weight extraction for the "Full + BTM" model
+weight_vec <- rf_importance %>% 
+  filter(feature_set == "Full + BTM") %>% 
+  select(feature_name, importance, feature_set) %>% 
+  inner_join(logit_coefs, by = join_by(feature_set, feature_name)) %>% 
+  mutate(
+    raw_weight = sign(estimate) * importance,
+    norm_weight = raw_weight / max(abs(raw_weight), na.rm = TRUE)
+  ) %>% 
+  select(feature_name, norm_weight) %>% 
+  deframe()
+
+# 2. Weight lookup function: returns model weight or 0 if feature is missing
+get_w <- function(name) {
+  w <- unname(weight_vec[name])
+  if (is.null(w) || is.na(w)) return(0) else return(w)
+}
+
+# 3. Robust Min-Max scaling function handling zero-variance groups
+min_max <- function(x) {
+  if (all(is.na(x))) return(rep(0, length(x)))
+  rng <- max(x, na.rm = TRUE) - min(x, na.rm = TRUE)
+  if (is.na(rng) || rng == 0) return(rep(0, length(x)))
+  (x - min(x, na.rm = TRUE)) / rng
+}
+
+# 4. Explicit Score and Rank Calculation (Fully Manual Mapping for All Model Features)
+legs_notlegs_layers_score <- legs_notlegs_layers %>% 
+  group_by(treatment, pathogen, process) %>% 
+  mutate(
+    # --- 1. Base Sequence & Differential Expression Features ---
+    f_fc            = min_max(abs(mean_log2fc_mouse)),
+    f_inv_se        = min_max(log1p(inverse_se_mouse)),
+    f_kimura        = min_max(dist_k80),
+    f_aa_id         = min_max(identity_human2mouse),
+    
+    # --- 2. Transcription Factor Features ---
+    f_tf_total      = min_max(n_tf_total),
+    f_tf_shared     = min_max(pct_tf_shared),
+    
+    # --- 3. CRE Features: dELS (Distal Enhancer-like) ---
+    f_dels_ncres    = min_max(n_type_dELS),
+    f_dels_match    = min_max(`pct_match_type_dELS`),
+    f_dels_ctcf     = min_max(`pct_match_ctcf_dELS_CTCF-bound`),
+    
+    # --- 4. CRE Features: pELS (Proximal Enhancer-like) ---
+    f_pels_ncres    = min_max(n_type_pELS),
+    f_pels_match    = min_max(`pct_match_type_pELS`),
+    f_pels_ctcf     = min_max(`pct_match_ctcf_pELS_CTCF-bound`),
+    
+    # --- 5. CRE Features: PLS (Promoter-like) ---
+    f_pls_ncres     = min_max(n_type_PLS),
+    f_pls_match     = min_max(`pct_match_type_PLS`),
+    f_pls_ctcf      = min_max(`pct_match_ctcf_PLS_CTCF-bound`),
+    
+    # --- 6. BTM Functional Biological Modules ---
+    f_innate        = min_max(`INNATE RESPONSE`),
+    f_t_cells       = min_max(`T CELLS`),
+    f_ecm           = min_max(`ECM AND MIGRATION`),
+    f_monocytes     = min_max(`MONOCYTES`),
+    f_cell_cycle    = min_max(`CELL CYCLE`),
+    f_signal_trans  = min_max(`SIGNAL TRANSDUCTION`),
+    f_nk_cells      = min_max(`NK CELLS`),
+    f_neutrophils   = min_max(`NEUTROPHILS`),
+    
+    # --- Raw Score Calculation (Manual Weighted Sum) ---
+    score_raw = 
+      # Sequence & DE
+      (f_fc           * get_w("mean_log2fc_mouse")) +
+      (f_inv_se       * get_w("1/SE")) +
+      (f_kimura       * get_w("Kimura distance")) +
+      (f_aa_id        * get_w("%Protein AA identity")) +
+      
+      # TFs
+      (f_tf_total     * get_w("nTotal TFs")) +
+      (f_tf_shared    * get_w("%Shared TFs")) +
+      
+      # dELS Features
+      (f_dels_ncres   * get_w("dELS nCREs")) +
+      (f_dels_match   * get_w("dELS %Match Type")) +
+      (f_dels_ctcf    * get_w("dELS CTCF %Match CTCF")) +
+      
+      # pELS Features
+      (f_pels_ncres   * get_w("pELS nCREs")) +
+      (f_pels_match   * get_w("pELS %Match Type")) +
+      (f_pels_ctcf    * get_w("pELS CTCF %Match CTCF")) +
+      
+      # PLS Features
+      (f_pls_ncres    * get_w("PLS nCREs")) +
+      (f_pls_match    * get_w("PLS %Match Type")) +
+      (f_pls_ctcf     * get_w("PLS CTCF %Match CTCF")) +
+      
+      # BTM Modules
+      (f_innate       * get_w("INNATE RESPONSE")) +
+      (f_t_cells      * get_w("T CELLS")) +
+      (f_ecm          * get_w("ECM AND MIGRATION")) +
+      (f_monocytes    * get_w("MONOCYTES")) +
+      (f_cell_cycle   * get_w("CELL CYCLE")) +
+      (f_signal_trans * get_w("SIGNAL TRANSDUCTION")) +
+      (f_nk_cells     * get_w("NK CELLS")) +
+      (f_neutrophils  * get_w("NEUTROPHILS")),
+    
+    # Rescale raw composite score (0 - 100%)
+    score_shared = min_max(score_raw) * 100,
+    
+    # Percentile Rank (0 - 100%)
+    rank_log2fc  = percent_rank(abs(mean_log2fc_mouse) * -log10(pmax(p_adj_mouse, 1e-300))) * 100
+  ) %>% 
+  select(-starts_with("f_"), -score_raw) %>% 
+  ungroup() 
+  
+#Add pooled  
+legs_notlegs_layers_score =   
+  legs_notlegs_layers_score %>% 
+   bind_rows(legs_notlegs_layers_score %>% 
+    mutate(treatment = "Pooled",
+           pathogen = "")) %>% 
+  
+  #Arrange columns 
+  select(treatment:status, score_shared, rank_log2fc, everything())
+
+legs_notlegs_layers_score
+
+
+
+## Calculate ROC-AUC and PR-AUC ==================
+
+# Calculate ROC-AUC and PR-AUC grouped by treatment, pathogen, and process ===========
+eval_metrics_condition_process <- legs_notlegs_layers_score %>% 
+  filter(!is.na(score_shared), !is.na(status_original)) %>% 
+  mutate(is_shared = if_else(status_original == "Shared", 1, 0)) %>% 
+  group_by(treatment, pathogen, process) %>% 
+  nest() %>% 
+  mutate(
+    # ROC-AUC calculation
+    auc_roc = map_dbl(data, function(d) {
+      tryCatch({
+        as.numeric(auc(roc(response = d$is_shared, predictor = d$score_shared, quiet = TRUE)))
+      }, error = function(e) NA_real_)
+    }),
+    
+    # PR-AUC calculation
+    auc_pr = map_dbl(data, function(d) {
+      tryCatch({
+        pr.curve(
+          scores.class0 = d$score_shared[d$is_shared == 1],
+          scores.class1 = d$score_shared[d$is_shared == 0]
+        )$auc.integral
+      }, error = function(e) NA_real_)
+    })
+  ) %>% 
+  ungroup()
+
+# Display summary table
+eval_metrics_condition_process_summary <- eval_metrics_condition_process %>% 
+  select(treatment, pathogen, process, auc_roc, auc_pr)
+
+# Calculate ROC-AUC and PR-AUC grouped by immune group ==============
+eval_metrics_group_pooled <- legs_notlegs_layers_score %>% 
+  filter(!is.na(score_shared), !is.na(status_original)) %>% 
+   filter(treatment == "Pooled") %>% 
+  mutate(is_shared = if_else(status_original == "Shared", 1, 0)) %>% 
+  group_by(treatment, pathogen, group) %>% 
+  nest() %>% 
+  mutate(
+    # ROC-AUC calculation
+    auc_roc = map_dbl(data, function(d) {
+      tryCatch({
+        as.numeric(auc(roc(response = d$is_shared, predictor = d$score_shared, quiet = TRUE)))
+      }, error = function(e) NA_real_)
+    }),
+    
+    # PR-AUC calculation
+    auc_pr = map_dbl(data, function(d) {
+      tryCatch({
+        pr.curve(
+          scores.class0 = d$score_shared[d$is_shared == 1],
+          scores.class1 = d$score_shared[d$is_shared == 0]
+        )$auc.integral
+      }, error = function(e) NA_real_)
+    })
+  ) %>% 
+  ungroup()
+
+# Display summary table
+eval_metrics_group_pooled_summary <- eval_metrics_group_pooled %>% 
+  select(treatment, pathogen, group, auc_roc, auc_pr)
+
+
+# Calculate ROC-AUC and PR-AUC for all processes and conditions =============
+eval_metrics_pooled <- legs_notlegs_layers_score %>% 
+  filter(!is.na(score_shared), !is.na(status_original)) %>% 
+  filter(treatment == "Pooled") %>% 
+  mutate(is_shared = if_else(status_original == "Shared", 1, 0)) %>% 
+  nest() %>% 
+  mutate(
+    # ROC-AUC calculation
+    auc_roc = map_dbl(data, function(d) {
+      tryCatch({
+        as.numeric(auc(roc(response = d$is_shared, predictor = d$score_shared, quiet = TRUE)))
+      }, error = function(e) NA_real_)
+    }),
+    
+    # PR-AUC calculation
+    auc_pr = map_dbl(data, function(d) {
+      tryCatch({
+        pr.curve(
+          scores.class0 = d$score_shared[d$is_shared == 1],
+          scores.class1 = d$score_shared[d$is_shared == 0]
+        )$auc.integral
+      }, error = function(e) NA_real_)
+    })
+  )%>% 
+  ungroup()
+
+
+# Display summary table
+eval_metrics_pooled_summary <- eval_metrics_pooled %>% 
+  mutate(treatment = "Pooled",
+         pathogen = "",
+         process = "Pooled",
+         group = "Pooled")
+
+
+#Merge all ===============
+eval_metrics_all_summary = bind_rows(eval_metrics_pooled_summary %>% 
+                                       mutate(analysis_set = "Pooled"),
+          eval_metrics_group_pooled_summary %>% 
+            mutate(analysis_set = "Group"),
+          eval_metrics_condition_process_summary %>% 
+            mutate(analysis_set = "Process"))
+
+```
+
+
+
+## Visualize by process
+```{r fig.height=4, fig.width=12}
+#Select process
+select_process <- "immune activation - generic cluster"
+# select_process <- "cell cycle and transcription"
+
+legs_notlegs_layers_visualized <- legs_notlegs_layers_score %>% 
+  filter(process == select_process) %>% 
+  inner_join(eval_metrics_all_summary %>% 
+               filter(analysis_set == "Process"),
+             by = join_by(treatment, pathogen, process)) %>% 
+  
+  ggplot(aes(x = score_shared, y = rank_log2fc, fill = status_original)) +
+  geom_point(
+    data = . %>% filter(status_original == "Human only"),
+    aes(size = score_shared*abs(mean_log2fc_mouse)),
+    shape = 21, alpha = 0.2) +
+  geom_point(
+    aes(size = score_shared*abs(mean_log2fc_mouse)),
+    data = . %>% filter(status_original != "Human only"),
+    shape = 21, alpha = 1) +
+  facet_nested_wrap(~process + treatment + pathogen + 
+                      paste0("ROC-AUC=", round(auc_roc, 2), ",\nPR-AUC=", round(auc_pr, 2)),
+                    nrow = 1,  strip = strip_nested(size = "variable")) +
+  scale_fill_manual(values = colors$comparison) +
+  theme_vaxgo() +
+  labs(
+    x = "Shared LEG Composite Score",
+    y = "Log2FC Rank Percentile (Mouse)",
+    fill = "LEG Status",
+    size = "|Log2FC| (Mouse)",
+    title = "Shared LEG Score vs. Expression Rank"
+  ) +
+  # Right Marginals (X = 110)
+  geom_violin(aes(y = rank_log2fc, x = 110, fill = status_original),
+              width = 15, alpha = 0.5, color = NA) +
+  geom_boxplot(aes(y = rank_log2fc, x = 110),
+               width = 15, alpha = 0, color = "black", outlier.shape = NA) +
+  # Top Marginals (Y = 110)
+  geom_violin(aes(x = score_shared, y = 110, fill = status_original),
+              width = 15, alpha = 0.5, color = NA) +
+  geom_boxplot(aes(x = score_shared, y = 110),
+               width = 15, alpha = 0, color = "black", outlier.shape = NA) +
+  theme(legend.position = "top", legend.direction = "horizontal")
+
+legs_notlegs_layers_visualized
+legs_notlegs_layers_visualized %>% 
+  ggsave(filename = here("Figures", paste0("statistical_modelling_classification_scores_visualized_", select_process, ".png")),
+         width = 12,
+         height = 4)
+
+
+```
+
+
+
+By group
+```{r fig.height=6, fig.width=16}
+# Select process to get LEGs
+legs_notlegs_layers_visualized_pooled_group_all = legs_notlegs_layers_score %>%
+  filter(treatment == "Pooled") %>% 
+  inner_join(eval_metrics_all_summary %>% 
+               filter(analysis_set == "Group"),
+             by = join_by(treatment, pathogen, group)) %>% 
+  ggplot(aes(x = score_shared,
+             y = rank_log2fc,
+             fill = status_original,
+             color = status_original)) +
+  facet_nested_wrap(~treatment~paste0(group, ",\nROC-AUC=", round(auc_roc, 2), ", PR-AUC=", round(auc_pr, 2)),
+             nrow = 2,
+             strip = strip_nested(size = "variable"))+
+  geom_point(alpha = 0.1, show.legend = F, stroke = 0) +
+  geom_smooth(method = "lm", show.legend = F) +
+  # Right
+  geom_violin(mapping = aes(y = rank_log2fc,
+                             x = 110,
+                             fill = status_original),
+               width = 20,
+               alpha = 0.5, color = NA) +
+  geom_boxplot(mapping = aes(x = 110,
+                             y = rank_log2fc),
+               width = 20,
+               alpha = 0,
+               color = "black",
+               show.legend = F) +
+  # Top
+  geom_violin(mapping = aes(y = 110,
+                             x = score_shared,
+                             fill = status_original),
+               width = 20,
+               alpha = 0.5, color = NA) +
+  geom_boxplot(mapping = aes(y = 110,
+                             x = score_shared),
+               width = 20,
+               alpha = 0,
+               color = "black",
+               show.legend = F) +
+  theme(legend.position = "top", legend.direction = "horizontal") +
+  scale_color_manual(values = colors$comparison) +
+  scale_fill_manual(values = colors$comparison) +
+  theme_vaxgo() +
+  theme(legend.position = "top") +
+  labs(
+    x = "Shared LEG Composite Score",
+    y = "Log2FC Rank (Mouse)",
+    fill = "LEG Status",
+    size = "|Log2FC| (Mouse)",
+    title = "Shared LEG Score vs. Expression Rank"
+  ) 
+ 
+legs_notlegs_layers_visualized_pooled_group_all 
+  
+
+```
+
+All
+```{r fig.height=4, fig.width=4}
+# # Select process to get LEGs
+# legs_notlegs_layers_visualized_pooled_all = legs_notlegs_layers_score %>%
+#   filter(treatment == "Pooled") %>% 
+#   mutate(process = "Pooled") %>% 
+#   inner_join(eval_metrics_all_summary,
+#              by = join_by(treatment, pathogen, process)) %>% 
+#   ggplot(aes(x = score_shared,
+#              y = rank_log2fc,
+#              fill = status_original,
+#              color = status_original)) +
+#   facet_wrap(~paste0(treatment, ", ROC-AUC=", round(auc_roc, 2), ", PR-AUC=", round(auc_pr, 2)))+
+#   # geom_point(aes(size = abs(mean_log2fc_mouse)), 
+#   #            shape = 21, 
+#   #            alpha = 0.1) +
+#   geom_smooth(method = "lm", show.legend = F) +
+#   # Right
+#   geom_violin(mapping = aes(y = rank_log2fc,
+#                              x = 110,
+#                              fill = status_original),
+#                width = 10,
+#                alpha = 0.5, color = NA) +
+#   geom_boxplot(mapping = aes(x = 110,
+#                              y = rank_log2fc),
+#                width = 10,
+#                alpha = 0,
+#                color = "black") +
+#   # Top
+#   geom_violin(mapping = aes(y = 110,
+#                              x = score_shared,
+#                              fill = status_original),
+#                width = 10,
+#                alpha = 0.5, color = NA) +
+#   geom_boxplot(mapping = aes(y = 110,
+#                              x = score_shared),
+#                width = 10,
+#                alpha = 0,
+#                color = "black") +
+#   theme(legend.position = "top", legend.direction = "horizontal") +
+#   scale_color_manual(values = colors$comparison) +
+#   scale_fill_manual(values = colors$comparison) +
+#   theme_vaxgo() +
+#   theme(legend.position = "top") +
+#   labs(
+#     x = "Shared LEG Composite Score",
+#     y = "Log2FC Rank (Mouse)",
+#     fill = "LEG Status",
+#     size = "|Log2FC| (Mouse)",
+#     title = "Shared LEG Score vs. Expression Rank"
+#   ) 
+#  
+# legs_notlegs_layers_visualized_pooled_all 
+  
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# 1. Define os quadrantes e calcula as proporções
+quadrant_summary <- legs_notlegs_layers_score %>%
+  filter(treatment == "Pooled") %>% 
+  mutate(
+    quadrant_x = if_else(score_shared >= 50, "High Score (>=50)", "Low Score (<50)"),
+    quadrant_y = if_else(rank_log2fc >= 50, "High Rank (>=50)", "Low Rank (<50)"),
+    
+    # Define a ordem dos quadrantes para exibição correta na matriz
+    quadrant_label = case_when(
+      score_shared >= 50 & rank_log2fc >= 50 ~ "Q1: Top Candidates\n(High Rank / High Score)",
+      score_shared < 50  & rank_log2fc >= 50 ~ "Q2 (High Rank / Low Score)",
+      score_shared < 50  & rank_log2fc < 50  ~ "Q3 (Low Rank / Low Score)",
+      score_shared >= 50 & rank_log2fc < 50  ~ "Q4 (Low Rank / High Score)"
+    )
+  ) %>% 
+  group_by(quadrant_x, quadrant_y, quadrant_label, status_original) %>% 
+  summarise(count = n(), .groups = "drop_last") %>% 
+  mutate(
+    total_in_quadrant = sum(count),
+    pct_in_quadrant = (count / total_in_quadrant) * 100
+  ) %>% 
+  ungroup()
+
+quadrant_summary %>% 
+  drop_na(quadrant_y) %>% 
+  ggplot(aes(x = count, y = quadrant_label, fill = status_original)) +
+  geom_col(position = "fill", width = 0.6, color = "black") +
+  scale_x_continuous(labels = scales::percent) +
+  scale_fill_manual(values = colors$comparison) +
+  theme_vaxgo() +
+  theme(
+    # axis.text.x = element_text(angle = 15, hjust = 1),
+        legend.position = "top") +
+  labs(
+    x = "Proportion of Genes",
+    y = "Quadrant",
+    fill = "LEG Status",
+    title = "Class Distribution Across Score/Rank Quadrants"
+  )
+
+```
 
 
 
