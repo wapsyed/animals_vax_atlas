@@ -13,6 +13,25 @@ task3b <- read_csv(file.path(tab_dir, "task3b_signconc_loco.csv"), show_col_type
 score_tbl <- readRDS(here("tests", "v2", "Models", "score_table_v2.rds"))
 pooled <- score_tbl %>% filter(treatment == "Pooled")
 
+# ============================== (a) workflow ==============================
+layer_df <- tibble(
+  xmin  = seq(0.1, 5.1, by = 1),
+  label = c("DGE\nbaseline", "+ Sequence\nevolution", "+ Transcription\nfactors",
+            "+ CRE\narchitecture", "+ CTCF\nbinding", "+ BTM\nmembership")
+) %>%
+  mutate(xmax = xmin + 0.9, xmid = (xmin + xmax) / 2)
+
+p_a <- ggplot(layer_df) +
+  geom_rect(aes(xmin = xmin, xmax = xmax, ymin = 0.4, ymax = 1.6),
+            fill = "#4cc9f0", color = "black", linewidth = 0.4) +
+  geom_text(aes(x = xmid, y = 1, label = label), size = 2.8, lineheight = 0.9) +
+  geom_segment(data = layer_df %>% filter(xmax < 6),
+               aes(x = xmax, xend = xmax + 0.1, y = 1, yend = 1),
+               arrow = arrow(length = unit(0.15, "cm"))) +
+  coord_cartesian(xlim = c(0, 6.1), ylim = c(0, 2)) +
+  theme_void() +
+  labs(title = "a  Bottom-up feature layers")
+
 # ============================== (b) classification ==============================
 b_dat <- task2 %>%
   pivot_longer(c(roc_auc, pr_auc), names_to = "metric", values_to = "value") %>%
@@ -91,24 +110,26 @@ priority <- read_csv(file.path(tab_dir, "priority_relevant_convergent_top20.csv"
 gal <- readRDS(here("tables", "human_mouse_statsmodelling_gene_annotated_layers.rds")) %>%
   distinct(hgnc_symbol, .keep_all = TRUE)
 
-heat_dat <- priority %>%
-  left_join(gal, by = "hgnc_symbol") %>%
+heat_dat <- pooled %>%
+  filter(hgnc_symbol %in% priority$hgnc_symbol) %>%
+  distinct(hgnc_symbol, .keep_all = TRUE) %>%
   transmute(
     hgnc_symbol,
-    `Rank mouse` = rank_mouse,
-    `Rank human` = rank_human,
-    `Rank diff`  = rank_diff,
-    `Dual rank`  = dual_rank,
-    `conv_rel`   = conv_rel,
-    `score_shared` = score_shared,
-    `score_conv`   = score_conv,
+    `1/SE` = inverse_se_mouse,
     `%Protein identity` = identity_human2mouse,
     `Kimura` = dist_k80,
     `nTotal TFs` = n_tf_total,
     `%Shared TFs` = pct_tf_shared,
     `nTotal cCREs` = n_total_cres_gene,
+    `PLS nCREs` = n_type_PLS,
+    `pELS nCREs` = n_type_pELS,
+    `dELS nCREs` = n_type_dELS,
+    `%Match Type (PLS)` = `pct_match_type_PLS`,
+    `%Match Type (pELS)` = `pct_match_type_pELS`,
+    `%Match Type (dELS)` = `pct_match_type_dELS`,
     `CTCF match` = `pct_match_ctcf_dELS_CTCF-bound`
-  )
+  ) %>%
+  mutate(hgnc_symbol = factor(hgnc_symbol, levels = rev(priority$hgnc_symbol)))
 
 heat_long <- heat_dat %>%
   pivot_longer(-hgnc_symbol, names_to = "feature", values_to = "value") %>%
@@ -128,11 +149,12 @@ p_g <- ggplot(heat_long, aes(x = feature, y = hgnc_symbol, fill = z)) +
        title = "g  Prioritized relevant-convergent genes")
 
 # ============================== assemble ==============================
-fig7 <- (p_b | p_c) / (p_d | p_e) / (p_f | p_g) +
-  plot_layout(heights = c(1, 1, 1.2)) +
+fig7 <- p_a / (p_b | p_c) / (p_d | p_e) / (p_f | p_g) +
+  plot_layout(heights = c(0.5, 1, 1, 1.2)) +
   plot_annotation(title = "Fig. 7 | Multilayer modelling of cross-species translatability")
 
-ggsave(file.path(fig_dir, "Fig7_multilayer_modelling.png"), fig7, width = 13, height = 15, dpi = 300)
+ggsave(file.path(fig_dir, "Fig7_multilayer_modelling.png"), fig7, width = 13, height = 17, dpi = 300)
+ggsave(file.path(fig_dir, "Fig7_panel_a_workflow.png"), p_a, width = 10, height = 2, dpi = 300)
 ggsave(file.path(fig_dir, "Fig7_panel_b_classification.png"), p_b, width = 7, height = 5, dpi = 300)
 ggsave(file.path(fig_dir, "Fig7_panel_c_regression.png"), p_c, width = 6, height = 7, dpi = 300)
 ggsave(file.path(fig_dir, "Fig7_panel_g_heatmap.png"), p_g, width = 10, height = 6, dpi = 300)
