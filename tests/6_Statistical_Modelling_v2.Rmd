@@ -1,0 +1,549 @@
+---
+title: "6 Statistical Modelling v2 (consolidated): shared LEGs + convergence + transfer"
+output: html_document
+---
+
+# Setup
+
+```{r setup, message=FALSE, warning=FALSE}
+library(here)
+source(here("scripts_notebooks", "required.R"))
+library(tidyverse)
+library(tidymodels)
+
+dir.create(here("tests", "v2", "Models"),  showWarnings = FALSE, recursive = TRUE)
+dir.create(here("tests", "v2", "Figures"), showWarnings = FALSE, recursive = TRUE)
+dir.create(here("tests", "v2", "Tables"),  showWarnings = FALSE, recursive = TRUE)
+```
+
+# Parameters
+
+```{r}
+treatments_keep <- c("Infection", "Injury")   # 4 pathogens -> 4 LOCO folds
+seed <- 123
+```
+
+# Load data
+
+```{r}
+gene_annotated_layers <- readRDS(here("tables", "human_mouse_statsmodelling_gene_annotated_layers.rds")) %>%
+  distinct(hgnc_symbol, .keep_all = TRUE)
+
+dge_btm_process_genes_diff_bygene_clean_filtered <- readRDS(here("tables", "dge_btm_process_genes_diff_bygene_clean_filtered.rds"))
+
+# Original saved models (used to rebuild score_shared with the name fix)
+logit_coefs         <- readRDS(here("Models", "master_class_coefs.rds"))
+rf_importance_class <- readRDS(here("Models", "master_class_var_imp.rds"))
+```
+
+# Feature dictionary
+
+```{r}
+feature_dictionary <- tibble(
+  feature_name_original = c(
+    "inverse_se_mouse", "mean_log2fc_mouse", "abs_rank_log2fc_mouse", "dual_rank",
+    "dist_k80", "identity_human2mouse", "n_tf_total", "pct_tf_shared",
+    "n_total_cres_gene", "n_type_PLS", "pct_match_type_PLS", "pct_match_ctcf_PLS_CTCF-bound",
+    "n_type_pELS", "pct_match_type_pELS", "pct_match_ctcf_pELS_CTCF-bound",
+    "n_type_dELS", "pct_match_type_dELS", "pct_match_ctcf_dELS_CTCF-bound",
+    "Not-BTM", "INNATE RESPONSE", "B CELLS", "T CELLS", "PLATELETS",
+    "ECM AND MIGRATION", "ENERGY METABOLISM", "MONOCYTES", "CELL CYCLE",
+    "IFN", "SIGNAL TRANSDUCTION", "NK CELLS", "NEUTROPHILS"
+  ),
+  feature_name = c(
+    "1/SE", "Log2FC (Mouse)", "|Rank (Mouse)|", "Dual rank",
+    "Kimura distance", "%Protein AA identity", "nTotal TFs", "%Shared TFs",
+    "nTotal cCREs", "PLS nCREs", "PLS %Match Type", "PLS CTCF %Match CTCF",
+    "pELS nCREs", "pELS %Match Type", "pELS CTCF %Match CTCF",
+    "dELS nCREs", "dELS %Match Type", "dELS CTCF %Match CTCF",
+    "Not-BTM", "INNATE RESPONSE", "B CELLS", "T CELLS", "PLATELETS",
+    "ECM AND MIGRATION", "ENERGY METABOLISM", "MONOCYTES", "CELL CYCLE",
+    "IFN", "SIGNAL TRANSDUCTION", "NK CELLS", "NEUTROPHILS"
+  )
+)
+```
+
+# Feature sets
+
+```{r}
+feat_base_experiment <- c("treatment", "pathogen", "timepoint_comparison", "hgnc_symbol")
+feat_mouse  <- c("mean_log2fc_mouse", "abs_rank_log2fc_mouse")
+feat_noise  <- c("inverse_se_mouse")
+feat_seq    <- c("dist_k80", "identity_human2mouse")
+feat_tfs    <- c("n_tf_total", "pct_tf_shared")
+feat_cre    <- c(
+  "n_total_cres_gene",
+  "n_type_PLS",  "pct_match_type_PLS",  "pct_match_ctcf_PLS_CTCF-bound",
+  "n_type_pELS", "pct_match_type_pELS", "pct_match_ctcf_pELS_CTCF-bound",
+  "n_type_dELS", "pct_match_type_dELS", "pct_match_ctcf_dELS_CTCF-bound"
+)
+feat_btms <- c(
+  "Not-BTM", "INNATE RESPONSE", "B CELLS", "T CELLS", "PLATELETS",
+  "ECM AND MIGRATION", "ENERGY METABOLISM", "MONOCYTES", "CELL CYCLE",
+  "IFN", "SIGNAL TRANSDUCTION", "NK CELLS", "NEUTROPHILS"
+)
+layers <- c(feat_seq, feat_tfs, feat_cre, feat_btms)
+
+feat_mouse       <- c("mean_log2fc_mouse", "abs_rank_log2fc_mouse")   # all-gene rank (regression)
+feat_mouse_class <- c("mean_log2fc_mouse", "rank_mouse_btm")          # BTM-only rank (classification)
+
+# Task 2 (classification, BTM scope): uses BTM-only rank
+sets_A  <- list("DGE Baseline" = c(feat_base_experiment, feat_noise, feat_mouse_class),
+                "Full + BTM"   = c(feat_base_experiment, feat_noise, feat_mouse_class, layers))
+sets_B  <- list("DGE Baseline" = c(feat_base_experiment, feat_noise),
+                "Full + BTM"   = c(feat_base_experiment, feat_noise, layers))
+# Task 1 (convergence): rank_diff controlling for dual_rank
+sets1_A <- list("DGE Baseline" = c(feat_base_experiment, feat_noise, feat_mouse, "dual_rank"),
+                "Full + BTM"   = c(feat_base_experiment, feat_noise, feat_mouse, "dual_rank", layers))
+sets1_B <- list("DGE Baseline" = c(feat_base_experiment, feat_noise, "dual_rank"),
+                "Full + BTM"   = c(feat_base_experiment, feat_noise, "dual_rank", layers))
+sets_3a <- list("Mouse only"     = c(feat_base_experiment, "abs_rank_log2fc_mouse"),
+                "Mouse + layers" = c(feat_base_experiment, "abs_rank_log2fc_mouse", layers))
+sets_3b <- list("Direction only"     = c(feat_base_experiment, "sign_mouse"),
+                "Direction + layers" = c(feat_base_experiment, "sign_mouse", layers))
+```
+
+# Build modelling table + targets
+
+```{r}
+df_all <- dge_btm_process_genes_diff_bygene_clean_filtered %>%
+  inner_join(gene_annotated_layers, by = "hgnc_symbol") %>%
+  filter(treatment %in% treatments_keep) %>%
+  mutate(
+    rank_mouse    = abs_rank_log2fc_mouse,      # all-gene rank (regression)
+    rank_human    = abs_rank_log2fc_human,      # all-gene rank (regression)
+    rank_diff     = abs(rank_mouse - rank_human),
+    dual_rank     = pmin(rank_mouse, rank_human),
+    conv_rel      = dual_rank * (1 - rank_diff / 100),
+    sign_mouse    = sign(mean_log2fc_mouse),
+    sign_human    = sign(mean_log2fc_human),
+    sign_concordant = factor(sign_mouse == sign_human, levels = c(FALSE, TRUE))
+  )
+
+# BTM-only ranks (classification scope): rank among all BTM genes per condition
+btm_gene_set <- df_all %>%
+  filter(!is.na(process), process != "Not-BTM") %>%
+  distinct(hgnc_symbol) %>% pull(hgnc_symbol)
+
+btm_ranks <- df_all %>%
+  filter(hgnc_symbol %in% btm_gene_set) %>%
+  distinct(treatment, pathogen, timepoint_comparison, hgnc_symbol,
+           mean_log2fc_mouse, mean_log2fc_human, p_adj_mouse, p_adj_human) %>%
+  group_by(treatment, pathogen, timepoint_comparison) %>%
+  mutate(
+    rank_mouse_btm = percent_rank(abs(mean_log2fc_mouse) * -log10(pmax(p_adj_mouse, 1e-300))) * 100,
+    rank_human_btm = percent_rank(abs(mean_log2fc_human) * -log10(pmax(p_adj_human, 1e-300))) * 100
+  ) %>%
+  ungroup() %>%
+  select(treatment, pathogen, timepoint_comparison, hgnc_symbol, rank_mouse_btm, rank_human_btm)
+
+df_all <- df_all %>% left_join(btm_ranks, by = c("treatment", "pathogen", "timepoint_comparison", "hgnc_symbol"))
+
+cat("df_all rows:", nrow(df_all), " | BTM genes:", length(btm_gene_set), "\n")
+table(df_all$pathogen)
+```
+
+# Helpers
+
+```{r}
+min_max <- function(x) {
+  if (all(is.na(x))) return(rep(0, length(x)))
+  rng <- max(x, na.rm = TRUE) - min(x, na.rm = TRUE)
+  if (is.na(rng) || rng == 0) return(rep(0, length(x)))
+  (x - min(x, na.rm = TRUE)) / rng
+}
+
+# generic LOCO regression
+loco_regression <- function(df, selection, target, set_name, framing) {
+  d <- df %>% select(all_of(selection), all_of(target)) %>%
+    drop_na(all_of(target)) %>% distinct()
+
+  rec <- recipe(as.formula(paste(target, "~ .")), data = d) %>%
+    update_role(any_of(c("hgnc_symbol", "treatment", "pathogen", "timepoint_comparison")), new_role = "id") %>%
+    step_dummy(all_nominal_predictors()) %>%
+    step_zv(all_predictors()) %>%
+    step_normalize(all_numeric_predictors())
+
+  wf_lm <- workflow() %>% add_recipe(rec) %>% add_model(linear_reg() %>% set_engine("lm"))
+  wf_rf <- workflow() %>% add_recipe(rec) %>%
+    add_model(rand_forest(trees = 500, mtry = 8, min_n = 5) %>%
+                set_engine("ranger", importance = "impurity", num.threads = 8) %>%
+                set_mode("regression"))
+
+  fit_lm <- fit(wf_lm, data = d); fit_rf <- fit(wf_rf, data = d)
+
+  coefs <- tidy(extract_fit_engine(fit_lm), conf.int = TRUE) %>%
+    filter(term != "(Intercept)") %>%
+    rename(feature_name_original = term) %>%
+    mutate(feature_name_original = str_replace_all(feature_name_original, "`", "")) %>%
+    mutate(feature_set = set_name, framing = framing)
+
+  rf_engine <- extract_fit_engine(fit_rf)
+  imp <- tibble(feature_name_original = names(rf_engine$variable.importance),
+                importance = as.numeric(rf_engine$variable.importance)) %>%
+    mutate(feature_set = set_name, framing = framing)
+
+  set.seed(seed); folds <- group_vfold_cv(d, group = pathogen, v = 4)
+  cv_lm <- fit_resamples(wf_lm, resamples = folds)
+  cv_rf <- fit_resamples(wf_rf, resamples = folds)
+  cv_metrics <- function(cv, model_name) {
+    m <- collect_metrics(cv)
+    tibble(model = model_name,
+           rmse = m$mean[m$.metric == "rmse"],
+           rsq  = m$mean[m$.metric == "rsq"])
+  }
+  metrics <- bind_rows(cv_metrics(cv_lm, "Linear (LM)"), cv_metrics(cv_rf, "Random Forest")) %>%
+    mutate(feature_set = set_name, framing = framing, target = target, task = "regression")
+
+  list(metrics = metrics, coefficients = coefs, importance = imp, fit_lm = fit_lm, fit_rf = fit_rf)
+}
+
+# generic LOCO classification
+loco_classification <- function(df, selection, target, set_name, framing) {
+  d <- df %>% select(all_of(selection), all_of(target)) %>%
+    drop_na(all_of(target)) %>%
+    mutate(!!target := factor(.data[[target]], levels = c(FALSE, TRUE)))
+
+  rec <- recipe(as.formula(paste(target, "~ .")), data = d) %>%
+    update_role(any_of(c("hgnc_symbol", "treatment", "pathogen", "timepoint_comparison")), new_role = "id") %>%
+    step_dummy(all_nominal_predictors()) %>%
+    step_nzv(all_predictors()) %>%
+    step_corr(all_numeric_predictors(), threshold = 0.9) %>%
+    step_normalize(all_numeric_predictors())
+
+  wf_log <- workflow() %>% add_recipe(rec) %>% add_model(logistic_reg() %>% set_engine("glm"))
+  wf_rf <- workflow() %>% add_recipe(rec) %>%
+    add_model(rand_forest(trees = 500, mtry = 8, min_n = 5) %>%
+                set_engine("ranger", importance = "impurity", num.threads = 8) %>%
+                set_mode("classification"))
+
+  fit_log <- fit(wf_log, data = d); fit_rf <- fit(wf_rf, data = d)
+
+  coefs <- tidy(extract_fit_engine(fit_log), conf.int = TRUE) %>%
+    filter(term != "(Intercept)") %>%
+    rename(feature_name_original = term) %>%
+    mutate(feature_name_original = str_replace_all(feature_name_original, "`", "")) %>%
+    mutate(feature_set = set_name, framing = framing)
+
+  rf_engine <- extract_fit_engine(fit_rf)
+  imp <- tibble(feature_name_original = names(rf_engine$variable.importance),
+                importance = as.numeric(rf_engine$variable.importance)) %>%
+    mutate(feature_set = set_name, framing = framing)
+
+  set.seed(seed); folds <- group_vfold_cv(d, group = pathogen, v = 4)
+  cv_log <- fit_resamples(wf_log, resamples = folds, control = control_resamples(save_pred = TRUE))
+  cv_rf  <- fit_resamples(wf_rf,  resamples = folds, control = control_resamples(save_pred = TRUE))
+  cv_metrics <- function(cv, model_name) {
+    p <- collect_predictions(cv)
+    tibble(model = model_name,
+           roc_auc = roc_auc(p, truth = !!sym(target), .pred_TRUE, event_level = "second")$.estimate,
+           pr_auc  = pr_auc(p,  truth = !!sym(target), .pred_TRUE, event_level = "second")$.estimate)
+  }
+  metrics <- bind_rows(cv_metrics(cv_log, "Logistic Regression"), cv_metrics(cv_rf, "Random Forest")) %>%
+    mutate(feature_set = set_name, framing = framing, target = target, task = "classification")
+
+  list(metrics = metrics, coefficients = coefs, importance = imp, fit_log = fit_log, fit_rf = fit_rf)
+}
+```
+
+# TASK 1 — convergence model: rank_diff controlling for dual_rank (A vs B)
+
+```{r}
+res1_A <- imap(sets1_A, ~ loco_regression(df_all, .x, "rank_diff", .y, "A_predictive"))
+res1_B <- imap(sets1_B, ~ loco_regression(df_all, .x, "rank_diff", .y, "B_explanatory"))
+
+metrics_task1 <- bind_rows(map_dfr(res1_A, "metrics"), map_dfr(res1_B, "metrics"))
+coefs_task1   <- bind_rows(map_dfr(res1_A, "coefficients"), map_dfr(res1_B, "coefficients"))
+imp_task1     <- bind_rows(map_dfr(res1_A, "importance"),   map_dfr(res1_B, "importance"))
+
+metrics_task1
+saveRDS(metrics_task1, here("tests", "v2", "Models", "metrics_task1_convrel.rds"))
+saveRDS(coefs_task1,   here("tests", "v2", "Models", "coefs_task1_convrel.rds"))
+saveRDS(imp_task1,     here("tests", "v2", "Models", "imp_task1_convrel.rds"))
+write_csv(metrics_task1, here("tests", "v2", "Tables", "task1_convrel_loco.csv"))
+```
+
+# TASK 2 — classification Shared vs Not-shared (A vs B)
+
+```{r}
+df_shared <- df_all %>% filter(status %in% c("Shared", "Not-shared")) %>%
+  mutate(shared = factor(status == "Shared", levels = c(FALSE, TRUE)))
+
+res2_A <- imap(sets_A, ~ loco_classification(df_shared, .x, "shared", .y, "A_predictive"))
+res2_B <- imap(sets_B, ~ loco_classification(df_shared, .x, "shared", .y, "B_explanatory"))
+
+metrics_task2 <- bind_rows(map_dfr(res2_A, "metrics"), map_dfr(res2_B, "metrics"))
+metrics_task2
+saveRDS(metrics_task2, here("tests", "v2", "Models", "metrics_task2_shared.rds"))
+write_csv(metrics_task2, here("tests", "v2", "Tables", "task2_shared_loco.csv"))
+```
+
+# TASK 3a — rank_human transfer
+
+```{r}
+res3a <- imap(sets_3a, ~ loco_regression(df_all, .x, "rank_human", .y, "transfer"))
+metrics_task3a <- map_dfr(res3a, "metrics")
+metrics_task3a
+saveRDS(metrics_task3a, here("tests", "v2", "Models", "metrics_task3a_rankhuman.rds"))
+write_csv(metrics_task3a, here("tests", "v2", "Tables", "task3a_rankhuman_loco.csv"))
+```
+
+# TASK 3b — sign concordance transfer
+
+```{r}
+res3b <- imap(sets_3b, ~ loco_classification(df_all, .x, "sign_concordant", .y, "transfer"))
+metrics_task3b <- map_dfr(res3b, "metrics")
+metrics_task3b
+saveRDS(metrics_task3b, here("tests", "v2", "Models", "metrics_task3b_signconc.rds"))
+write_csv(metrics_task3b, here("tests", "v2", "Tables", "task3b_signconc_loco.csv"))
+```
+
+# TASK 3b — diagnostics (why is the direction-only baseline below chance?)
+
+```{r}
+cat("sign_mouse:\n"); print(table(df_all$sign_mouse, useNA = "ifany"))
+cat("sign_human:\n"); print(table(df_all$sign_human, useNA = "ifany"))
+cat("sign_concordant:\n"); print(table(df_all$sign_concordant, useNA = "ifany"))
+
+df_all %>%
+  group_by(sign_mouse) %>%
+  summarise(n = n(), p_concordant = mean(sign_concordant == TRUE, na.rm = TRUE), .groups = "drop") %>%
+  print()
+```
+
+# SCORES — score_shared (original weights, name-fixed) + score_conv (Task 1 Model A Full)
+
+```{r}
+select_model_shared <- "+ Sequence + TFs + CRE type + CTCF"
+
+wv_class <- rf_importance_class %>%
+  filter(feature_set == select_model_shared) %>%
+  select(feature_name, importance, feature_set) %>%
+  inner_join(logit_coefs, by = join_by(feature_set, feature_name)) %>%
+  mutate(raw_weight = sign(estimate) * importance,
+         norm_weight = raw_weight / max(abs(raw_weight), na.rm = TRUE)) %>%
+  select(feature_name, norm_weight) %>% deframe()
+
+# score_conv weights from Task 1, Model A, Full + BTM
+lm_conv  <- res1_A[["Full + BTM"]]$coefficients
+imp_conv <- res1_A[["Full + BTM"]]$importance
+wv_conv <- imp_conv %>%
+  select(feature_name_original, importance) %>%
+  inner_join(lm_conv, by = "feature_name_original") %>%
+  left_join(feature_dictionary, by = "feature_name_original") %>%
+  mutate(raw_weight = sign(estimate) * importance,
+         norm_weight = raw_weight / max(abs(raw_weight), na.rm = TRUE)) %>%
+  select(feature_name, norm_weight) %>%
+  filter(!is.na(feature_name), !duplicated(feature_name)) %>%
+  deframe()
+
+get_w <- function(vec, name) { w <- unname(vec[name]); if (is.null(w) || is.na(w)) 0 else w }
+```
+
+```{r}
+score_tbl <- df_all %>%
+  group_by(treatment, pathogen, timepoint_comparison) %>%
+  mutate(
+    f_fc        = min_max(abs(mean_log2fc_mouse)),
+    f_rank      = min_max(abs(abs_rank_log2fc_mouse)),
+    f_dual      = min_max(dual_rank),
+    f_inv_se    = min_max(log1p(inverse_se_mouse)),
+    f_kimura    = min_max(dist_k80),
+    f_aa_id     = min_max(identity_human2mouse),
+    f_tf_total  = min_max(n_tf_total),
+    f_tf_shared = min_max(pct_tf_shared),
+    f_dels_ncres = min_max(n_type_dELS),
+    f_dels_match = min_max(`pct_match_type_dELS`),
+    f_dels_ctcf  = min_max(`pct_match_ctcf_dELS_CTCF-bound`),
+    f_pels_ncres = min_max(n_type_pELS),
+    f_pels_match = min_max(`pct_match_type_pELS`),
+    f_pels_ctcf  = min_max(`pct_match_ctcf_pELS_CTCF-bound`),
+    f_pls_ncres  = min_max(n_type_PLS),
+    f_pls_match  = min_max(`pct_match_type_PLS`),
+    f_pls_ctcf   = min_max(`pct_match_ctcf_PLS_CTCF-bound`),
+
+    raw_class =
+      f_fc * get_w(wv_class, "Log2FC (Mouse)") +
+      f_rank * get_w(wv_class, "|Rank (Mouse)|") +
+      f_inv_se * get_w(wv_class, "1/SE") +
+      f_kimura * get_w(wv_class, "Kimura distance") +
+      f_aa_id * get_w(wv_class, "%Protein AA identity") +
+      f_tf_total * get_w(wv_class, "nTotal TFs") +
+      f_tf_shared * get_w(wv_class, "%Shared TFs") +
+      f_dels_ncres * get_w(wv_class, "dELS nCREs") +
+      f_dels_match * get_w(wv_class, "dELS %Match Type") +
+      f_dels_ctcf * get_w(wv_class, "dELS CTCF %Match CTCF") +
+      f_pels_ncres * get_w(wv_class, "pELS nCREs") +
+      f_pels_match * get_w(wv_class, "pELS %Match Type") +
+      f_pels_ctcf * get_w(wv_class, "pELS CTCF %Match CTCF") +
+      f_pls_ncres * get_w(wv_class, "PLS nCREs") +
+      f_pls_match * get_w(wv_class, "PLS %Match Type") +
+      f_pls_ctcf * get_w(wv_class, "PLS CTCF %Match CTCF"),
+
+    raw_conv =
+      f_fc * get_w(wv_conv, "Log2FC (Mouse)") +
+      f_rank * get_w(wv_conv, "|Rank (Mouse)|") +
+      f_dual * get_w(wv_conv, "Dual rank") +
+      f_inv_se * get_w(wv_conv, "1/SE") +
+      f_kimura * get_w(wv_conv, "Kimura distance") +
+      f_aa_id * get_w(wv_conv, "%Protein AA identity") +
+      f_tf_total * get_w(wv_conv, "nTotal TFs") +
+      f_tf_shared * get_w(wv_conv, "%Shared TFs") +
+      f_dels_ncres * get_w(wv_conv, "dELS nCREs") +
+      f_dels_match * get_w(wv_conv, "dELS %Match Type") +
+      f_dels_ctcf * get_w(wv_conv, "dELS CTCF %Match CTCF") +
+      f_pels_ncres * get_w(wv_conv, "pELS nCREs") +
+      f_pels_match * get_w(wv_conv, "pELS %Match Type") +
+      f_pels_ctcf * get_w(wv_conv, "pELS CTCF %Match CTCF") +
+      f_pls_ncres * get_w(wv_conv, "PLS nCREs") +
+      f_pls_match * get_w(wv_conv, "PLS %Match Type") +
+      f_pls_ctcf * get_w(wv_conv, "PLS CTCF %Match CTCF"),
+
+    score_shared = min_max(raw_class) * 100,
+    score_conv   = (1 - min_max(raw_conv)) * 100
+  ) %>%
+  select(-starts_with("f_"), -raw_class, -raw_conv) %>%
+  ungroup()
+
+score_plot <- score_tbl %>%
+  bind_rows(score_tbl %>% mutate(treatment = "Pooled", pathogen = "", timepoint_comparison = ""))
+
+saveRDS(score_plot, here("tests", "v2", "Models", "score_table_v2.rds"))
+```
+
+# Priority list (strict) + annotations
+
+```{r}
+pooled <- score_plot %>% filter(treatment == "Pooled")
+
+priority_list <- pooled %>%
+  filter(dual_rank >= 75, rank_diff <= 25, p_adj_mouse <= 0.05) %>%
+  distinct(hgnc_symbol, .keep_all = TRUE) %>%
+  arrange(desc(conv_rel)) %>%
+  slice_head(n = 20) %>%
+  select(hgnc_symbol, process, rank_mouse, rank_human, rank_diff, dual_rank, conv_rel,
+         mean_log2fc_mouse, mean_log2fc_human, sign_mouse, sign_human, sign_concordant,
+         score_shared, score_conv, status_original, p_adj_mouse)
+
+priority_list
+write_csv(priority_list, here("tests", "v2", "Tables", "priority_relevant_convergent_top20.csv"))
+
+# quick correlation diagnostics (with BH padj)
+diag_stats <- function(x, y) {
+  ok <- complete.cases(x, y)
+  x <- x[ok]; y <- y[ok]
+  tibble(rho = cor(x, y, method = "spearman"),
+         r   = cor(x, y, method = "pearson"),
+         r2  = summary(lm(y ~ x))$r.squared,
+         p_spearman = cor.test(x, y, method = "spearman", exact = FALSE)$p.value,
+         p_pearson  = cor.test(x, y, method = "pearson")$p.value)
+}
+bind_rows(
+  diag_stats(pooled$score_conv, pooled$rank_diff) %>% mutate(comparison = "score_conv vs rank_diff"),
+  diag_stats(pooled$score_conv, pooled$dual_rank) %>% mutate(comparison = "score_conv vs dual_rank"),
+  diag_stats(pooled$score_conv, pooled$abs_log2fc_diff) %>% mutate(comparison = "score_conv vs |dLog2FC|"),
+  diag_stats(pooled$rank_mouse, pooled$rank_human) %>% mutate(comparison = "rank_mouse vs rank_human")
+) %>% mutate(padj = p.adjust(p_spearman, method = "BH"))
+```
+
+# Figures (project style)
+
+```{r fig.height=6, fig.width=8}
+# correlation label helper (rho + R2 + padj), overall
+cor_label <- function(df, x, y) {
+  tibble(
+    rho = cor(df[[x]], df[[y]], method = "spearman", use = "complete.obs"),
+    r2  = summary(lm(df[[y]] ~ df[[x]]))$r.squared,
+    p   = cor.test(df[[x]], df[[y]], method = "spearman", exact = FALSE)$p.value
+  ) %>%
+    mutate(padj = p.adjust(p, method = "BH"),
+           label = sprintf("rho=%.2f\nR2=%.2f\npadj=%.1e", rho, r2, padj))
+}
+
+# 1) score_shared vs rank_mouse (pooled)
+p1 <- pooled %>%
+  ggplot(aes(x = score_shared, y = rank_mouse, fill = status_original)) +
+  geom_point(shape = 21, size = 2, alpha = 0.2, stroke = 0) +
+  scale_fill_manual(values = colors$comparison) +
+  theme_vaxgo() +
+  labs(x = "score_shared", y = "Rank (Mouse)", fill = "LEG status",
+       title = "Shared LEG score vs mouse rank (pooled)")
+
+# 2) score_conv vs |dLog2FC| -- colour by score
+lab2 <- cor_label(pooled, "score_conv", "abs_log2fc_diff")
+p2 <- pooled %>%
+  ggplot(aes(x = score_conv, y = abs_log2fc_diff, fill = score_conv)) +
+  geom_point(shape = 21, size = 2, alpha = 0.8, stroke = 0) +
+  scale_fill_gradientn(colours = c("white", "#4cc9f0", "#4361ee")) +
+  geom_text(data = lab2, aes(x = Inf, y = Inf, label = label), hjust = 1.1, vjust = 1.2, size = 3, inherit.aes = FALSE) +
+  theme_vaxgo() +
+  labs(x = "score_conv", y = "|ΔLog2FC|", fill = "Score", title = "Convergence score vs divergence")
+
+# 3) 1/SE vs |dLog2FC| -- colour by score
+lab3 <- cor_label(pooled, "inverse_se_mouse", "abs_log2fc_diff")
+p3 <- pooled %>%
+  ggplot(aes(x = inverse_se_mouse, y = abs_log2fc_diff, fill = score_conv)) +
+  geom_point(shape = 21, size = 2, alpha = 0.8, stroke = 0) +
+  scale_fill_gradientn(colours = c("white", "#4cc9f0", "#4361ee")) +
+  geom_text(data = lab3, aes(x = Inf, y = Inf, label = label), hjust = 1.1, vjust = 1.2, size = 3, inherit.aes = FALSE) +
+  theme_vaxgo() +
+  labs(x = "1/SE (mouse)", y = "|ΔLog2FC|", fill = "Score", title = "Precision vs divergence")
+
+# 4) score_conv vs rank_mouse
+lab4 <- cor_label(pooled, "score_conv", "rank_mouse")
+p4 <- pooled %>%
+  ggplot(aes(x = score_conv, y = rank_mouse, fill = score_conv)) +
+  geom_point(shape = 21, size = 2, alpha = 0.8, stroke = 0) +
+  scale_fill_gradientn(colours = c("white", "#4cc9f0", "#4361ee")) +
+  geom_text(data = lab4, aes(x = Inf, y = Inf, label = label), hjust = 1.1, vjust = 1.2, size = 3, inherit.aes = FALSE) +
+  theme_vaxgo() +
+  labs(x = "score_conv", y = "Rank (Mouse)", fill = "Score", title = "Convergence score vs relevance")
+
+# 5) rank_mouse vs |dLog2FC| -- colour by score, highlight high score
+lab5 <- cor_label(pooled, "rank_mouse", "abs_log2fc_diff")
+p5 <- pooled %>%
+  ggplot(aes(x = rank_mouse, y = abs_log2fc_diff, fill = score_conv)) +
+  geom_point(data = . %>% filter(score_conv < 90), shape = 21, size = 2, alpha = 0.2, stroke = 0) +
+  geom_point(data = . %>% filter(score_conv >= 90), shape = 21, size = 2, alpha = 1, stroke = 0.5) +
+  scale_fill_gradientn(colours = c("white", "#4cc9f0", "#4361ee")) +
+  geom_text(data = lab5, aes(x = Inf, y = Inf, label = label), hjust = 1.1, vjust = 1.2, size = 3, inherit.aes = FALSE) +
+  theme_vaxgo() +
+  labs(x = "Rank (Mouse)", y = "|ΔLog2FC|", fill = "Score", title = "Relevance vs divergence")
+
+# 6) rank_mouse vs rank_human -- colour by score, highlight high score
+lab6 <- cor_label(pooled, "rank_mouse", "rank_human")
+p6 <- pooled %>%
+  ggplot(aes(x = rank_mouse, y = rank_human, fill = score_conv)) +
+  geom_point(data = . %>% filter(score_conv < 90), shape = 21, size = 2, alpha = 0.2, stroke = 0) +
+  geom_point(data = . %>% filter(score_conv >= 90), shape = 21, size = 2, alpha = 1, stroke = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  scale_fill_gradientn(colours = c("white", "#4cc9f0", "#4361ee")) +
+  geom_text(data = lab6, aes(x = Inf, y = Inf, label = label), hjust = 1.1, vjust = 1.2, size = 3, inherit.aes = FALSE) +
+  theme_vaxgo() +
+  labs(x = "Rank (Mouse)", y = "Rank (Human)", fill = "Score", title = "Dual-species rank (pooled)")
+
+p1; p2; p3; p4; p5; p6
+
+ggsave(here("tests", "v2", "Figures", "score_shared_vs_rank.png"), p1, width = 6, height = 5, dpi = 300)
+ggsave(here("tests", "v2", "Figures", "score_conv_vs_absdiff.png"), p2, width = 6, height = 5, dpi = 300)
+ggsave(here("tests", "v2", "Figures", "invse_vs_absdiff.png"), p3, width = 6, height = 5, dpi = 300)
+ggsave(here("tests", "v2", "Figures", "score_conv_vs_rank.png"), p4, width = 6, height = 5, dpi = 300)
+ggsave(here("tests", "v2", "Figures", "rank_vs_absdiff.png"), p5, width = 6, height = 5, dpi = 300)
+ggsave(here("tests", "v2", "Figures", "rank_mouse_vs_rank_human.png"), p6, width = 6, height = 5, dpi = 300)
+```
+
+# Ablation summary figure
+
+```{r fig.height=8, fig.width=8}
+p_abl <- metrics_task1 %>%
+  pivot_longer(c(rmse, rsq), names_to = "metric", values_to = "value") %>%
+  mutate(metric = toupper(metric)) %>%
+  ggplot(aes(x = feature_set, y = value, fill = model)) +
+  geom_col(position = position_dodge(0.8), width = 0.7, color = "black", linewidth = 0.3) +
+  facet_grid(metric ~ framing, scales = "free_y") +
+  scale_fill_manual(values = c("Random Forest" = "#4DBBD5FF", "Linear (LM)" = "gray70")) +
+  theme_vaxgo() +
+  labs(x = "", y = "LOCO CV", fill = "Algorithm", title = "Task 1: conv_rel model (LOCO)")
+p_abl
+ggsave(here("tests", "v2", "Figures", "task1_convrel_loco.png"), p_abl, width = 8, height = 8, dpi = 300)
+```

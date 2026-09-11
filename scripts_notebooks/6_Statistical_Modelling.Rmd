@@ -1296,6 +1296,7 @@ legs_notlegs_layers_score <- legs_notlegs_layers %>%
   mutate(
     # Min-Max Normalization per pathogen (Preserves global variance contrast)
     f_fc            = min_max(abs(mean_log2fc_mouse)),
+    f_rank          = min_max(abs(abs_rank_log2fc_mouse)),
     f_inv_se        = min_max(log1p(inverse_se_mouse)),
     f_kimura        = min_max(dist_k80),
     f_aa_id         = min_max(identity_human2mouse),
@@ -1313,7 +1314,8 @@ legs_notlegs_layers_score <- legs_notlegs_layers %>%
     
     # Classification Raw Score
     score_raw_class = 
-      (f_fc           * get_w_class("Mean Log2FC (Mouse)")) + 
+      (f_fc           * get_w_class("Log2FC (Mouse)")) + 
+      (f_rank           * get_w_class("|Rank (Mouse)|")) + 
       (f_inv_se       * get_w_class("1/SE")) +
       (f_kimura       * get_w_class("Kimura distance")) + 
       (f_aa_id        * get_w_class("%Protein AA identity")) +
@@ -1331,7 +1333,8 @@ legs_notlegs_layers_score <- legs_notlegs_layers %>%
       
     # Regression Raw Score
     score_raw_reg = 
-      (f_fc           * get_w_reg("Mean Log2FC (Mouse)")) + 
+      (f_fc           * get_w_reg("Log2FC (Mouse)")) + 
+      (f_rank           * get_w_reg("|Rank (Mouse)|")) + 
       (f_inv_se       * get_w_reg("1/SE")) +
       (f_kimura       * get_w_reg("Kimura distance")) + 
       (f_aa_id        * get_w_reg("%Protein AA identity")) +
@@ -1581,86 +1584,10 @@ eval_metrics_all_summary
 
 ## Visualize by process
 ### Classification
-Selected process
-```{r fig.height=4, fig.width=12}
-# Select process for visualization
-select_process <- "immune activation - generic cluster"
-# select_process <- "cell cycle and transcription"
-
-legs_notlegs_layers_visualized <- legs_notlegs_layers_score_plot %>% 
-  filter(process == select_process) %>% 
-  inner_join(
-    eval_metrics_all_summary %>% 
-      filter(analysis_set %in% c("Process")),
-    by = join_by(treatment, pathogen, process)
-  ) %>% 
-  ggplot(aes(x = score_shared, y = rank_log2fc_process, fill = status_original)) +
-  
-  # Nested faceting displaying conditions and ROC/PR performance
-  facet_nested_wrap(
-    ~ process + treatment + pathogen + 
-      paste0("ROC-AUC=", round(auc_roc, 2), ",\nPR-AUC=", round(auc_pr, 2)),
-    nrow = 1, 
-    strip = strip_nested(size = "variable")
-  ) +
-  
-  # Layered scatter plot highlighting Shared vs. Human-only candidates
-  geom_point(
-    data = . %>% filter(status_original == "Human only"),
-    # aes(size = score_shared * abs(mean_log2fc_mouse)),
-    shape = 21, alpha = 0.2
-  ) +
-  geom_point(
-    data = . %>% filter(status_original != "Human only"),
-    # aes(size = score_shared * abs(mean_log2fc_mouse)),
-    shape = 21, alpha = 1
-  ) +
-
-  scale_fill_manual(values = colors$comparison) +
-  theme_vaxgo() +
-  labs(
-    x = "Shared LEG Composite Score",
-    y = "Log2FC Rank Percentile (Mouse)",
-    fill = "LEG Status",
-    size = "|Log2FC|*Score",
-    title = "Shared LEG Score vs. Expression Rank"
-  ) +
-  
-  # Right Marginals (X-axis position = 110)
-  geom_violin(
-    aes(y = rank_log2fc_process, x = 110, fill = status_original),
-    width = 15, alpha = 0.5, color = NA
-  ) +
-  geom_boxplot(
-    aes(y = rank_log2fc_process, x = 110),
-    width = 15, alpha = 0, color = "black", outlier.shape = NA
-  ) +
-  
-  # Top Marginals (Y-axis position = 110)
-  geom_violin(
-    aes(x = score_shared, y = 110, fill = status_original),
-    width = 15, alpha = 0.5, color = NA
-  ) +
-  geom_boxplot(
-    aes(x = score_shared, y = 110),
-    width = 15, alpha = 0, color = "black", outlier.shape = NA
-  ) +
-  
-  theme(legend.position = "top", legend.direction = "horizontal")
-
-# Display Plot
-legs_notlegs_layers_visualized
-
-#Save
-legs_notlegs_layers_visualized %>%
-  ggsave(filename = here("Figures", paste0("statistical_modelling_classification_scores_visualized_", select_process, ".png")),
-         width = 12,
-         height = 4)
-```
 
 
-All processes
-```{r fig.height=3, fig.width=12}
+#### LEGs shared prediction
+```{r fig.height=4, fig.width=4}
 legs_notlegs_layers_visualized_allprocesses = legs_notlegs_layers_score_plot %>% 
   select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, score_shared, p_adj_mouse, status, status_original) %>% 
   distinct() %>% 
@@ -1669,6 +1596,7 @@ legs_notlegs_layers_visualized_allprocesses = legs_notlegs_layers_score_plot %>%
       filter(analysis_set %in% c("Process_Pooled")),
     by = join_by(treatment, pathogen)
   ) %>% 
+  filter(treatment == "Pooled") %>% 
   ggplot(aes(x = score_shared, y = abs_rank_log2fc_mouse, fill = status_original)) +
   
   facet_nested_wrap(
@@ -1709,7 +1637,7 @@ legs_notlegs_layers_visualized_allprocesses = legs_notlegs_layers_score_plot %>%
     width = 15, alpha = 0, color = "black", outlier.shape = NA
   ) +
   
-  # Top Marginals (Y-axis position = 110)
+  # Top Marginals 
   geom_violin(
     aes(x = score_shared, y = 110, fill = status_original),
     width = 15, alpha = 0.5, color = NA
@@ -1724,20 +1652,12 @@ legs_notlegs_layers_visualized_allprocesses = legs_notlegs_layers_score_plot %>%
 # Display Plot
 legs_notlegs_layers_visualized_allprocesses
 
-# #Save
-# legs_notlegs_layers_visualized_allprocesses %>%
-#   ggsave(filename = here("Figures", paste0("statistical_modelling_classification_scores_visualized_allprocesses.png")),
-#          width = 12,
-#          height = 3)
 ```
 
 
-
-### Regression
-
-Score vs AbsDiff, by condition
-```{r fig.height=3, fig.width=12}
-######## Mouse Log2FC vs AbsDiff
+#### Score vs AbsDiff
+```{r fig.height=4, fig.width=4}
+######## Score vs AbsDiff ==============
 reg_layers_mouse_human_absdiff <-  
   legs_notlegs_layers_score_plot %>% 
   select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, score_reg, p_adj_mouse) %>% 
@@ -1749,12 +1669,11 @@ reg_layers_mouse_human_absdiff <-
     by = join_by(treatment, pathogen)
   ) %>%
   distinct() %>% 
+  filter(treatment == "Pooled") %>% 
   ggplot(aes(x = score_reg, y = abs_log2fc_diff, 
-             # fill = status_original,
              fill = score_reg,
              )) +
   
-  # Facet display showing regression metrics (R² and Spearman ρ) with formatted p-values
   facet_nested_wrap(
     ~ treatment + pathogen + 
       paste0("rho=", round(spearman_rho_reg, 2), " (p=", sprintf("%.2e", p_val_spearman_reg), ")"),
@@ -1762,9 +1681,7 @@ reg_layers_mouse_human_absdiff <-
     strip = strip_nested(size = "variable")
   ) +
   
-  # Layered scatter plot highlighting Shared vs. Human Only candidates
   geom_point(
-    # aes(size = score_reg * abs(abs_log2fc_diff)),
     aes(size = score_reg),
     shape = 21, 
     size = 2,
@@ -1808,17 +1725,95 @@ reg_layers_mouse_human_absdiff <-
 # Display
 reg_layers_mouse_human_absdiff 
    
-
-# # #Save
-# reg_layers_mouse_human_absdiff %>%
-#   ggsave(filename = here("Figures", paste0("statistical_modelling_regression_scores_visualized_vsAbsLog2FC.png")),
-#          width = 12,
-#          height = 3)
 ```
 
 
-Score vs rank mouse, by condition
-```{r fig.height=3, fig.width=12}
+#### Mouse Log2FC vs 1/SE
+```{r fig.height=4, fig.width=4}
+######## Mouse Log2FC vs 1/SE
+reg_layers_mouse_human_se <- legs_notlegs_layers_score_plot %>% 
+  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, score_reg, p_adj_mouse) %>% 
+  filter(p_adj_mouse <= 0.05,
+         treatment == "Pooled") %>%
+  distinct() %>% 
+ inner_join(
+    eval_metrics_all_summary %>%
+      filter(analysis_set == "Pooled"),
+    by = join_by(treatment, pathogen)
+  ) %>%
+  distinct() %>% 
+  ggplot(aes(x = inverse_se_mouse, 
+             y = abs_log2fc_diff, 
+             fill = score_reg,
+             )) +
+  
+  # Facet display showing regression metrics (R² and Spearman ρ) with formatted p-values
+  facet_nested_wrap(
+    ~ treatment + pathogen,
+      # paste0("ρ=", round(spearman_rho, 2), " (p=", sprintf("%.2e", p_adj_spearman), ")"),
+    nrow = 1, scales = "free_x",
+    strip = strip_nested(size = "variable")
+  ) +
+  
+  geom_point(
+    # aes(size = score_reg * abs(abs_log2fc_diff)),
+    aes(size = score_reg),
+    shape = 21, 
+    size = 2,
+    alpha = 1,
+    # color = NA,
+    stroke = 0.5
+  ) +
+  
+   # Marginals 
+  geom_violin(
+    aes(x = inverse_se_mouse, y = 6, group = pathogen),
+    width = 0.5, alpha = 0.5, color = NA,
+    fill = "#4361ee"
+  ) +
+  geom_boxplot(
+    aes(x = inverse_se_mouse, y = 6, group = pathogen),
+    width = 0.5, alpha = 0, color = "black", outlier.shape = NA
+  ) +
+  
+    geom_violin(
+    aes(y = abs_log2fc_diff, x = 15,),
+    fill = "#4361ee",
+    width = 1, alpha = 0.5, color = NA
+  ) +
+  geom_boxplot(
+    aes(y = abs_log2fc_diff, x = 15),
+    width = 1, alpha = 0, color = "black", outlier.shape = NA
+  ) +
+
+  scale_fill_continuous(palette = c("white", "#4cc9f0", "#4361ee")) +
+  theme_vaxgo() +
+  labs(
+    x = "1/SE mouse",
+    y = "|ΔLog2fc|"
+  ) +
+  theme(legend.position = "top", legend.direction = "horizontal")
+
+# Display
+reg_layers_mouse_human_se 
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#### Score vs Rank mouse
+```{r fig.height=4, fig.width=4}
 ######## Score vs Rank mouse
 reg_layers_mouse_score_rank <-  
   legs_notlegs_layers_score_plot %>% 
@@ -1830,6 +1825,7 @@ reg_layers_mouse_score_rank <-
     by = join_by(treatment, pathogen)
   ) %>%
   distinct() %>% 
+  filter(treatment == "Pooled") %>% 
   ggplot(aes(x = score_reg, y = abs_rank_log2fc_mouse
              )) +
   facet_nested_wrap(
@@ -1884,6 +1880,86 @@ reg_layers_mouse_score_rank <-
 # Display
 reg_layers_mouse_score_rank 
 
+
+```
+
+
+#### Score vs Rank mouse vs Abs Log2FC diff
+```{r fig.height=4, fig.width=4}
+######## Score vs Rank mouse vs Abs Log2FC diff
+reg_layers_mouse_score_rank_diff_log2fc <-  
+  legs_notlegs_layers_score_plot %>% 
+  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, score_reg, p_adj_mouse) %>% 
+  distinct() %>% 
+  filter(treatment == "Pooled") %>% 
+ inner_join(
+    eval_metrics_all_summary %>%
+      filter(analysis_set == "Pooled"),
+    by = join_by(treatment, pathogen)
+  ) %>%
+  distinct() %>% 
+  ggplot(aes(x = abs_rank_log2fc_mouse, y = abs_log2fc_diff
+             )) +
+  facet_nested_wrap(
+    ~ treatment + pathogen,
+    nrow = 1, 
+    strip = strip_nested(size = "variable")
+  ) +
+  
+  geom_point(
+    aes(fill = score_reg),
+    data = . %>% filter(score_reg <90),
+    shape = 21, 
+    size = 2,
+    alpha = 0.2,
+    stroke = 0
+  ) +
+  
+  geom_point(
+    aes(fill = score_reg),
+    data = . %>% filter(score_reg >=90),
+    shape = 21, 
+    size = 2,
+    alpha = 1,
+    stroke = 0.5
+  ) +
+  
+     # Right Marginals 
+  geom_violin(
+    aes(y = abs_log2fc_diff, x = -10,),
+    fill = "#4361ee",
+    width = 5, alpha = 0.5, color = NA
+  ) +
+  geom_boxplot(
+    aes(y = abs_log2fc_diff, x = -10),
+    width = 5, alpha = 0, color = "black", outlier.shape = NA
+  ) +
+  
+  # Top Marginals 
+  geom_violin(
+    aes(x = abs_rank_log2fc_mouse, y = 10),
+    fill = "#4361ee",
+    width = 1, alpha = 0.5, color = NA
+  ) +
+  geom_boxplot(
+    aes(x = abs_rank_log2fc_mouse, y = 10),
+    fill = "#4361ee",
+    width = 1, alpha = 0, color = "black", outlier.shape = NA
+  ) +
+
+  scale_fill_continuous(palette = c("white", "#4cc9f0", "#4361ee")) +
+  scale_x_reverse() +
+  theme_vaxgo() +
+  labs(
+    x = "|Rank Mouse|",
+    y = "|ΔLog2fc|",
+    fill = "Score"
+  ) +
+  theme(legend.position = "top", legend.direction = "horizontal") 
+
+# Display
+reg_layers_mouse_score_rank_diff_log2fc 
+
 #Save
 # reg_layers_mouse_score_rank %>%
 #   ggsave(filename = here("Figures", paste0("statistical_modelling_regression_scores_visualized_vsMouseRank.png")),
@@ -1892,84 +1968,62 @@ reg_layers_mouse_score_rank
 ```
 
 
-
-
-
-```{r fig.height=3, fig.width=12}
-######## Mouse Log2FC vs 1/SE
-reg_layers_mouse_human_se <- legs_notlegs_layers_score_plot %>% 
-  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, score_reg, p_adj_mouse) %>% 
-  filter(p_adj_mouse <= 0.05) %>%
+#### Rank human vs Rank mouse vs Abs Log2FC diff vs score
+```{r fig.height=4, fig.width=4}
+######## Rank human vs Rank mouse vs Abs Log2FC diff vs score
+reg_layers_mouse_score_rank_human_mouse_diff_log2fc <-  
+  legs_notlegs_layers_score_plot %>% 
+  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, abs_rank_log2fc_human,rank_log2fc_human, rank_log2fc_mouse, score_reg, p_adj_mouse) %>% 
   distinct() %>% 
  inner_join(
     eval_metrics_all_summary %>%
       filter(analysis_set == "Pooled"),
     by = join_by(treatment, pathogen)
   ) %>%
+  filter(treatment == "Pooled") %>% 
   distinct() %>% 
-  ggplot(aes(x = inverse_se_mouse, 
-             y = abs_log2fc_diff, 
-             fill = score_reg,
+  ggplot(aes(x = abs_rank_log2fc_mouse, y = abs_rank_log2fc_human
              )) +
-  
-  # Facet display showing regression metrics (R² and Spearman ρ) with formatted p-values
   facet_nested_wrap(
-    ~ treatment + pathogen + 
-      paste0("ρ=", round(spearman_rho, 2), " (p=", sprintf("%.2e", p_adj_spearman), ")"),
-    nrow = 1, scales = "free_x",
+    ~ treatment + pathogen,
+    nrow = 1, 
     strip = strip_nested(size = "variable")
   ) +
   
-  # Layered scatter plot highlighting Shared vs. Human Only candidates
   geom_point(
-    # aes(size = score_reg * abs(abs_log2fc_diff)),
-    aes(size = score_reg),
+       aes(fill = score_reg
+        ),
     shape = 21, 
     size = 2,
+    alpha = 0.2,
+    stroke = 0
+  ) +
+  
+  geom_point(
+    aes(fill = score_reg),
+    data = . %>% filter(score_reg >=90),
+    shape = 21,
+    size = 2,
     alpha = 1,
-    # color = NA,
     stroke = 0.5
-  ) +
-  
-   # Top Marginals (Y-axis position = 110)
-  geom_violin(
-    aes(x = inverse_se_mouse, y = 6, group = pathogen),
-    width = 0.5, alpha = 0.5, color = NA,
-    fill = "#4361ee"
-  ) +
-  geom_boxplot(
-    aes(x = inverse_se_mouse, y = 6, group = pathogen),
-    width = 0.5, alpha = 0, color = "black", outlier.shape = NA
-  ) +
-  
-    # Right Marginals 
-  geom_violin(
-    aes(y = abs_log2fc_diff, x = 15,),
-    fill = "#4361ee",
-    width = 1, alpha = 0.5, color = NA
-  ) +
-  geom_boxplot(
-    aes(y = abs_log2fc_diff, x = 15),
-    width = 1, alpha = 0, color = "black", outlier.shape = NA
   ) +
 
   scale_fill_continuous(palette = c("white", "#4cc9f0", "#4361ee")) +
   theme_vaxgo() +
   labs(
-    x = "1/SE mouse",
-    y = "|ΔLog2fc|"
+    x = "|Rank Mouse|",
+    y = "|Rank Human|",
+    fill = "Score",
+    size = "AbsDiffLog2fc"
   ) +
-  theme(legend.position = "top", legend.direction = "horizontal")
+  theme(legend.position = "top", legend.direction = "horizontal") 
 
 # Display
-reg_layers_mouse_human_se 
-# 
-# #Save
-# reg_layers_mouse_human_se %>%
-#   ggsave(filename = here("Figures", paste0("statistical_modelling_regression_scores_visualized_AbsLog2FC_InverseSE.png")),
-#          width = 12,
-#          height = 3)
+reg_layers_mouse_score_rank_human_mouse_diff_log2fc 
 ```
+
+
+
 
 
 
@@ -2020,7 +2074,7 @@ legs_notlegs_layers_visualized_allprocesses_pooled = legs_notlegs_layers_score_p
     fill = "LEG Status",
   ) +
   
-  # Right Marginals (X-axis position = 110)
+  # Right Marginals
   geom_violin(
     aes(y = abs_rank_log2fc_mouse, x = 110, fill = status_original),
     width = 15, alpha = 0.5, color = NA
@@ -2030,7 +2084,7 @@ legs_notlegs_layers_visualized_allprocesses_pooled = legs_notlegs_layers_score_p
     width = 15, alpha = 0, color = "black", outlier.shape = NA
   ) +
   
-  # Top Marginals (Y-axis position = 110)
+  # Top Marginals
   geom_violin(
     aes(x = score_shared, y = 110, fill = status_original),
     width = 15, alpha = 0.5, color = NA
@@ -2111,7 +2165,7 @@ reg_layers_mouse_human_absdiff_pooled <-
 # Display
 reg_layers_mouse_human_absdiff_pooled
 
-######## Mouse Log2FC vs AbsDiff
+######## Mouse |Rank| vs Score =======
 reg_layers_mouse_score_rank_pooled <-  
   legs_notlegs_layers_score_plot %>% 
   select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, score_reg, p_adj_mouse) %>% 
@@ -2163,7 +2217,6 @@ reg_layers_mouse_score_rank_pooled <-
     width = 5, alpha = 0, color = "black", outlier.shape = NA
   ) +
   scale_fill_continuous(palette = c("white", "#4cc9f0", "#4361ee")) +
-  scale_y_reverse() +
   theme_vaxgo() +
   labs(
     x = "Score",
@@ -2188,12 +2241,13 @@ reg_layers_mouse_score_rank_pooled +theme(legend.position = "right", legend.dire
 score_visualized_plots
 
 #Save
-# score_visualized_plots %>% 
-#   ggsave(filename = here("Figures", "statistical_modelling_regression_scores_visualized.png"),
-#          width = 12,
-#          height = 4)
+score_visualized_plots %>%
+  ggsave(filename = here("Figures", "statistical_modelling_regression_scores_visualized.png"),
+         width = 12,
+         height = 4)
 
 ```
+
 
 
 
