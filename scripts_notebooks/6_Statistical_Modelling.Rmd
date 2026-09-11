@@ -17,7 +17,7 @@ library(tidymodels)
 # Prepare features table
 ```{r}
 # Gene expression
-dge_btm_process_genes_diff_bygene_clean_filtered =  readRDS(file = here("tables", "dge_btm_process_genes_diff_bygene_clean_filtered.rds"))
+dge_btm_process_genes_diff_bygene_clean_filtered =  readRDS(file = here("tables", "dge_btm_process_genes_diff_bygene_clean_filtered.rds")) 
 
 
 #Protein identity
@@ -102,8 +102,8 @@ human_mouse_parameters_values =
 human_mouse_parameters_values
 
 #Save
-# human_mouse_parameters_values %>% 
-#   saveRDS(file = here("tables", "human_mouse_statsmodelling_parameters_values.rds"))
+human_mouse_parameters_values %>%
+  saveRDS(file = here("tables", "human_mouse_statsmodelling_parameters_values.rds"))
 
 human_mouse_parameters_values %>% 
   glimpse()
@@ -155,7 +155,8 @@ feature_dictionary <- tibble(
   mutate(
     # --- Category Assignment ---
     feature_type = case_when(
-      feature_name_original %in% c("inverse_se_mouse", "abs_log2fc_diff", "mean_log2fc_mouse") ~ "Gene expression",
+      feature_name_original %in% c("inverse_se_mouse", "abs_log2fc_diff", 
+                                   "mean_log2fc_mouse", "abs_rank_log2fc_mouse") ~ "Gene expression",
       feature_name_original %in% c("dist_k80", "identity_human2mouse") ~ "Sequence evolution",
       str_detect(feature_name_original, "^(n_tf|pct_tf)") ~ "Transcription Factor",
       feature_name_original %in% c(
@@ -179,8 +180,9 @@ feature_dictionary <- tibble(
     
     # --- Formatted Clean Feature Labels ---
     feature_name = case_when(
-      feature_name_original == "mean_log2fc_mouse"      ~ "Mean Log2FC (Mouse)",
-      feature_name_original == "abs_log2fc_diff"        ~ "|ΔMean Log2FC|",
+      feature_name_original == "mean_log2fc_mouse"      ~ "Log2FC (Mouse)",
+      feature_name_original == "abs_rank_log2fc_mouse"      ~ "|Rank (Mouse)|",
+      feature_name_original == "abs_log2fc_diff"        ~ "|ΔLog2FC|",
       feature_name_original == "inverse_se_mouse"        ~ "1/SE",
       feature_name_original == "identity_human2mouse"   ~ "%Protein AA identity",
       feature_name_original == "dist_k80"                ~ "Kimura distance",
@@ -241,7 +243,7 @@ feature_dictionary
 
 # Experimental metadata and target outcome
 feat_base_experiment <- c("treatment", "pathogen", "timepoint_comparison", "hgnc_symbol")
-feat_base_outcome    <- c("inverse_se_mouse", "abs_log2fc_diff", "status", "mean_log2fc_mouse")
+feat_base_outcome    <- c("inverse_se_mouse", "abs_log2fc_diff", "status", "mean_log2fc_mouse", "abs_rank_log2fc_mouse")
 
 # Biological Modules
 feat_sequence_evolution <- c("dist_k80", "identity_human2mouse")
@@ -359,151 +361,6 @@ features_names_vector = c(
 
 ```
 
-## Inputs
-```{r}
-#Create features tables for each model
-input_features_selection = features_ccre_full_homology
-input_features_name = "features_ccre_full_homology"
-
-input_features = human_mouse_parameters_values %>% 
-  select(all_of(input_features_selection))
-
-input_features
-
-#Create features for regression and classification
-human_mouse_features_regression = input_features %>% 
-  select(-status) %>% 
-  distinct() %>% 
-  select(treatment:abs_log2fc_diff,inverse_se_mouse, hgnc_symbol, everything())
-human_mouse_features_regression
-
-human_mouse_features_classification_legs = input_features %>% 
-  drop_na(status) %>% 
-  filter(status %in% c("Shared", "Not-shared")) %>% 
-  mutate(status = fct_relevel(status, "Not-shared")) %>% 
-  select(treatment:inverse_se_mouse, inverse_se_mouse, hgnc_symbol, status, everything()) %>% 
-  select(!c(abs_log2fc_diff)) 
-human_mouse_features_classification_legs
-```
-
-# Data exploration
-
-## Correlation
-```{r fig.height=8, fig.width=10}
-library(Hmisc) # For fast pairwise correlation & p-value matrix computation
-
-# 1. Prepare numeric data matrix
-numeric_matrix <- input_features %>%
-  select(where(is.numeric)) %>%
-  select(where(~ var(.x, na.rm = TRUE) > 0)) %>%
-  as.matrix()
-
-# 2. Compute Spearman correlations and p-values simultaneously
-cor_results <- Hmisc::rcorr(numeric_matrix, type = "spearman")
-
-# Extract correlation (r) and p-value (P) matrices
-cor_r <- cor_results$r
-cor_p <- cor_results$P
-
-# 3. Reorder variables using Hierarchical Clustering
-ord <- hclust(as.dist(1 - cor_r))$order
-var_names <- colnames(cor_r)[ord]
-
-# 4. Convert matrices to long format and apply FDR (BH) p-value adjustment
-cor_long <- cor_r %>%
-  as.data.frame() %>%
-  mutate(var1 = rownames(.)) %>%
-  pivot_longer(cols = -var1, names_to = "var2", values_to = "spearman_rho") %>%
-  inner_join(
-    cor_p %>%
-      as.data.frame() %>%
-      mutate(var1 = rownames(.)) %>%
-      pivot_longer(cols = -var1, names_to = "var2", values_to = "p_value"),
-    by = c("var1", "var2")
-  ) %>%
-  # Handle self-correlations (diagonal p-values are NA in rcorr)
-  mutate(p_value = if_else(var1 == var2, 0, p_value)) %>%
-  # Perform FDR correction across all pairwise tests
-  mutate(p_adj = p.adjust(p_value, method = "BH")) %>%
-  # Add significance stars
-  mutate(
-    p_signif = case_when(
-      p_adj <= 0.001 ~ "***",
-      p_adj <= 0.01  ~ "**",
-      p_adj <= 0.05  ~ "*",
-      TRUE           ~ "" # Leave non-significant tiles blank (or use "ns")
-    ),
-    var1 = factor(var1, levels = var_names),
-    var2 = factor(var2, levels = var_names)
-  )
-
-# 5. Join with feature_dictionary to attach category annotations
-cor_long_annotated <- cor_long %>%
-  inner_join(feature_dictionary, by = c("var1" = "feature_name_original")) %>%
-  inner_join(feature_dictionary, by = c("var2" = "feature_name_original"), suffix = c("_var1", "_var2")) %>%
-  mutate(
-    feature_name_var1 = factor(feature_name_var1),
-    feature_name_var2 = factor(feature_name_var2)
-  )
-
-# 6. Generate Plot with Significance Stars Layer
-cor_long_annotated_matrixplot <- ggplot(
-  cor_long_annotated, 
-  aes(x = feature_name_var1, y = feature_name_var2, fill = spearman_rho)
-) +
-  geom_tile(color = "white", linewidth = 0.1) +
-  
-  # ANNOTATION LAYER: Overlay significance stars
-  geom_text(
-    aes(label = p_signif),
-    color = "black",
-    size = 2.5,
-    vjust = 0.75 # Centers stars neatly within each tile
-  ) +
-  
-  # Grid facets grouped by feature category
-  facet_grid(
-    feature_type_var2 ~ feature_type_var1, 
-    scales = "free", 
-    space = "free"
-  ) +
-  
-  scale_fill_gradient2(
-    low = "#4cc9f0",
-    mid = "white",
-    high = "#4361ee",
-    midpoint = 0,
-    limit = c(-1, 1),
-    name = "Spearman\nRho (ρ)"
-  ) +
-  labs(
-    x = "",
-    y = "",
-    title = "Spearman Correlation Matrix with FDR-Adjusted Significance (* p<0.05, ** p<0.01, *** p<0.001)"
-  ) +
-  theme_vaxgo() +
-  theme(
-    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1, size = 8),
-    axis.text.y = element_text(size = 8),
-    strip.text = element_text(size = 8, face = "bold"),
-    strip.text.x = element_text(angle = 90, hjust = 0, vjust = 0.5),
-    strip.text.y = element_text(size = 8, hjust = 0, angle = 0),
-    panel.grid = element_blank(),
-    panel.spacing = unit(0.15, "lines")
-  )
-
-cor_long_annotated_matrixplot
-
-cor_long_annotated_matrixplot %>%
-  ggsave(filename = here("Figures", paste0( "statistical_modelling_features_matrixplot_", input_features_name, ".png")),
-         width = 12, height = 10)
-
-```
-
-
-
-
-
 
 
 
@@ -511,244 +368,6 @@ cor_long_annotated_matrixplot %>%
 # Modelling
 
 ## Classify Shared vs Not-Shared LEGs
-
-### One by one
-```{r fig.height=6, fig.width=8, message=FALSE, warning=FALSE}
-# # Step 1: Define Classification Recipe with Near-Zero Variance Filter
-# classification_recipe <- recipes::recipe(status ~ ., data = human_mouse_features_classification_legs) %>%
-#   recipes::update_role(hgnc_symbol, treatment, pathogen, timepoint_comparison, new_role = "id") %>%
-#   recipes::step_dummy(recipes::all_nominal_predictors()) %>%
-#   recipes::step_nzv(recipes::all_predictors()) %>%
-#   recipes::step_corr(recipes::all_numeric_predictors(), threshold = 0.9) %>%
-#   recipes::step_normalize(recipes::all_numeric_predictors())
-# 
-# # Step 2: Fit Penalized Logistic Regression Model (glmnet)
-# logistic_spec <- logistic_reg() %>%
-#   parsnip::set_engine("glm") %>%
-#   parsnip::set_mode("classification")
-# 
-# logistic_workflow <- workflows::workflow() %>%
-#   workflows::add_recipe(classification_recipe) %>%
-#   workflows::add_model(logistic_spec)
-# 
-# logistic_fit <- workflows::fit(logistic_workflow, data = human_mouse_features_classification_legs)
-# 
-# # Step 3: Extract Tidy Odds Ratios (OR) and Join Dictionary
-# logistic_coefficients <- broom::tidy(logistic_fit, penalty = 0.01) %>%
-#   dplyr::filter(term != "(Intercept)") %>%
-#   dplyr::rename(feature_name_original = term) %>%
-#   dplyr::mutate(
-#     feature_name_original = stringr::str_replace_all(feature_name_original, "`", ""),
-#     estimate = exp(estimate)
-#   ) %>%
-#   dplyr::left_join(
-#     feature_dictionary,
-#     by = dplyr::join_by("feature_name_original")
-#   ) 
-# 
-# # Step 4: Compute Area Under the ROC Curve (AUC) Safely
-# prob_df <- stats::predict(logistic_fit, new_data = human_mouse_features_classification_legs, type = "prob") %>%
-#   dplyr::bind_cols(human_mouse_features_classification_legs %>% dplyr::select(status))
-# 
-# roc_obj_logistic <- pROC::roc(
-#   response  = prob_df$status,
-#   predictor = prob_df$.pred_Shared,
-#   levels    = c("Not-shared", "Shared")
-# )
-# 
-# cat("Logistic AUC:", round(pROC::auc(roc_obj_logistic), 3), "\n")
-# 
-# # APPROACH 2: RANDOM FOREST CLASSIFIER (GINI IMPORTANCE)
-# rf_cls_spec <- rand_forest(
-#   trees = 1000,
-#   mtry  = 8,       # Fixed number of predictors sampled at each split
-#   min_n = 5        # Fixed minimum node size
-# ) %>%
-#   parsnip::set_engine("ranger", importance = "impurity") %>%
-#   parsnip::set_mode("classification")
-# 
-# # Assemble workflow with classification recipe
-# rf_cls_workflow <- workflows::workflow() %>%
-#   workflows::add_recipe(classification_recipe) %>%
-#   workflows::add_model(rf_cls_spec)
-# 
-# # Fit Random Forest Classifier directly on the full classification dataset
-# final_rf_cls_fit <- workflows::fit(
-#   rf_cls_workflow, 
-#   data = human_mouse_features_classification_legs
-# )
-# 
-# # Extract native ranger engine
-# rf_cls_engine <- workflows::extract_fit_engine(final_rf_cls_fit)
-# 
-# # Extract Gini Impurity feature importance metric
-# rf_cls_importance <- tibble::tibble(
-#   feature_name_original = names(rf_cls_engine$variable.importance),
-#   importance            = as.numeric(rf_cls_engine$variable.importance)
-# ) %>%
-#   dplyr::inner_join(
-#     feature_dictionary,
-#     by = dplyr::join_by("feature_name_original")
-#   )
-# 
-# # Step 4: Compute Area Under the ROC Curve (AUC)
-# prob_df_rf <- stats::predict(final_rf_cls_fit, new_data = human_mouse_features_classification_legs, type = "prob") %>%
-#   dplyr::bind_cols(human_mouse_features_classification_legs %>% dplyr::select(status))
-# 
-# roc_obj_rf <- pROC::roc(
-#   response  = prob_df_rf$status,
-#   predictor = prob_df_rf$.pred_Shared,
-#   levels    = c("Not-shared", "Shared")
-# )
-# 
-# cat("Logistic AUC:", round(pROC::auc(roc_obj_rf), 3), "\n")
-# 
-# # Reorder feature names
-# feature_names_order = logistic_coefficients %>% 
-#   arrange(estimate) %>% 
-#   pull(feature_name) %>% 
-#   unique()
-# 
-# # Step 5: Filter OR data and render Forest Plot
-# p_odds_ratio_forest <- logistic_coefficients %>%
-#   mutate(feature_name = fct_relevel(feature_name, c(feature_names_order))) %>% 
-#   ggplot() +
-#   aes(
-#     x     = estimate,
-#     y     = feature_name
-#   ) +
-#   facet_grid(feature_type~., scales = "free_y", space = "free_y") +
-#   geom_vline(xintercept = 1, linetype = "dashed", color = "gray50", linewidth = 0.6) +
-#     geom_point(aes(fill = feature_type),
-#                         size = 2.5, shape = 21, 
-#                       color = "black") +
-#   scale_fill_manual(values = colors_all$blues) +
-#   labs(
-#     x     = "Odds Ratio",
-#     y     = "Feature Predictor",
-#     fill  = "Feature Category",
-#     title = paste0("Logistic Regression:\nShared LEGs (AUC = ", round(pROC::auc(roc_obj_logistic), 3), ")")
-#   ) +
-#   theme_vaxgo() +
-#   theme(
-#     legend.position = "none",
-#     legend.location = "plot",
-#     axis.text.y     = element_text(size = 10), 
-#     strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)
-#   ) 
-# 
-# # Render Variable Importance Plot for Random Forest Classifier
-# p_rf_cls_importance <- rf_cls_importance %>%
-#   mutate(feature_name = fct_relevel(feature_name, c(feature_names_order))) %>% 
-#   ggplot() +
-#   aes(x = importance, y = feature_name, fill = feature_type) +
-#   facet_grid(feature_type~., scales = "free_y", space = "free_y") +
-#   geom_col(width = 0.6) +
-#   scale_fill_manual(values = colors_all$blues) +
-#   labs(
-#     x     = "Gini Impurity",
-#     y     = "Feature Predictor",
-#     fill  = "Feature Category",
-#     title = paste0("Random Forest Classifier:\nShared LEGs (AUC = ", round(pROC::auc(roc_obj_rf), 3), ")"
-#   )) +
-#   theme_vaxgo() +
-#   theme(
-#     legend.position = "none",
-#     legend.location = "plot",
-#     axis.text.y     = element_text(size = 10), 
-#     strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5)
-#   ) 
-# 
-# 
-# # 4. Merge plots (LM vs RF)
-# coefficients_classifier_patch_plot = (p_odds_ratio_forest + theme(strip.text.y = element_blank())) +
-#   p_rf_cls_importance +
-#   plot_layout(widths = c(0.5, 0.5), guides = "collect", axes = "collect") +
-#   plot_annotation(title = input_features_name)
-# 
-# coefficients_classifier_patch_plot 
-# 
-# coefficients_classifier_patch_plot %>%
-#   ggsave(filename = here("Figures", paste0( "statistical_modelling_coefficients_classifier_", input_features_name, ".png")),
-#          width = 8,
-#          height = 1.5)
-
-```
-
-
-ROC curve
-```{r fig.height=4, fig.width=4}
-# # ROC curve
-# df_roc_logistic <- pROC::ggroc(roc_obj_logistic)$data %>%
-#   dplyr::mutate(
-#     model = paste0("Logistic Regression (AUC = ", round(pROC::auc(roc_obj_logistic), 3), ")")
-#   )
-# 
-# df_roc_rf <- pROC::ggroc(roc_obj_rf)$data %>%
-#   dplyr::mutate(
-#     model = paste0("Random Forest (AUC = ", round(pROC::auc(roc_obj_rf), 3), ")")
-#   )
-# 
-# df_roc_combined <- dplyr::bind_rows(df_roc_logistic, df_roc_rf)
-# 
-# p_roc_comparison <- ggplot(df_roc_combined) +
-#   aes(
-#     x = 1 - specificity, # Convert to False Positive Rate
-#     y = sensitivity, 
-#     color = model
-#   ) +
-#   
-#   # Diagonal reference line for random classifier (AUC = 0.5)
-#   geom_segment(
-#     aes(x = 0, y = 0, xend = 1, yend = 1),
-#     linetype = "dashed", 
-#     color = "gray60", 
-#     linewidth = 0.6
-#   ) +
-#   
-#   # Model ROC curves
-#   geom_line(linewidth = 1.2) +
-#   
-#   # Color palette and scale adjustments
-#   scale_color_manual(values = c(
-#     "Logistic Regression" = "#001219", 
-#     "Random Forest"       = "#4DBBD5FF"
-#   ) %>% setNames(unique(df_roc_combined$model))) +
-#   
-#   scale_x_continuous(expand = c(0, 0.01), limits = c(0, 1)) +
-#   scale_y_continuous(expand = c(0, 0.01), limits = c(0, 1)) +
-#   
-#   coord_fixed() + # Force 1:1 aspect ratio on the plot
-#   
-#   labs(
-#     x = "1 - Specificity (False Positive Rate)",
-#     y = "Sensitivity (True Positive Rate)",
-#     color = "Classifier Model",
-#     title = paste0("ROC Curves: LEGs Classification\n",
-#                    input_features_name)
-#   ) +
-#   
-#   theme_vaxgo() +
-#   theme(
-#     legend.position = c(0.65, 0.2),
-#     legend.text = element_text(size = 9, face = "bold"),
-#     plot.title.position = "plot"
-#   )
-# 
-# #Display
-# p_roc_comparison
-# 
-# #Save
-# p_roc_comparison %>%
-#   ggsave(filename = here("Figures", paste0( "statistical_modelling_coefficients_classifier_roccurve_", input_features_name, ".png")),
-#          width = 4,
-#          height = 4)
-
-```
-
-
-
-
 
 ### Iterate over all features
 
@@ -926,6 +545,12 @@ classification_auc_table <- master_class_metrics %>%
 
 classification_auc_table
 
+
+```
+
+
+### Visualization
+```{r fig.height=12, fig.width=10}
 # ==============================================================================
 # 5. VISUALIZATIONS
 # ==============================================================================
@@ -934,10 +559,6 @@ master_class_metrics = readRDS(file = here::here("Models", "master_class_metrics
 master_class_coefs = readRDS(file = here::here("Models", "master_class_coefs.rds"))
 master_class_var_imp = readRDS(file = here::here("Models", "master_class_var_imp.rds"))
 master_class_roc_data = readRDS(file = here::here("Models", "master_class_roc_data.rds"))
-```
-
-
-```{r fig.height=12, fig.width=10}
 # Logistic Regression Coefficients Plot================
 log_coefs_plot_df = master_class_coefs %>%
   inner_join(
@@ -1127,261 +748,6 @@ ggsave(filename = here("Figures", "statistical_modelling_classification_coeffici
 
 
 ## Predict Log2FC Divergence Magnitude
-
-### One by one
-```{r fig.height=12, fig.width=12}
-# library(mgcv)     # For GAM engine
-# library(vip)      # For Permutation Importance
-# 
-# # ==============================================================================
-# # 1. RECIPE DEFINITION
-# # ==============================================================================
-# 
-# regression_recipe <- recipes::recipe(abs_log2fc_diff ~ ., data = human_mouse_features_regression) %>%
-#   recipes::update_role(hgnc_symbol, treatment, pathogen, timepoint_comparison, new_role = "id") %>%
-#   recipes::step_dummy(recipes::all_nominal_predictors()) %>%
-#   recipes::step_zv(recipes::all_predictors()) %>%
-#   recipes::step_normalize(recipes::all_numeric_predictors())
-# 
-# 
-# # ==============================================================================
-# # 2. MODEL SPECIFICATIONS & FITTING
-# # ==============================================================================
-# 
-# # MODEL 1: Linear Regression (LM) ----------------------------------------------
-# linear_spec <- linear_reg() %>%
-#   set_engine("lm") %>%
-#   set_mode("regression")
-# 
-# linear_fit <- workflow() %>%
-#   add_recipe(regression_recipe) %>%
-#   add_model(linear_spec) %>%
-#   fit(data = human_mouse_features_regression)
-# 
-# linear_lm_engine <- extract_fit_engine(linear_fit)
-# 
-# linear_coefficients <- broom::tidy(linear_lm_engine, conf.int = TRUE) %>%
-#   filter(term != "(Intercept)") %>%
-#   rename(feature_name_original = term) %>%
-#   mutate(feature_name_original = str_replace_all(feature_name_original, "`", "")) %>% 
-#   inner_join(feature_dictionary, by = join_by("feature_name_original"))
-# 
-# 
-# # MODEL 2: Generalized Linear Model (GLM - Gamma / Log Link for skewed |Log2FC|)
-# # Note: For non-negative continuous outcomes like |ΔLog2FC|, Gamma GLM is ideal.
-# glm_spec <- linear_reg() %>%
-#   set_engine("glm", family = stats::Gamma(link = "log")) %>%
-#   set_mode("regression")
-# 
-# glm_fit <- workflow() %>%
-#   add_recipe(regression_recipe) %>%
-#   add_model(glm_spec) %>%
-#   fit(data = human_mouse_features_regression)
-# 
-# glm_engine <- extract_fit_engine(glm_fit)
-# 
-# glm_coefficients <- broom::tidy(glm_engine, conf.int = TRUE) %>%
-#   filter(term != "(Intercept)") %>%
-#   rename(feature_name_original = term) %>%
-#   mutate(feature_name_original = str_replace_all(feature_name_original, "`", "")) %>% 
-#   inner_join(feature_dictionary, by = join_by("feature_name_original"))
-# 
-# 
-# # MODEL : Random Forest (RF) --------------------------------------------------
-# rf_spec <- rand_forest(
-#   trees = 1000,
-#   mtry  = 8,       
-#   min_n = 5        
-# ) %>%
-#   set_engine("ranger", importance = "impurity") %>%
-#   set_mode("regression")
-# 
-# rf_workflow <- workflow() %>%
-#   add_recipe(regression_recipe) %>%
-#   add_model(rf_spec)
-# 
-# final_rf_fit <- fit(rf_workflow, data = human_mouse_features_regression)
-# rf_engine <- extract_fit_engine(final_rf_fit)
-# 
-# rf_importance <- tibble(
-#   feature_name_original = names(rf_engine$variable.importance),
-#   importance            = as.numeric(rf_engine$variable.importance)
-# ) %>%
-#   inner_join(feature_dictionary, by = join_by("feature_name_original"))
-# 
-# # ==============================================================================
-# # 4. EVALUATION & MODEL COMPARISON METRICS
-# # ==============================================================================
-# 
-# eval_table <- human_mouse_features_regression %>%
-#   select(abs_log2fc_diff) %>%
-#   bind_cols(
-#     predict(linear_fit, new_data = human_mouse_features_regression) %>% rename(pred_linear = .pred),
-#     predict(final_rf_fit, new_data = human_mouse_features_regression) %>% rename(pred_rf = .pred)
-#   )
-# 
-# # Calculate RMSE and R2 across all 4 models
-# metrics_lm  <- metric_set(rmse, rsq)(eval_table, truth = abs_log2fc_diff, estimate = pred_linear) %>% mutate(model = "Linear (LM)")
-# metrics_rf  <- metric_set(rmse, rsq)(eval_table, truth = abs_log2fc_diff, estimate = pred_rf)     %>% mutate(model = "Random Forest")
-# 
-# model_comparison_metrics <- bind_rows(metrics_lm, metrics_rf)
-# print(model_comparison_metrics)
-# 
-# # Preserve your exact factor level ordering logic
-# name_order <- rf_importance %>%
-#   arrange(importance) %>% 
-#   mutate(feature_name = fct_inorder(feature_name))
-# 
-# # ==============================================================================
-# # 5. VISUALIZATIONS
-# # ==============================================================================
-# 
-# # 1. LM Forest Plot
-# linear_coefficients_forest_plot <- linear_coefficients %>%
-#   mutate(feature_name = factor(feature_name, levels = levels(name_order$feature_name))) %>%
-#   ggplot(aes(x = estimate, y = feature_name, xmin = conf.low, xmax = conf.high)) +
-#   facet_grid(feature_type ~ ., space = "free", scales = "free_y") +
-#   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.6) +
-#   geom_errorbarh(height = 0.2, color = "black", linewidth = 0.6) +
-#   geom_point(aes(color = p.value <= 0.05), size = 2.5) +
-#   scale_color_manual(
-#     values = c("TRUE" = "#4DBBD5FF", "FALSE" = "gray60"),
-#     labels = c("TRUE" = "p <= 0.05", "FALSE" = "p > 0.05")
-#   ) +
-#   labs(
-#     x     = "Standardized Effect Size",
-#     y     = "Feature Predictor",
-#     color = "Significance",
-#     title = paste0("Linear Regression (R² = ", round(metrics_lm$ .estimate[metrics_lm$.metric == "rsq"], 3), ")")
-#   ) +
-#   theme_vaxgo() +
-#   theme(legend.position = "right", strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5))
-# 
-# # 2. GLM Forest Plot
-# glm_coefficients_forest_plot <- glm_coefficients %>%
-#   mutate(feature_name = factor(feature_name, levels = levels(name_order$feature_name))) %>%
-#   ggplot(aes(x = estimate, y = feature_name, xmin = conf.low, xmax = conf.high)) +
-#   facet_grid(feature_type ~ ., space = "free", scales = "free_y") +
-#   geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.6) +
-#   geom_errorbarh(height = 0.2, color = "black", linewidth = 0.6) +
-#   geom_point(aes(color = p.value <= 0.05), size = 2.5) +
-#   scale_color_manual(
-#     values = c("TRUE" = "#4DBBD5FF", "FALSE" = "gray60"),
-#     labels = c("TRUE" = "p <= 0.05", "FALSE" = "p > 0.05")
-#   ) +
-#   labs(
-#     x     = "Standardized Effect Size",
-#     y     = "Feature Predictor",
-#     color = "Significance",
-#     title = paste0("GLM (R² = ", round(metrics_glm$.estimate[metrics_glm$.metric == "rsq"], 3), ")")
-#   ) +
-#   theme_vaxgo() +
-#   theme(legend.position = "right", strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5))
-# 
-# # 3. Random Forest Gini Importance Plot
-# p_rf_importance <- rf_importance %>%
-#   mutate(feature_name = factor(feature_name, levels = levels(name_order$feature_name))) %>%
-#   ggplot(aes(x = importance + 1, y = feature_name, fill = feature_type)) +
-#   facet_grid(feature_type ~ ., space = "free", scales = "free_y") +
-#   geom_col(width = 0.6) +
-#   scale_fill_manual(values = colors_all$blues) +
-#   scale_x_log10(
-#     breaks = c(1, 10, 50, 100, 250, 1000),
-#     labels = c("0", "10", "50", "100", "250", "1000")
-#   ) +
-#   labs(
-#     x     = "Variable Importance (Gini)",
-#     y     = "Feature Predictor",
-#     fill  = "Feature Category",
-#     title = paste0("Random Forest (R² = ", round(metrics_rf$.estimate[metrics_rf$.metric == "rsq"], 3), ")")
-#   ) +
-#   theme_vaxgo() +
-#   theme(legend.position = "none", strip.text.y = element_text(angle = 0, hjust = 0, vjust = 0.5))
-# 
-# 
-# # 4. Merge plots (LM vs RF)
-# coeffiecients_patch_plot = (linear_coefficients_forest_plot + theme(strip.text.y = element_blank())) +
-#   p_rf_importance +
-#   plot_layout(widths = c(0.5, 0.5), guides = "collect", axes = "collect")
-# 
-# coeffiecients_patch_plot
-# 
-# 
-# coeffiecients_patch_plot %>%
-#   ggsave(filename = here("Figures", paste0("statistical_modelling_regression_coefficients_patch_plot_",input_features_name,  ".png")),
-#          width = 8,
-#          height = 8)
-# 
-# #### Plot Observed vs Predicted values across models ============
-# 
-# # 1. Extract R² values dynamically for accurate facet labels
-# r2_lm  <- round(model_comparison_metrics$.estimate[model_comparison_metrics$model == "Linear (LM)" & model_comparison_metrics$.metric == "rsq"], 3)
-# r2_rf  <- round(model_comparison_metrics$.estimate[model_comparison_metrics$model == "Random Forest" & model_comparison_metrics$.metric == "rsq"], 3)
-# 
-# # 2. Reshape predictions and plot Observed vs. Predicted across all 4 models
-# p_obs_vs_pred <- eval_table %>%
-#   pivot_longer(
-#     cols      = c(pred_linear, pred_rf),
-#     names_to  = "model_key",
-#     values_to = "predicted"
-#   ) %>%
-#   mutate(
-#     model = case_when(
-#       model_key == "pred_linear" ~ paste0("Linear Model (R² = ", r2_lm, ")"),
-#       model_key == "pred_rf"     ~ paste0("Random Forest (R² = ", r2_rf, ")"),
-#       TRUE ~ NA_character_
-#     ),
-#     # Relevel factors to preserve structural layout from linear to complex models
-#     model = factor(model, levels = c(
-#       paste0("Linear Model (R² = ", r2_lm, ")"),
-#       paste0("Random Forest (R² = ", r2_rf, ")")
-#     ))
-#   ) %>%
-#   ggplot(aes(x = abs_log2fc_diff, y = predicted)) +
-#   
-#   # Identity reference line (1:1 perfect prediction)
-#   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.6) +
-#   
-#   # Scatter points
-#   geom_point(alpha = 0.15, size = 1, color = "black") +
-#   
-#   # Linear calibration fit line per model
-#   geom_smooth(method = "lm", se = TRUE, linewidth = 1, color = "#4DBBD5FF") +
-#   
-#   # 2x2 Facet grid layout
-#   facet_wrap(~ model, nrow = 1) +
-#   
-#   scale_x_continuous(expand = c(0, 0)) +
-#   scale_y_continuous(expand = c(0, 0)) +
-#   
-#   # Force 1:1 aspect ratio across axes
-#   tune::coord_obs_pred() +
-#   
-#   labs(
-#     x = "Observed Divergence",
-#     y = "Predicted",
-#     title = paste0("Observed vs. Predicted\nLog2FC Divergence\n", input_features_name)
-#   ) +
-#   theme_vaxgo() +
-#   theme(
-#     legend.position = "none",
-#     plot.title.position = "plot",
-#     strip.text = element_text(size = 10, face = "bold")
-#   )
-# 
-# # Display Plot
-# print(p_obs_vs_pred)
-# 
-# #Save
-# p_obs_vs_pred %>%
-#   ggsave(filename = here("Figures", paste0("statistical_regression_modelling_p_obs_vs_pred_",input_features_name,  ".png")),
-#          width = 5,
-#          height = 3)
-```
-
-
-
-
 
 
 ### Iterate over multiple models
@@ -1573,10 +939,7 @@ master_regression_var_imp =
   readRDS(file = here("Models", "master_regression_var_imp.rds"))
 master_regression_predictions =
   readRDS(file = here("Models", "master_regression_predictions.rds"))
-```
 
-
-```{r fig.height=12, fig.width=10}
 # 1. Generate wide summary table of R² values across models and feature sets
 regression_rsq_table <- master_regression_metrics %>%
   filter(.metric == "rsq") %>%
@@ -1986,8 +1349,7 @@ legs_notlegs_layers_score <- legs_notlegs_layers %>%
     
     # Rescale Composite Scores (0-100) and Pathogen Rank
     score_shared = min_max(score_raw_class) * 100,
-    score_reg = (1 - min_max(score_raw_reg)) * 100,
-    rank_log2fc  = percent_rank(abs(mean_log2fc_mouse) * -log10(pmax(p_adj_mouse, 1e-300))) * 100
+    score_reg = (1 - min_max(score_raw_reg)) * 100
   ) %>% 
   select(-starts_with("f_"), -starts_with("score_raw_")) %>% 
   ungroup() %>% 
@@ -2043,40 +1405,83 @@ calc_dual_metrics <- function(df) {
         }, error = function(e) NA_real_)
       }),
       
-      # --- REGRESSION METRICS (score_reg vs. |mean_log2fc_mouse|) ---
+      # --- SPEARMAN: rank_log2fc_process vs score_shared ---
+      spearman_rank_rho = map_dbl(data, function(d) {
+        if (!"rank_log2fc_process" %in% names(d) || !"score_shared" %in% names(d)) return(NA_real_)
+        d_clean <- d %>% filter(!is.na(rank_log2fc_process), !is.na(score_shared))
+        if (nrow(d_clean) < 3 || sd(d_clean$rank_log2fc_process) == 0 || sd(d_clean$score_shared) == 0) return(NA_real_)
+        tryCatch({
+          cor(d_clean$rank_log2fc_process, d_clean$score_shared, method = "spearman")
+        }, error = function(e) NA_real_)
+      }),
+      
+      p_val_spearman_rank = map_dbl(data, function(d) {
+        if (!"rank_log2fc_process" %in% names(d) || !"score_shared" %in% names(d)) return(NA_real_)
+        d_clean <- d %>% filter(!is.na(rank_log2fc_process), !is.na(score_shared))
+        if (nrow(d_clean) < 3 || sd(d_clean$rank_log2fc_process) == 0 || sd(d_clean$score_shared) == 0) return(NA_real_)
+        tryCatch({
+          cor.test(d_clean$rank_log2fc_process, d_clean$score_shared, method = "spearman", exact = FALSE)$p.value
+        }, error = function(e) NA_real_)
+      }),
+
+      # --- PEARSON: inverse_se_mouse vs score_reg ---
+      pearson_se_rho = map_dbl(data, function(d) {
+        if (!"inverse_se_mouse" %in% names(d) || !"score_reg" %in% names(d)) return(NA_real_)
+        d_clean <- d %>% filter(!is.na(inverse_se_mouse), !is.na(score_reg))
+        if (nrow(d_clean) < 3 || sd(d_clean$inverse_se_mouse) == 0 || sd(d_clean$score_reg) == 0) return(NA_real_)
+        tryCatch({
+          cor(d_clean$inverse_se_mouse, d_clean$score_reg, method = "pearson")
+        }, error = function(e) NA_real_)
+      }),
+      
+      p_val_pearson_se = map_dbl(data, function(d) {
+        if (!"inverse_se_mouse" %in% names(d) || !"score_reg" %in% names(d)) return(NA_real_)
+        d_clean <- d %>% filter(!is.na(inverse_se_mouse), !is.na(score_reg))
+        if (nrow(d_clean) < 3 || sd(d_clean$inverse_se_mouse) == 0 || sd(d_clean$score_reg) == 0) return(NA_real_)
+        tryCatch({
+          cor.test(d_clean$inverse_se_mouse, d_clean$score_reg, method = "pearson")$p.value
+        }, error = function(e) NA_real_)
+      }),
+      
+      # --- SPEARMAN: score_reg vs. |abs_log2fc_diff| ---
       spearman_rho = map_dbl(data, function(d) {
-        if (!"score_reg" %in% names(d) || !"mean_log2fc_mouse" %in% names(d)) return(NA_real_)
+        if (!"score_reg" %in% names(d) || !"abs_log2fc_diff" %in% names(d)) return(NA_real_)
+        d_clean <- d %>% filter(!is.na(score_reg), !is.na(abs_log2fc_diff))
+        if (nrow(d_clean) < 3 || sd(d_clean$score_reg) == 0 || sd(d_clean$abs_log2fc_diff) == 0) return(NA_real_)
         tryCatch({
-          cor(d$score_reg, abs(d$mean_log2fc_mouse), method = "spearman", use = "complete.obs")
+          cor(d_clean$score_reg, abs(d_clean$abs_log2fc_diff), method = "spearman")
         }, error = function(e) NA_real_)
       }),
-      
+
       p_val_spearman = map_dbl(data, function(d) {
-        if (!"score_reg" %in% names(d) || !"mean_log2fc_mouse" %in% names(d)) return(NA_real_)
+        if (!"score_reg" %in% names(d) || !"abs_log2fc_diff" %in% names(d)) return(NA_real_)
+        d_clean <- d %>% filter(!is.na(score_reg), !is.na(abs_log2fc_diff))
+        if (nrow(d_clean) < 3 || sd(d_clean$score_reg) == 0 || sd(d_clean$abs_log2fc_diff) == 0) return(NA_real_)
         tryCatch({
-          cor.test(d$score_reg, abs(d$mean_log2fc_mouse), method = "spearman", exact = FALSE)$p.value
+          cor.test(d_clean$score_reg, abs(d_clean$abs_log2fc_diff), method = "spearman", exact = FALSE)$p.value
         }, error = function(e) NA_real_)
       }),
       
+      # --- REGRESSION METRICS (X: score_reg, Y: |abs_log2fc_diff|) ---
       pearson_r = map_dbl(data, function(d) {
-        if (!"score_reg" %in% names(d) || !"mean_log2fc_mouse" %in% names(d)) return(NA_real_)
+        if (!"score_reg" %in% names(d) || !"abs_log2fc_diff" %in% names(d)) return(NA_real_)
         tryCatch({
-          cor(d$score_reg, abs(d$mean_log2fc_mouse), method = "pearson", use = "complete.obs")
+          cor(d$score_reg, abs(d$abs_log2fc_diff), method = "pearson", use = "complete.obs")
         }, error = function(e) NA_real_)
       }),
       
       r_squared = map_dbl(data, function(d) {
-        if (!"score_reg" %in% names(d) || !"mean_log2fc_mouse" %in% names(d)) return(NA_real_)
+        if (!"score_reg" %in% names(d) || !"abs_log2fc_diff" %in% names(d)) return(NA_real_)
         tryCatch({
-          fit <- lm(abs(mean_log2fc_mouse) ~ score_reg, data = d)
+          fit <- lm(abs(abs_log2fc_diff) ~ score_reg, data = d) # Y ~ X
           summary(fit)$r.squared
         }, error = function(e) NA_real_)
       }),
       
       p_val_lm = map_dbl(data, function(d) {
-        if (!"score_reg" %in% names(d) || !"mean_log2fc_mouse" %in% names(d)) return(NA_real_)
+        if (!"score_reg" %in% names(d) || !"abs_log2fc_diff" %in% names(d)) return(NA_real_)
         tryCatch({
-          fit <- lm(abs(mean_log2fc_mouse) ~ score_reg, data = d)
+          fit <- lm(abs(abs_log2fc_diff) ~ score_reg, data = d) # Y ~ X
           summary(fit)$coefficients[2, 4]
         }, error = function(e) NA_real_)
       })
@@ -2102,23 +1507,47 @@ eval_process_pooled <- calc_dual_metrics(
 # C. Overall Global Evaluation (Pooled Overall)
 eval_pooled_class <- calc_dual_metrics(
   legs_notlegs_layers_score_plot %>%
-    filter(!is.na(score_shared), !is.na(status_original)) %>% 
-    select(-c(process, group)) %>% 
+    filter(!is.na(score_shared), !is.na(status_original)) %>%
+    select(-c(process, group)) %>%
     group_by(treatment, pathogen)
-) %>% 
-  select(treatment, pathogen, auc_roc, p_val_roc, auc_pr)
+) %>%
+  select(
+    treatment,
+    pathogen,
+    spearman_rho,
+    spearman_rank_rho,
+    p_val_spearman_rank,
+    p_val_spearman,
+    pearson_r,
+    r_squared,
+    p_val_lm
+  )
 
-eval_pooled_reg <- calc_dual_metrics(
-  legs_notlegs_layers_score_plot %>%
-    filter(!is.na(score_reg)) %>% 
-    select(treatment, pathogen, hgnc_symbol, score_reg, mean_log2fc_mouse) %>% 
-    distinct() %>% 
-    group_by(treatment, pathogen)
-) %>% 
-  select(treatment, pathogen, spearman_rho, p_val_spearman, pearson_r, r_squared, p_val_lm)
+eval_pooled_reg <- legs_notlegs_layers_score_plot %>%
+  filter(!is.na(score_reg)) %>% 
+  select(
+    treatment, 
+    pathogen, 
+    hgnc_symbol, 
+    score_reg, 
+    abs_log2fc_diff,       
+    inverse_se_mouse
+  ) %>% 
+  distinct() %>% 
+  group_by(treatment, pathogen) %>% 
+  calc_dual_metrics() %>% 
+  select(
+    treatment, 
+    pathogen, 
+    spearman_rho, 
+    p_val_spearman, 
+    pearson_r, 
+    r_squared, 
+    p_val_lm
+  )
 
 eval_pooled <- inner_join(eval_pooled_class, 
-                          eval_pooled_reg, by = c("treatment", "pathogen")) %>% 
+                          eval_pooled_reg, by = c("treatment", "pathogen"), suffix = c("_class", "_reg")) %>% 
   mutate(process = "All genes", group = "All genes")
 
 # Consolidation & FDR Correction
@@ -2129,16 +1558,20 @@ eval_metrics_all_summary <- bind_rows(
 ) %>% 
   group_by(analysis_set) %>% 
   mutate(
-    p_adj_roc      = p.adjust(p_val_roc, method = "BH"),
-    p_adj_spearman = p.adjust(p_val_spearman, method = "BH"),
-    p_adj_lm       = p.adjust(p_val_lm, method = "BH")
+    p_adj_roc           = p.adjust(p_val_roc, method = "BH"),
+    p_adj_spearman      = p.adjust(p_val_spearman, method = "BH"),
+    p_adj_spearman_rank = p.adjust(p_val_spearman_rank, method = "BH"),
+    p_adj_pearson_se    = p.adjust(p_val_pearson_se, method = "BH"),
+    p_adj_lm            = p.adjust(p_val_lm, method = "BH")
   ) %>% 
   ungroup() %>% 
   select(
     analysis_set, treatment, pathogen, process, group,
     auc_roc, auc_pr, p_val_roc, p_adj_roc,
     spearman_rho, p_val_spearman, p_adj_spearman,
-    pearson_r, r_squared, p_val_lm, p_adj_lm
+    spearman_rank_rho, p_val_spearman_rank, p_adj_spearman_rank,
+    pearson_se_rho, p_val_pearson_se, p_adj_pearson_se,
+    pearson_r, r_squared, p_val_lm, p_adj_lm, everything()
   )
 
 eval_metrics_all_summary
@@ -2150,16 +1583,9 @@ eval_metrics_all_summary
 ### Classification
 Selected process
 ```{r fig.height=4, fig.width=12}
-# Append Pooled rows cleanly for plotting purposes only
-# legs_notlegs_layers_score_plot <- legs_notlegs_layers_score %>% 
-#   bind_rows(
-#     legs_notlegs_layers_score %>% 
-#       mutate(treatment = "Pooled", pathogen = "")
-#   )
-
 # Select process for visualization
 select_process <- "immune activation - generic cluster"
-select_process <- "cell cycle and transcription"
+# select_process <- "cell cycle and transcription"
 
 legs_notlegs_layers_visualized <- legs_notlegs_layers_score_plot %>% 
   filter(process == select_process) %>% 
@@ -2181,12 +1607,12 @@ legs_notlegs_layers_visualized <- legs_notlegs_layers_score_plot %>%
   # Layered scatter plot highlighting Shared vs. Human-only candidates
   geom_point(
     data = . %>% filter(status_original == "Human only"),
-    aes(size = score_shared * abs(mean_log2fc_mouse)),
+    # aes(size = score_shared * abs(mean_log2fc_mouse)),
     shape = 21, alpha = 0.2
   ) +
   geom_point(
     data = . %>% filter(status_original != "Human only"),
-    aes(size = score_shared * abs(mean_log2fc_mouse)),
+    # aes(size = score_shared * abs(mean_log2fc_mouse)),
     shape = 21, alpha = 1
   ) +
 
@@ -2236,22 +1662,24 @@ legs_notlegs_layers_visualized %>%
 All processes
 ```{r fig.height=3, fig.width=12}
 legs_notlegs_layers_visualized_allprocesses = legs_notlegs_layers_score_plot %>% 
-  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, rank_log2fc, score_shared, p_adj_mouse, status, status_original) %>% 
+  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, score_shared, p_adj_mouse, status, status_original) %>% 
   distinct() %>% 
   inner_join(
     eval_metrics_all_summary %>% 
       filter(analysis_set %in% c("Process_Pooled")),
     by = join_by(treatment, pathogen)
   ) %>% 
-  ggplot(aes(x = score_shared, y = rank_log2fc, fill = status_original)) +
+  ggplot(aes(x = score_shared, y = abs_rank_log2fc_mouse, fill = status_original)) +
   
-  # Nested faceting displaying conditions and ROC/PR performance
   facet_nested_wrap(
-    ~ process + treatment + pathogen + 
-      paste0("ROC-AUC=", round(auc_roc, 2), ",\nPR-AUC=", round(auc_pr, 2)),
-    nrow = 1, 
-    strip = strip_nested(size = "variable")
-  ) +
+  ~ process + treatment + pathogen + 
+    paste0("ROC-AUC=", round(auc_roc, 2), 
+           " \nPR-AUC=", round(auc_pr, 2), 
+           "\nrho=", round(spearman_rank_rho, 2), 
+           ", padj=", format(p_val_spearman_rank, scientific = TRUE, digits = 2)), 
+  nrow = 1, 
+  strip = strip_nested(size = "variable")
+) +
   
   # Layered scatter plot highlighting Shared vs. Human-only candidates
   geom_point(
@@ -2266,18 +1694,18 @@ legs_notlegs_layers_visualized_allprocesses = legs_notlegs_layers_score_plot %>%
   scale_fill_manual(values = colors$comparison) +
   theme_vaxgo() +
   labs(
-    x = "Shared LEG Composite Score",
+    x = "Score",
     y = "Rank, Mouse",
     fill = "LEG Status",
   ) +
   
   # Right Marginals (X-axis position = 110)
   geom_violin(
-    aes(y = rank_log2fc, x = 110, fill = status_original),
+    aes(y = abs_rank_log2fc_mouse, x = 110, fill = status_original),
     width = 15, alpha = 0.5, color = NA
   ) +
   geom_boxplot(
-    aes(y = rank_log2fc, x = 110),
+    aes(y = abs_rank_log2fc_mouse, x = 110),
     width = 15, alpha = 0, color = "black", outlier.shape = NA
   ) +
   
@@ -2297,69 +1725,22 @@ legs_notlegs_layers_visualized_allprocesses = legs_notlegs_layers_score_plot %>%
 legs_notlegs_layers_visualized_allprocesses
 
 # #Save
-legs_notlegs_layers_visualized_allprocesses %>%
-  ggsave(filename = here("Figures", paste0("statistical_modelling_classification_scores_visualized_allprocesses.png")),
-         width = 12,
-         height = 3)
+# legs_notlegs_layers_visualized_allprocesses %>%
+#   ggsave(filename = here("Figures", paste0("statistical_modelling_classification_scores_visualized_allprocesses.png")),
+#          width = 12,
+#          height = 3)
 ```
 
 
-
-
-```{r}
-library(dplyr)
-library(ggplot2)
-
-# 1. Define os quadrantes e calcula as proporções
-quadrant_summary <- legs_notlegs_layers_score %>%
-  filter(treatment == "Pooled") %>% 
-  mutate(
-    quadrant_x = if_else(score_shared >= 50, "High Score (>=50)", "Low Score (<50)"),
-    quadrant_y = if_else(rank_log2fc >= 50, "High Rank (>=50)", "Low Rank (<50)"),
-    
-    # Define a ordem dos quadrantes para exibição correta na matriz
-    quadrant_label = case_when(
-      score_shared >= 50 & rank_log2fc >= 50 ~ "Q1: Top Candidates\n(High Rank / High Score)",
-      score_shared < 50  & rank_log2fc >= 50 ~ "Q2 (High Rank / Low Score)",
-      score_shared < 50  & rank_log2fc < 50  ~ "Q3 (Low Rank / Low Score)",
-      score_shared >= 50 & rank_log2fc < 50  ~ "Q4 (Low Rank / High Score)"
-    )
-  ) %>% 
-  group_by(quadrant_x, quadrant_y, quadrant_label, status_original) %>% 
-  summarise(count = n(), .groups = "drop_last") %>% 
-  mutate(
-    total_in_quadrant = sum(count),
-    pct_in_quadrant = (count / total_in_quadrant) * 100
-  ) %>% 
-  ungroup()
-
-quadrant_summary %>% 
-  drop_na(quadrant_y) %>% 
-  ggplot(aes(x = count, y = quadrant_label, fill = status_original)) +
-  geom_col(position = "fill", width = 0.6, color = "black") +
-  scale_x_continuous(labels = scales::percent) +
-  scale_fill_manual(values = colors$comparison) +
-  theme_vaxgo() +
-  theme(
-    # axis.text.x = element_text(angle = 15, hjust = 1),
-        legend.position = "top") +
-  labs(
-    x = "Proportion of Genes",
-    y = "Quadrant",
-    fill = "LEG Status",
-    title = "Class Distribution Across Score/Rank Quadrants"
-  )
-
-```
 
 ### Regression
 
-Mouse Log2FC vs AbsDiff, by condition
+Score vs AbsDiff, by condition
 ```{r fig.height=3, fig.width=12}
 ######## Mouse Log2FC vs AbsDiff
 reg_layers_mouse_human_absdiff <-  
   legs_notlegs_layers_score_plot %>% 
-  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, rank_log2fc, score_reg, p_adj_mouse) %>% 
+  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, score_reg, p_adj_mouse) %>% 
   distinct() %>% 
     filter(p_adj_mouse <= 0.05) %>% 
  inner_join(
@@ -2376,7 +1757,7 @@ reg_layers_mouse_human_absdiff <-
   # Facet display showing regression metrics (R² and Spearman ρ) with formatted p-values
   facet_nested_wrap(
     ~ treatment + pathogen + 
-      paste0("ρ=", round(spearman_rho, 2), " (p=", sprintf("%.2e", p_adj_spearman), ")"),
+      paste0("rho=", round(spearman_rho_reg, 2), " (p=", sprintf("%.2e", p_val_spearman_reg), ")"),
     nrow = 1, 
     strip = strip_nested(size = "variable")
   ) +
@@ -2391,6 +1772,28 @@ reg_layers_mouse_human_absdiff <-
     # color = NA,
     stroke = 0.5
   ) +
+   # Right Marginals 
+  geom_violin(
+    aes(y = abs_log2fc_diff, x = 110,),
+    fill = "#4361ee",
+    width = 5, alpha = 0.5, color = NA
+  ) +
+  geom_boxplot(
+    aes(y = abs_log2fc_diff, x = 110),
+    width = 5, alpha = 0, color = "black", outlier.shape = NA
+  ) +
+  
+  # Top Marginals 
+  geom_violin(
+    aes(x = score_reg, y = 6),
+    fill = "#4361ee",
+    width = 0.5, alpha = 0.5, color = NA
+  ) +
+  geom_boxplot(
+    aes(x = score_reg, y = 6),
+    fill = "#4361ee",
+    width = 0.5, alpha = 0, color = "black", outlier.shape = NA
+  ) +
 
   scale_fill_continuous(palette = c("white", "#4cc9f0", "#4361ee")) +
   theme_vaxgo() +
@@ -2399,29 +1802,27 @@ reg_layers_mouse_human_absdiff <-
     y = "|ΔLog2fc|",
     fill = "Score",
     size = "Score",
-    title = "Shared LEG Regression Score vs. |ΔLog2fc|"
   ) +
   theme(legend.position = "top", legend.direction = "horizontal")
 
 # Display
-reg_layers_mouse_human_absdiff
+reg_layers_mouse_human_absdiff 
+   
 
-#Save
-reg_layers_mouse_human_absdiff %>%
-  ggsave(filename = here("Figures", paste0("statistical_modelling_regression_scores_visualized_vsAbsLog2FC.png")),
-         width = 12,
-         height = 3)
+# # #Save
+# reg_layers_mouse_human_absdiff %>%
+#   ggsave(filename = here("Figures", paste0("statistical_modelling_regression_scores_visualized_vsAbsLog2FC.png")),
+#          width = 12,
+#          height = 3)
 ```
 
 
-
-
-Mouse Log2FC vs Score, by condition
+Score vs rank mouse, by condition
 ```{r fig.height=3, fig.width=12}
-######## Mouse Log2FC vs Score
-reg_layers_mouse_human <- legs_notlegs_layers_score_plot %>% 
-  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, rank_log2fc, score_reg,p_adj_mouse) %>%
-  # filter(p_adj_mouse <= 0.05) %>% 
+######## Score vs Rank mouse
+reg_layers_mouse_score_rank <-  
+  legs_notlegs_layers_score_plot %>% 
+  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, score_reg, p_adj_mouse) %>% 
   distinct() %>% 
  inner_join(
     eval_metrics_all_summary %>%
@@ -2429,50 +1830,63 @@ reg_layers_mouse_human <- legs_notlegs_layers_score_plot %>%
     by = join_by(treatment, pathogen)
   ) %>%
   distinct() %>% 
-  ggplot(aes(x = mean_log2fc_mouse, 
-             y = mean_log2fc_human, 
-             # fill = status_original,
-             fill = score_reg,
+  ggplot(aes(x = score_reg, y = abs_rank_log2fc_mouse
              )) +
-  
-  # Facet display showing regression metrics (R² and Spearman ρ) with formatted p-values
   facet_nested_wrap(
-    ~ treatment + pathogen + 
-      paste0("ρ=", round(spearman_rho, 2), " (p=", sprintf("%.2e", p_adj_spearman), ")"),
+    ~ treatment + pathogen,
     nrow = 1, 
-    scales = "free",
     strip = strip_nested(size = "variable")
   ) +
   
-  # Layered scatter plot highlighting Shared vs. Human Only candidates
   geom_point(
-    aes(
-        # size = score_reg,
-        alpha = score_reg),
-    # aes(size = score_reg),
+    aes(size = score_reg,
+        fill = score_reg),
     shape = 21, 
-    # alpha = 0.5, 
-    stroke = 0.5,
+    size = 2,
+    alpha = 1,
+    stroke = 0.5
+  ) +
+  
+     # Right Marginals 
+  geom_violin(
+    aes(y = abs_rank_log2fc_mouse, x = 110,),
+    fill = "#4361ee",
+    width = 5, alpha = 0.5, color = NA
+  ) +
+  geom_boxplot(
+    aes(y = abs_rank_log2fc_mouse, x = 110),
+    width = 5, alpha = 0, color = "black", outlier.shape = NA
+  ) +
+  
+  # Top Marginals 
+  geom_violin(
+    aes(x = score_reg, y = -10),
+    fill = "#4361ee",
+    width = 5, alpha = 0.5, color = NA
+  ) +
+  geom_boxplot(
+    aes(x = score_reg, y = -10),
+    fill = "#4361ee",
+    width = 5, alpha = 0, color = "black", outlier.shape = NA
   ) +
 
   scale_fill_continuous(palette = c("white", "#4cc9f0", "#4361ee")) +
+  scale_y_reverse() +
   theme_vaxgo() +
   labs(
-    x = "Log2FC (Mouse)",
-    y = "Log2FC (Human)",
+    x = "Score",
+    y = "Rank",
+    fill = "Score",
     size = "Score",
-    fill = "Score"
   ) +
-  theme(legend.position = "top", legend.direction = "horizontal") +
-  geom_vline(xintercept = 0, color = "black", linetype = 2) +
-  geom_hline(yintercept = 0, color = "black", linetype = 2) 
+  theme(legend.position = "top", legend.direction = "horizontal") 
 
 # Display
-reg_layers_mouse_human 
+reg_layers_mouse_score_rank 
 
 #Save
-# reg_layers_mouse_human %>%
-#   ggsave(filename = here("Figures", paste0("statistical_modelling_regression_scores_visualized_L2fcMousevsLog2FCHuman.png")),
+# reg_layers_mouse_score_rank %>%
+#   ggsave(filename = here("Figures", paste0("statistical_modelling_regression_scores_visualized_vsMouseRank.png")),
 #          width = 12,
 #          height = 3)
 ```
@@ -2481,12 +1895,10 @@ reg_layers_mouse_human
 
 
 
-
-
 ```{r fig.height=3, fig.width=12}
 ######## Mouse Log2FC vs 1/SE
 reg_layers_mouse_human_se <- legs_notlegs_layers_score_plot %>% 
-  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, rank_log2fc, score_reg, p_adj_mouse) %>% 
+  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, score_reg, p_adj_mouse) %>% 
   filter(p_adj_mouse <= 0.05) %>%
   distinct() %>% 
  inner_join(
@@ -2519,7 +1931,7 @@ reg_layers_mouse_human_se <- legs_notlegs_layers_score_plot %>%
     stroke = 0.5
   ) +
   
-  # Top Marginals (Y-axis position = 110)
+   # Top Marginals (Y-axis position = 110)
   geom_violin(
     aes(x = inverse_se_mouse, y = 6, group = pathogen),
     width = 0.5, alpha = 0.5, color = NA,
@@ -2528,6 +1940,17 @@ reg_layers_mouse_human_se <- legs_notlegs_layers_score_plot %>%
   geom_boxplot(
     aes(x = inverse_se_mouse, y = 6, group = pathogen),
     width = 0.5, alpha = 0, color = "black", outlier.shape = NA
+  ) +
+  
+    # Right Marginals 
+  geom_violin(
+    aes(y = abs_log2fc_diff, x = 15,),
+    fill = "#4361ee",
+    width = 1, alpha = 0.5, color = NA
+  ) +
+  geom_boxplot(
+    aes(y = abs_log2fc_diff, x = 15),
+    width = 1, alpha = 0, color = "black", outlier.shape = NA
   ) +
 
   scale_fill_continuous(palette = c("white", "#4cc9f0", "#4361ee")) +
@@ -2540,13 +1963,12 @@ reg_layers_mouse_human_se <- legs_notlegs_layers_score_plot %>%
 
 # Display
 reg_layers_mouse_human_se 
-  
-
-#Save
-reg_layers_mouse_human_se %>%
-  ggsave(filename = here("Figures", paste0("statistical_modelling_regression_scores_visualized_AbsLog2FC_InverseSE.png")),
-         width = 12,
-         height = 3)
+# 
+# #Save
+# reg_layers_mouse_human_se %>%
+#   ggsave(filename = here("Figures", paste0("statistical_modelling_regression_scores_visualized_AbsLog2FC_InverseSE.png")),
+#          width = 12,
+#          height = 3)
 ```
 
 
@@ -2558,8 +1980,10 @@ reg_layers_mouse_human_se %>%
 ### Combine plots
 All processes, pooled condiitons
 ```{r fig.height=4, fig.width=12}
+
+######## Shared Ranks vs. Score
 legs_notlegs_layers_visualized_allprocesses_pooled = legs_notlegs_layers_score_plot %>% 
-  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, rank_log2fc, score_shared, p_adj_mouse, status, status_original) %>% 
+  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, score_shared, p_adj_mouse, status, status_original) %>% 
   distinct() %>% 
   inner_join(
     eval_metrics_all_summary %>% 
@@ -2567,17 +1991,18 @@ legs_notlegs_layers_visualized_allprocesses_pooled = legs_notlegs_layers_score_p
     by = join_by(treatment, pathogen)
   ) %>% 
   filter(treatment == "Pooled") %>% 
-  ggplot(aes(x = score_shared, y = rank_log2fc, fill = status_original)) +
+  ggplot(aes(x = score_shared, y = abs_rank_log2fc_mouse, fill = status_original)) +
   
-  # Nested faceting displaying conditions and ROC/PR performance
-  facet_nested_wrap(
-    ~ process + treatment + pathogen + 
-      paste0("ROC-AUC=", round(auc_roc, 2), ",\nPR-AUC=", round(auc_pr, 2)),
-    nrow = 1, 
-    strip = strip_nested(size = "variable")
-  ) +
+    facet_nested_wrap(
+  ~ process + treatment + pathogen + 
+    paste0("ROC-AUC=", round(auc_roc, 2), 
+           " \nPR-AUC=", round(auc_pr, 2), 
+           "\nrho=", round(spearman_rank_rho, 2), 
+           ", padj=", format(p_val_spearman_rank, scientific = TRUE, digits = 2)), 
+  nrow = 1, 
+  strip = strip_nested(size = "variable")
+) +
   
-  # Layered scatter plot highlighting Shared vs. Human-only candidates
   geom_point(
     data = . %>% filter(status_original != "Shared"),
     shape = 21, alpha = 0.1, stroke = 0, size = 2
@@ -2597,11 +2022,11 @@ legs_notlegs_layers_visualized_allprocesses_pooled = legs_notlegs_layers_score_p
   
   # Right Marginals (X-axis position = 110)
   geom_violin(
-    aes(y = rank_log2fc, x = 110, fill = status_original),
+    aes(y = abs_rank_log2fc_mouse, x = 110, fill = status_original),
     width = 15, alpha = 0.5, color = NA
   ) +
   geom_boxplot(
-    aes(y = rank_log2fc, x = 110),
+    aes(y = abs_rank_log2fc_mouse, x = 110),
     width = 15, alpha = 0, color = "black", outlier.shape = NA
   ) +
   
@@ -2620,10 +2045,10 @@ legs_notlegs_layers_visualized_allprocesses_pooled = legs_notlegs_layers_score_p
 # Display Plot
 legs_notlegs_layers_visualized_allprocesses_pooled
 
-######## Mouse Log2FC vs AbsDiff
+######## Score vs AbsDiff
 reg_layers_mouse_human_absdiff_pooled <-  
   legs_notlegs_layers_score_plot %>% 
-  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, rank_log2fc, score_reg, p_adj_mouse) %>% 
+  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, score_reg, p_adj_mouse) %>% 
   distinct() %>% 
     filter(p_adj_mouse <= 0.05) %>%
   filter(treatment == "Pooled") %>% 
@@ -2640,8 +2065,7 @@ reg_layers_mouse_human_absdiff_pooled <-
   
   # Facet display showing regression metrics (R² and Spearman ρ) with formatted p-values
   facet_nested_wrap(
-    ~ treatment + pathogen + 
-      paste0("ρ=", round(spearman_rho, 2), " (p=", sprintf("%.2e", p_adj_spearman), ")"),
+    ~ treatment + pathogen,
     nrow = 1, 
     strip = strip_nested(size = "variable")
   ) +
@@ -2653,7 +2077,28 @@ reg_layers_mouse_human_absdiff_pooled <-
     alpha = 1,
     stroke = 0.5
   ) +
-
+   # Right Marginals 
+  geom_violin(
+    aes(y = abs_log2fc_diff, x = 110,),
+    fill = "#4361ee",
+    width = 5, alpha = 0.5, color = NA
+  ) +
+  geom_boxplot(
+    aes(y = abs_log2fc_diff, x = 110),
+    width = 5, alpha = 0, color = "black", outlier.shape = NA
+  ) +
+  
+  # Top Marginals 
+  geom_violin(
+    aes(x = score_reg, y = 6),
+    fill = "#4361ee",
+    width = 0.5, alpha = 0.5, color = NA
+  ) +
+  geom_boxplot(
+    aes(x = score_reg, y = 6),
+    fill = "#4361ee",
+    width = 0.5, alpha = 0, color = "black", outlier.shape = NA
+  ) +
   scale_fill_continuous(palette = c("white", "#4cc9f0", "#4361ee")) +
   theme_vaxgo() +
   labs(
@@ -2666,59 +2111,76 @@ reg_layers_mouse_human_absdiff_pooled <-
 # Display
 reg_layers_mouse_human_absdiff_pooled
 
-######## Mouse Log2FC vs Score
-reg_layers_mouse_human_pooled <- legs_notlegs_layers_score_plot %>% 
-  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, rank_log2fc, score_reg,p_adj_mouse) %>%
-  filter(p_adj_mouse <= 0.05) %>%
-  filter(treatment == "Pooled") %>% 
+######## Mouse Log2FC vs AbsDiff
+reg_layers_mouse_score_rank_pooled <-  
+  legs_notlegs_layers_score_plot %>% 
+  select(treatment, pathogen, hgnc_symbol, mean_log2fc_human, mean_log2fc_mouse, inverse_se_mouse, abs_log2fc_diff, abs_rank_log2fc_mouse, score_reg, p_adj_mouse) %>% 
   distinct() %>% 
+  
+  filter(treatment == "Pooled") %>%
  inner_join(
     eval_metrics_all_summary %>%
       filter(analysis_set == "Pooled"),
     by = join_by(treatment, pathogen)
   ) %>%
   distinct() %>% 
-  ggplot(aes(x = mean_log2fc_mouse, 
-             y = mean_log2fc_human, 
+  ggplot(aes(x = score_reg, y = abs_rank_log2fc_mouse, 
              fill = score_reg,
              )) +
-  
-  # Facet display showing regression metrics (R² and Spearman ρ) with formatted p-values
   facet_nested_wrap(
-    ~ treatment + pathogen + 
-      paste0("ρ=", round(spearman_rho, 2), " (p=", sprintf("%.2e", p_adj_spearman), ")"),
+    ~ treatment + pathogen,
     nrow = 1, 
-    scales = "free",
     strip = strip_nested(size = "variable")
   ) +
   
-  # Layered scatter plot highlighting Shared vs. Human Only candidates
   geom_point(
+    aes(size = score_reg),
     shape = 21, 
+    size = 2,
     alpha = 1,
-    stroke = 0.5,
+    stroke = 0.5
   ) +
-
+      # Right Marginals 
+  geom_violin(
+    aes(y = abs_rank_log2fc_mouse, x = 110,),
+    fill = "#4361ee",
+    width = 5, alpha = 0.5, color = NA
+  ) +
+  geom_boxplot(
+    aes(y = abs_rank_log2fc_mouse, x = 110),
+    width = 5, alpha = 0, color = "black", outlier.shape = NA
+  ) +
+  
+  # Top Marginals 
+  geom_violin(
+    aes(x = score_reg, y = -10),
+    fill = "#4361ee",
+    width = 5, alpha = 0.5, color = NA
+  ) +
+  geom_boxplot(
+    aes(x = score_reg, y = -10),
+    fill = "#4361ee",
+    width = 5, alpha = 0, color = "black", outlier.shape = NA
+  ) +
   scale_fill_continuous(palette = c("white", "#4cc9f0", "#4361ee")) +
+  scale_y_reverse() +
   theme_vaxgo() +
   labs(
-    x = "Log2FC (Mouse)",
-    y = "Log2FC (Human)",
+    x = "Score",
+    y = "Rank",
+    fill = "Score",
     size = "Score",
-    fill = "Score"
   ) +
-  theme(legend.position = "top") +
-  geom_vline(xintercept = 0, color = "black", linetype = 2) +
-  geom_hline(yintercept = 0, color = "black", linetype = 2) 
+  theme(legend.position = "top", legend.direction = "horizontal") 
 
 # Display
-reg_layers_mouse_human_pooled 
+reg_layers_mouse_score_rank_pooled
 
 
 #Merge
 score_visualized_plots = (legs_notlegs_layers_visualized_allprocesses_pooled +theme(legend.position = "right", legend.direction = "vertical") |
 reg_layers_mouse_human_absdiff_pooled + theme(legend.position = "right", legend.direction = "vertical") |
-reg_layers_mouse_human_pooled +theme(legend.position = "right", legend.direction = "vertical")) +
+reg_layers_mouse_score_rank_pooled +theme(legend.position = "right", legend.direction = "vertical")) +
   plot_layout(guides = "collect") +
   plot_annotation(theme = theme(legend.position = "right"))
 
@@ -2726,10 +2188,10 @@ reg_layers_mouse_human_pooled +theme(legend.position = "right", legend.direction
 score_visualized_plots
 
 #Save
-score_visualized_plots %>% 
-  ggsave(filename = here("Figures", "statistical_modelling_regression_scores_visualized.png"),
-         width = 12,
-         height = 4)
+# score_visualized_plots %>% 
+#   ggsave(filename = here("Figures", "statistical_modelling_regression_scores_visualized.png"),
+#          width = 12,
+#          height = 4)
 
 ```
 
