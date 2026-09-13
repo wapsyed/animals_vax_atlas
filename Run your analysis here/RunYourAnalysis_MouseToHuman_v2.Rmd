@@ -1,0 +1,323 @@
+---
+title: "RunYourAnalysis_MouseToHuman_v2"
+output: html_document
+---
+
+# Setup
+
+```{r message=FALSE, warning=FALSE}
+library(here)
+source(here("scripts_notebooks", "required.R"))
+library(tidymodels)
+```
+
+# Load the trained models
+
+The models were trained on mouse-to-human transfer across infection and injury
+conditions. Here we apply them to a new (or the same) mouse experiment.
+
+```{r}
+# Best model per task (selected in the modeling script):
+#   Shared    = Gradient Boosting
+#   Rank      = Random Forest
+#   Direction = Random Forest
+model_shared    <- readRDS(here("tests", "v2", "Models", "gbm_model_shared.rds"))
+model_rank      <- readRDS(here("tests", "v2", "Models", "rf_model_rank.rds"))
+model_direction <- readRDS(here("tests", "v2", "Models", "rf_model_direction.rds"))
+```
+
+# Prepare features table
+
+Please ensure that your input is a table containing the following columns:
+pathogen, treatment, timepoint, hgnc_symbol, mean_l2fc, ci_lower, ci_upper,
+ave_expr, t, p_value, adj_p_val, b, se, sd, inverse_se, organism, and condition.
+
+```{r}
+# Gene expression data (mouse experiment; example: S. aureus, timepoint 12)
+dge_input <- readRDS(here("Run your analysis here", "example_dge_result.rds"))
+
+# Protein identity
+alignments_human2mouse_all <- readRDS(file = here("tables", "alignments_human2mouse_all.rds"))
+
+# Distance
+human_mouse_cds_distance <- readRDS(file = here("tables", "human_mouse_cds_distance.rds"))
+
+# Transcription factors
+gene_tf_shared_unique <- readRDS(file = here("tables", "gene_tf_shared_unique.rds"))
+
+# CREs
+cres_type_homology_comparison_wide <- readRDS(file = here("tables", "cres_type_homology_comparison_wide.rds"))
+
+# BTMs annotation
+btm_annotation_genes <- read_csv(here("tables", "btm_annotation_genes.csv")) %>%
+  select(hgnc_symbol = symbol, process, group, subgroup) %>%
+  distinct()
+```
+
+# Build the feature table
+
+```{r}
+# Non-BTM genes (kept as a category)
+btm_annotation_genes_others <- bind_rows(
+  btm_annotation_genes,
+  dge_input %>%
+    select(hgnc_symbol) %>%
+    anti_join(btm_annotation_genes %>%
+                select(hgnc_symbol) %>%
+                distinct(),
+              by = "hgnc_symbol") %>%
+    mutate(process = "Not-BTM",
+           group = "Not-BTM",
+           subgroup = "Not-BTM")
+)
+
+# BTM annotation in wide format (one column per module group)
+btm_annotation_genes_wide <- btm_annotation_genes_others %>%
+  select(hgnc_symbol, group) %>%
+  group_by(hgnc_symbol, group) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  pivot_wider(names_from = group,
+              values_from = n) %>%
+  column_to_rownames("hgnc_symbol") %>%
+  as.matrix() %>%
+  replace(is.na(.), 0) %>%
+  as.data.frame() %>%
+  rownames_to_column("hgnc_symbol")
+
+# Merge all biological feature layers (wide format)
+human_mouse_gene_annotation_wide <- human_mouse_cds_distance %>%
+  select(hgnc_symbol, dist_k80) %>%
+  inner_join(alignments_human2mouse_all,
+             by = join_by("hgnc_symbol" == "gene")) %>%
+  inner_join(btm_annotation_genes_wide,
+             by = "hgnc_symbol") %>%
+  inner_join(gene_tf_shared_unique,
+             by = join_by("hgnc_symbol" == "gene")) %>%
+  inner_join(cres_type_homology_comparison_wide %>%
+               select(hgnc_symbol, 'n_total_cres_gene':'pct_match_ctcf_PLS_CTCF-bound'),
+             by = join_by(hgnc_symbol))
+```
+
+# GSEA (leading-edge genes)
+
+Rank genes with a composite metric (log2FC x -log(adj_p_val)) and run GSEA
+against the BTM gene sets.
+
+```{r message=FALSE, warning=FALSE}
+# Prepare BTM term-to-gene mapping for GSEA
+term2gene <- btm_annotation_genes %>%
+  select(process, genes = hgnc_symbol)
+
+# Build ranked gene list with composite metric
+df_genes2GSEA <- dge_input %>%
+  distinct() %>%
+  select(condition,
+         genes = hgnc_symbol,
+         log2fold_change = mean_l2fc,
+         adj_p_val) %>%
+  filter(!is.na(genes), !is.na(log2fold_change)) %>%
+  mutate(log2fold_change_logp = log2fold_change * -log(adj_p_val)) %>%
+  select(condition, genes, rank = log2fold_change_logp)
+
+# Run GSEA across all conditions
+gsea_output <- autoGSEA(df = df_genes2GSEA,
+                        TERM2GENE = term2gene,
+                        geneset_name = "BTMs")
+
+# Clean GSEA output and merge with experiment metadata
+gsea_results <- gsea_output$gsea %>%
+  as.data.frame() %>%
+  clean_names() %>%
+  rename(process = id) %>%
+  filter(!is.na(process)) %>%
+  rownames_to_column("del") %>%
+  select(-del, -description) %>%
+  rename(p_adjust_gsea = p_adjust,
+         q_value_gsea = qvalue,
+         rank_gsea = rank) %>%
+  inner_join(dge_input %>%
+               select(pathogen, treatment, timepoint, condition, organism) %>%
+               distinct(),
+             by = "condition")
+
+gsea_results
+```
+
+```{r}
+# Get leading-edge genes (LEGs)
+legs <- gsea_results %>%
+  separate_rows(core_enrichment, sep = "/") %>%
+  mutate(hgnc_symbol = core_enrichment,
+         is_leg = "LEG") %>%
+  inner_join(dge_input,
+             by = join_by(organism, pathogen, treatment, timepoint, condition, hgnc_symbol))
+
+legs %>%
+  dplyr::count(process, is_leg)
+```
+
+# Compute the model features
+
+The models expect mouse-derived features. Here we rename the columns and compute
+the absolute rank, the BTM-only rank and the direction sign.
+
+```{r}
+model_input <- dge_input %>%
+  # Rename to the names expected by the models
+  rename(mean_log2fc_mouse = mean_l2fc,
+         inverse_se_mouse = inverse_se,
+         p_adj_mouse = adj_p_val,
+         timepoint_comparison = timepoint) %>%
+  # Direction of the mouse change
+  mutate(sign_mouse = sign(mean_log2fc_mouse)) %>%
+  # Absolute rank: percentile of |log2FC| x -log10(adjusted P), per condition
+  group_by(treatment, pathogen, timepoint_comparison) %>%
+  mutate(rank_mouse = percent_rank(abs(mean_log2fc_mouse) * -log10(pmax(p_adj_mouse, 1e-300))) * 100) %>%
+  ungroup() %>%
+  # Annotate the biological layers
+  inner_join(human_mouse_gene_annotation_wide,
+             by = "hgnc_symbol")
+
+# BTM-only absolute rank (rank among genes that belong to a BTM)
+btm_gene_set <- btm_annotation_genes %>%
+  distinct(hgnc_symbol) %>%
+  pull(hgnc_symbol)
+
+model_input <- model_input %>%
+  filter(hgnc_symbol %in% btm_gene_set) %>%
+  group_by(treatment, pathogen, timepoint_comparison) %>%
+  mutate(rank_mouse_btm = percent_rank(abs(mean_log2fc_mouse) * -log10(pmax(p_adj_mouse, 1e-300))) * 100) %>%
+  ungroup()
+
+model_input
+```
+
+# Predict human rank, direction and shared status
+
+```{r}
+# Predictions from the three models (probability for classification, value for regression)
+predictions <- model_input %>%
+  bind_cols(
+    predict(model_rank, new_data = model_input, type = "numeric") %>% rename(score_rank = .pred)
+  ) %>%
+  bind_cols(
+    predict(model_direction, new_data = model_input, type = "prob") %>% select(score_direction = .pred_TRUE)
+  ) %>%
+  bind_cols(
+    predict(model_shared, new_data = model_input, type = "prob") %>% select(score_shared = .pred_TRUE)
+  ) %>%
+  mutate(score_translational = score_rank * score_direction)
+
+predictions %>%
+  select(hgnc_symbol, rank_mouse, rank_mouse_btm, sign_mouse,
+         score_shared, score_rank, score_direction, score_translational) %>%
+  arrange(desc(score_translational))
+```
+
+# Visualise the scores
+
+```{r}
+# Spearman rho + BH-adjusted p annotation
+cor_label <- function(df, x, y) {
+  tibble(rho = cor(df[[x]], df[[y]], method = "spearman", use = "complete.obs"),
+         p = cor.test(df[[x]], df[[y]], method = "spearman", exact = FALSE)$p.value) %>%
+    mutate(padj = p.adjust(p, method = "BH"),
+           label = sprintf("rho=%.2f\npadj=%.1e", rho, padj))
+}
+```
+
+```{r fig.height=4, fig.width=6}
+# score_shared: probability of being a shared (mouse + human) leading-edge gene
+label_shared <- cor_label(predictions, "score_shared", "rank_mouse")
+
+predictions %>%
+  ggplot() +
+  aes(x = score_shared, y = rank_mouse,
+      fill = score_shared) +
+  geom_point(shape = 21, size = 2, alpha = 0.5, stroke = 0) +
+  geom_text(data = label_shared,
+            aes(x = Inf, y = Inf, label = label),
+            hjust = 1.1,
+            vjust = 1.2,
+            size = 3,
+            inherit.aes = FALSE) +
+  theme_vaxgo() +
+  scale_fill_gradient2(low = "white", high = "blue") +
+  labs(x = "score_shared (probability)",
+       y = "Absolute rank (mouse)",
+       title = "Shared score")
+```
+
+```{r fig.height=4, fig.width=6}
+# score_rank: predicted human absolute rank
+label_rank <- cor_label(predictions, "score_rank", "rank_mouse")
+
+predictions %>%
+  ggplot() +
+  aes(x = score_rank, y = rank_mouse) +
+  geom_point(shape = 21, size = 2, fill = "#4361ee", alpha = 0.5, stroke = 0) +
+  geom_text(data = label_rank,
+            aes(x = Inf, y = Inf, label = label),
+            hjust = 1.1,
+            vjust = 1.2,
+            size = 3,
+            inherit.aes = FALSE) +
+  theme_vaxgo() +
+  labs(x = "score_rank (predicted human rank)",
+       y = "Absolute rank (mouse)",
+       title = "Rank score")
+```
+
+```{r fig.height=4, fig.width=6}
+# score_direction: probability of concordant direction (same sign in both species)
+label_direction <- cor_label(predictions, "score_direction", "rank_mouse")
+
+predictions %>%
+  ggplot() +
+  aes(x = score_direction, y = rank_mouse) +
+  geom_point(shape = 21, size = 2, fill = "gray40", alpha = 0.5, stroke = 0) +
+  geom_text(data = label_direction,
+            aes(x = Inf, y = Inf, label = label),
+            hjust = 1.1,
+            vjust = 1.2,
+            size = 3,
+            inherit.aes = FALSE) +
+  theme_vaxgo() +
+  labs(x = "score_direction (probability of concordance)",
+       y = "Absolute rank (mouse)",
+       title = "Direction score")
+```
+
+```{r fig.height=4, fig.width=6}
+# score_translational: combined score (high rank AND concordant direction)
+label_translational <- cor_label(predictions, "score_translational", "rank_mouse")
+
+predictions %>%
+  ggplot() +
+  aes(x = score_translational, y = rank_mouse) +
+  geom_point(shape = 21, size = 2, fill = "#e5383b", alpha = 0.5, stroke = 0) +
+  geom_text(data = label_translational,
+            aes(x = Inf, y = Inf, label = label),
+            hjust = 1.1,
+            vjust = 1.2,
+            size = 3,
+            inherit.aes = FALSE) +
+  theme_vaxgo() +
+  labs(x = "score_translational",
+       y = "Absolute rank (mouse)",
+       title = "Translational score")
+```
+
+# Select priority genes with a user-defined cutoff
+
+```{r}
+# Example: keep genes above a cutoff you choose
+score_cutoff <- 0.8
+
+priority_genes <- predictions %>%
+  filter(score_translational >= score_cutoff) %>%
+  arrange(desc(score_translational)) %>%
+  select(hgnc_symbol, score_shared, score_rank, score_direction, score_translational)
+
+priority_genes
+```

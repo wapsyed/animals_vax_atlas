@@ -189,6 +189,32 @@ Outputs are saved directly to `Figures/example_btm_correlation_day7.png`.
 
 ------------------------------------------------------------------------
 
+## Apply the trained models to your own data
+
+The `tests/v2/` pipeline trains mouse-to-human transfer models and exports
+reusable fitted workflows (recipe + model):
+
+| Model | Task | Best algorithm |
+|:------|:-----|:---------------|
+| `rf_model_shared.rds` / `gbm_model_shared.rds` | Shared vs Mouse-only classification | Gradient Boosting |
+| `rf_model_rank.rds` / `gbm_model_rank.rds` | Human absolute rank regression | Random Forest |
+| `rf_model_direction.rds` / `gbm_model_direction.rds` | Directional concordance classification | Random Forest |
+
+Each model can be applied to a new mouse experiment with `predict()`:
+
+``` r
+model_rank <- readRDS("tests/v2/Models/rf_model_rank.rds")
+predict(model_rank, new_data = my_features)
+```
+
+Resources to help you apply the models:
+
+- **Interactive app (flexdashboard / Shiny):** [`Run your analysis here/MouseToHuman_app.Rmd`](Run%20your%20analysis%20here/MouseToHuman_app.Rmd) — upload your DGE table, choose the gene set (BTM or your own TERM2GENE file), set score cutoffs, and get the selected genes, a heatmap and interactive score plots.
+- **Worked example:** [`Run your analysis here/RunYourAnalysis_MouseToHuman_v2.Rmd`](Run%20your%20analysis%20here/RunYourAnalysis_MouseToHuman_v2.Rmd) — full flow from DGE input to GSEA and model prediction.
+- **Guide:** the companion file `example_apply_model.md` (in the `academics_ai_personal` repository) documents the input requirements, the score definitions and the cutoffs.
+
+------------------------------------------------------------------------
+
 ## Citation
 
 If you use this code or data, please cite:
