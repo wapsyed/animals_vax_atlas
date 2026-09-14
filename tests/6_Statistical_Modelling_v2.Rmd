@@ -271,10 +271,23 @@ loco_regression <- function(df, selection, target, set_name, framing) {
     step_zv(all_predictors()) %>%
     step_normalize(all_numeric_predictors())
 
-  # 3. MODEL FITTING (linear + random forest + gradient boosting)
+  # glmnet requires >= 2 predictors; skip lasso when only one is available
+  n_pred <- prep(rec, training = d) %>%
+    bake(new_data = NULL) %>%
+    select(-all_of(target), -any_of(c("hgnc_symbol", "treatment", "pathogen", "timepoint_comparison"))) %>%
+    ncol()
+  use_lasso <- n_pred >= 2
+
+  # 3. MODEL FITTING (linear + lasso + random forest + neural network)
   wf_lm <- workflow() %>%
     add_recipe(rec) %>%
     add_model(linear_reg() %>% set_engine("lm"))
+
+  wf_lasso <- workflow() %>%
+    add_recipe(rec) %>%
+    add_model(linear_reg(penalty = 0.01, mixture = 1) %>%
+                set_engine("glmnet") %>%
+                set_mode("regression"))
 
   wf_rf <- workflow() %>%
     add_recipe(rec) %>%
@@ -282,15 +295,16 @@ loco_regression <- function(df, selection, target, set_name, framing) {
                 set_engine("ranger", importance = "impurity", num.threads = 8) %>%
                 set_mode("regression"))
 
-  wf_gbm <- workflow() %>%
+  wf_nn <- workflow() %>%
     add_recipe(rec) %>%
-    add_model(boost_tree(trees = 500, tree_depth = 6, learn_rate = 0.1, min_n = 5) %>%
-                set_engine("xgboost") %>%
+    add_model(mlp(hidden_units = 10, epochs = 200, penalty = 0.01) %>%
+                set_engine("nnet") %>%
                 set_mode("regression"))
 
   fit_lm <- fit(wf_lm, data = d)
+  fit_lasso <- if (use_lasso) tryCatch(fit(wf_lasso, data = d), error = function(e) NULL) else NULL
   fit_rf <- fit(wf_rf, data = d)
-  fit_gbm <- fit(wf_gbm, data = d)
+  fit_nn <- fit(wf_nn, data = d)
 
   # 4. EXTRACT COEFFICIENTS (standardized effects) & GINI IMPORTANCE
   coefs <- tidy(extract_fit_engine(fit_lm), conf.int = TRUE) %>%
@@ -307,9 +321,13 @@ loco_regression <- function(df, selection, target, set_name, framing) {
   # 5. LOCO CROSS-VALIDATION (4 folds by pathogen; save predictions)
   set.seed(seed)
   folds <- group_vfold_cv(d, group = pathogen, v = 4)
-  cv_lm  <- fit_resamples(wf_lm,  resamples = folds, control = control_resamples(save_pred = TRUE))
-  cv_rf  <- fit_resamples(wf_rf,  resamples = folds, control = control_resamples(save_pred = TRUE))
-  cv_gbm <- fit_resamples(wf_gbm, resamples = folds, control = control_resamples(save_pred = TRUE))
+  cv_lm    <- fit_resamples(wf_lm,    resamples = folds, control = control_resamples(save_pred = TRUE))
+  cv_lasso <- if (use_lasso) {
+    tryCatch(fit_resamples(wf_lasso, resamples = folds, control = control_resamples(save_pred = TRUE)),
+             error = function(e) NULL)
+  } else NULL
+  cv_rf    <- fit_resamples(wf_rf,    resamples = folds, control = control_resamples(save_pred = TRUE))
+  cv_nn    <- fit_resamples(wf_nn,    resamples = folds, control = control_resamples(save_pred = TRUE))
 
   cv_metrics <- function(cv, model_name) {
     m <- collect_metrics(cv)
@@ -318,8 +336,9 @@ loco_regression <- function(df, selection, target, set_name, framing) {
            rsq  = m$mean[m$.metric == "rsq"])
   }
   metrics <- bind_rows(cv_metrics(cv_lm, "Linear (LM)"),
+                       if (!is.null(cv_lasso)) cv_metrics(cv_lasso, "Lasso"),
                        cv_metrics(cv_rf, "Random Forest"),
-                       cv_metrics(cv_gbm, "Gradient Boosting")) %>%
+                       cv_metrics(cv_nn, "Neural Network")) %>%
     mutate(feature_set = set_name, framing = framing, target = target, task = "regression")
 
   # 6. OUT-OF-FOLD PREDICTIONS (one per gene and condition)
@@ -327,13 +346,20 @@ loco_regression <- function(df, selection, target, set_name, framing) {
     mutate(.row = row_number()) %>%
     select(.row, any_of(c("hgnc_symbol", "treatment", "pathogen", "timepoint_comparison")))
   pred_oof <- d_indexed %>%
-    left_join(collect_predictions(cv_lm) %>% select(.row, pred_lm = .pred), by = ".row") %>%
+    left_join(collect_predictions(cv_lm) %>% select(.row, pred_lm = .pred), by = ".row")
+  if (!is.null(cv_lasso)) {
+    pred_oof <- pred_oof %>%
+      left_join(collect_predictions(cv_lasso) %>% select(.row, pred_lasso = .pred), by = ".row")
+  } else {
+    pred_oof <- pred_oof %>% mutate(pred_lasso = NA_real_)
+  }
+  pred_oof <- pred_oof %>%
     left_join(collect_predictions(cv_rf) %>% select(.row, pred_rf = .pred), by = ".row") %>%
-    left_join(collect_predictions(cv_gbm) %>% select(.row, pred_gbm = .pred), by = ".row") %>%
+    left_join(collect_predictions(cv_nn) %>% select(.row, pred_nn = .pred), by = ".row") %>%
     mutate(feature_set = set_name, framing = framing, target = target)
 
   list(metrics = metrics, coefficients = coefs, importance = imp,
-       fit_lm = fit_lm, fit_rf = fit_rf, fit_gbm = fit_gbm, pred_oof = pred_oof)
+       fit_lm = fit_lm, fit_lasso = fit_lasso, fit_rf = fit_rf, fit_nn = fit_nn, pred_oof = pred_oof)
 }
 
 # ------------------------------------------------------------------------------
@@ -357,24 +383,37 @@ loco_classification <- function(df, selection, target, set_name, framing) {
     step_corr(all_numeric_predictors(), threshold = 0.9) %>%
     step_normalize(all_numeric_predictors())
 
-  # 3. MODEL FITTING (logistic + random forest + gradient boosting)
+  # glmnet requires >= 2 predictors; skip lasso when only one is available
+  n_pred <- prep(rec, training = d) %>%
+    bake(new_data = NULL) %>%
+    select(-all_of(target), -any_of(c("hgnc_symbol", "treatment", "pathogen", "timepoint_comparison"))) %>%
+    ncol()
+  use_lasso <- n_pred >= 2
+
+  # 3. MODEL FITTING (logistic + lasso + random forest + neural network)
   wf_log <- workflow() %>%
     add_recipe(rec) %>%
     add_model(logistic_reg() %>% set_engine("glm"))
+  wf_lasso <- workflow() %>%
+    add_recipe(rec) %>%
+    add_model(logistic_reg(penalty = 0.01, mixture = 1) %>%
+                set_engine("glmnet") %>%
+                set_mode("classification"))
   wf_rf <- workflow() %>%
     add_recipe(rec) %>%
     add_model(rand_forest(trees = 500, mtry = 8, min_n = 5) %>%
                 set_engine("ranger", importance = "impurity", num.threads = 8) %>%
                 set_mode("classification"))
-  wf_gbm <- workflow() %>%
+  wf_nn <- workflow() %>%
     add_recipe(rec) %>%
-    add_model(boost_tree(trees = 500, tree_depth = 6, learn_rate = 0.1, min_n = 5) %>%
-                set_engine("xgboost") %>%
+    add_model(mlp(hidden_units = 10, epochs = 200, penalty = 0.01) %>%
+                set_engine("nnet") %>%
                 set_mode("classification"))
 
   fit_log <- fit(wf_log, data = d)
+  fit_lasso <- if (use_lasso) tryCatch(fit(wf_lasso, data = d), error = function(e) NULL) else NULL
   fit_rf <- fit(wf_rf, data = d)
-  fit_gbm <- fit(wf_gbm, data = d)
+  fit_nn <- fit(wf_nn, data = d)
 
   # 4. EXTRACT LOG-ODDS & GINI IMPORTANCE
   coefs <- tidy(extract_fit_engine(fit_log), conf.int = TRUE) %>%
@@ -391,9 +430,13 @@ loco_classification <- function(df, selection, target, set_name, framing) {
   # 5. LOCO CROSS-VALIDATION (4 folds by pathogen; save predictions)
   set.seed(seed)
   folds <- group_vfold_cv(d, group = pathogen, v = 4)
-  cv_log <- fit_resamples(wf_log, resamples = folds, control = control_resamples(save_pred = TRUE))
-  cv_rf  <- fit_resamples(wf_rf,  resamples = folds, control = control_resamples(save_pred = TRUE))
-  cv_gbm <- fit_resamples(wf_gbm, resamples = folds, control = control_resamples(save_pred = TRUE))
+  cv_log   <- fit_resamples(wf_log,   resamples = folds, control = control_resamples(save_pred = TRUE))
+  cv_lasso <- if (use_lasso) {
+    tryCatch(fit_resamples(wf_lasso, resamples = folds, control = control_resamples(save_pred = TRUE)),
+             error = function(e) NULL)
+  } else NULL
+  cv_rf    <- fit_resamples(wf_rf,    resamples = folds, control = control_resamples(save_pred = TRUE))
+  cv_nn    <- fit_resamples(wf_nn,    resamples = folds, control = control_resamples(save_pred = TRUE))
 
   cv_metrics <- function(cv, model_name) {
     p <- collect_predictions(cv)
@@ -402,8 +445,9 @@ loco_classification <- function(df, selection, target, set_name, framing) {
            pr_auc  = pr_auc(p,  truth = !!sym(target), .pred_TRUE, event_level = "second")$.estimate)
   }
   metrics <- bind_rows(cv_metrics(cv_log, "Logistic Regression"),
+                       if (!is.null(cv_lasso)) cv_metrics(cv_lasso, "Lasso"),
                        cv_metrics(cv_rf, "Random Forest"),
-                       cv_metrics(cv_gbm, "Gradient Boosting")) %>%
+                       cv_metrics(cv_nn, "Neural Network")) %>%
     mutate(feature_set = set_name, framing = framing, target = target, task = "classification")
 
   # 6. OUT-OF-FOLD PREDICTIONS (probability of TRUE, one per gene and condition)
@@ -411,13 +455,20 @@ loco_classification <- function(df, selection, target, set_name, framing) {
     mutate(.row = row_number()) %>%
     select(.row, any_of(c("hgnc_symbol", "treatment", "pathogen", "timepoint_comparison")))
   pred_oof <- d_indexed %>%
-    left_join(collect_predictions(cv_log) %>% select(.row, pred_log = .pred_TRUE), by = ".row") %>%
+    left_join(collect_predictions(cv_log) %>% select(.row, pred_log = .pred_TRUE), by = ".row")
+  if (!is.null(cv_lasso)) {
+    pred_oof <- pred_oof %>%
+      left_join(collect_predictions(cv_lasso) %>% select(.row, pred_lasso = .pred_TRUE), by = ".row")
+  } else {
+    pred_oof <- pred_oof %>% mutate(pred_lasso = NA_real_)
+  }
+  pred_oof <- pred_oof %>%
     left_join(collect_predictions(cv_rf) %>% select(.row, pred_rf = .pred_TRUE), by = ".row") %>%
-    left_join(collect_predictions(cv_gbm) %>% select(.row, pred_gbm = .pred_TRUE), by = ".row") %>%
+    left_join(collect_predictions(cv_nn) %>% select(.row, pred_nn = .pred_TRUE), by = ".row") %>%
     mutate(feature_set = set_name, framing = framing, target = target)
 
   list(metrics = metrics, coefficients = coefs, importance = imp,
-       fit_log = fit_log, fit_rf = fit_rf, fit_gbm = fit_gbm, pred_oof = pred_oof)
+       fit_log = fit_log, fit_lasso = fit_lasso, fit_rf = fit_rf, fit_nn = fit_nn, pred_oof = pred_oof)
 }
 ```
 
@@ -451,7 +502,7 @@ write_csv(shared_metrics, here("tests", "v2", "Tables", "shared_loco.csv"))
 
 # Save fitted models (framing A, Full + BTM) for reuse (butchered + compressed)
 saveRDS(butcher(shared_res_A[["Full + BTM"]]$fit_rf),  here("tests", "v2", "Models", "rf_model_shared.rds"),  compress = "xz")
-saveRDS(butcher(shared_res_A[["Full + BTM"]]$fit_gbm), here("tests", "v2", "Models", "gbm_model_shared.rds"), compress = "xz")
+saveRDS(butcher(shared_res_A[["Full + BTM"]]$fit_nn), here("tests", "v2", "Models", "nn_model_shared.rds"), compress = "xz")
 ```
 
 ## Rank
@@ -477,7 +528,7 @@ write_csv(rank_metrics, here("tests", "v2", "Tables", "rank_loco.csv"))
 
 # Save fitted models ("Mouse + layers") for reuse (butchered + compressed)
 saveRDS(butcher(rank_res[["Mouse + layers"]]$fit_rf),  here("tests", "v2", "Models", "rf_model_rank.rds"),  compress = "xz")
-saveRDS(butcher(rank_res[["Mouse + layers"]]$fit_gbm), here("tests", "v2", "Models", "gbm_model_rank.rds"), compress = "xz")
+saveRDS(butcher(rank_res[["Mouse + layers"]]$fit_nn), here("tests", "v2", "Models", "nn_model_rank.rds"), compress = "xz")
 ```
 
 ## Direction
@@ -514,7 +565,7 @@ write_csv(direction_metrics, here("tests", "v2", "Tables", "direction_loco.csv")
 
 # Save fitted models ("Direction + layers") for reuse (butchered + compressed)
 saveRDS(butcher(direction_res[["Direction + layers"]]$fit_rf),  here("tests", "v2", "Models", "rf_model_direction.rds"),  compress = "xz")
-saveRDS(butcher(direction_res[["Direction + layers"]]$fit_gbm), here("tests", "v2", "Models", "gbm_model_direction.rds"), compress = "xz")
+saveRDS(butcher(direction_res[["Direction + layers"]]$fit_nn), here("tests", "v2", "Models", "nn_model_direction.rds"), compress = "xz")
 ```
 
 
@@ -558,8 +609,9 @@ model_col <- function(name) {
   case_when(
     name == "Logistic Regression" ~ "pred_log",
     name == "Linear (LM)"         ~ "pred_lm",
+    name == "Lasso"               ~ "pred_lasso",
     name == "Random Forest"       ~ "pred_rf",
-    name == "Gradient Boosting"   ~ "pred_gbm",
+    name == "Neural Network"      ~ "pred_nn",
     TRUE ~ NA_character_
   )
 }
@@ -817,7 +869,7 @@ shared_performance_plot <- shared_performance_bars %>%
   facet_grid(metric ~ framing, scales = "free_y") +
   scale_fill_manual(values = c("Random Forest" = "#4DBBD5FF",
                                "Logistic Regression" = "gray70",
-                               "Gradient Boosting" = "#e5383b")) +
+                               "Lasso" = "#f4a261", "Neural Network" = "#e5383b")) +
   theme_vaxgo() +
   labs(x = "",
        y = "LOCO CV estimate",
@@ -857,7 +909,7 @@ rank_direction_plot <- rank_direction_data %>%
   scale_fill_manual(values = c("Random Forest" = "#4DBBD5FF",
                                "Logistic Regression" = "gray70",
                                "Linear (LM)" = "gray70",
-                               "Gradient Boosting" = "#e5383b")) +
+                               "Lasso" = "#f4a261", "Neural Network" = "#e5383b")) +
   theme_vaxgo() +
   theme(axis.text.x = element_text(angle = 30, hjust = 1, size = 7)) +
   labs(x = "",
@@ -1163,7 +1215,7 @@ p_auc_bars <- shared_metrics %>%
   facet_wrap(~ framing, ncol = 1) +
   scale_fill_manual(values = c("Random Forest" = "#4DBBD5FF",
                                "Logistic Regression" = "gray70",
-                               "Gradient Boosting" = "#e5383b")) +
+                               "Lasso" = "#f4a261", "Neural Network" = "#e5383b")) +
   theme_vaxgo() +
   labs(x = "AUC",
        y = "",

@@ -196,9 +196,9 @@ reusable fitted workflows (recipe + model):
 
 | Model | Task | Best algorithm |
 |:------|:-----|:---------------|
-| `rf_model_shared.rds` / `gbm_model_shared.rds` | Shared vs Mouse-only classification | Gradient Boosting |
-| `rf_model_rank.rds` / `gbm_model_rank.rds` | Human absolute rank regression | Random Forest |
-| `rf_model_direction.rds` / `gbm_model_direction.rds` | Directional concordance classification | Random Forest |
+| `rf_model_shared.rds` / `nn_model_shared.rds` | Shared vs Mouse-only classification | Random Forest |
+| `rf_model_rank.rds` / `nn_model_rank.rds` | Human absolute rank regression | Random Forest |
+| `rf_model_direction.rds` / `nn_model_direction.rds` | Directional concordance classification | Random Forest |
 
 Each model can be applied to a new mouse experiment with `predict()`:
 
