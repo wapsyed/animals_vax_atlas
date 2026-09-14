@@ -20,7 +20,7 @@ model_shared    <- readRDS(here("tests", "v2", "Models", "gbm_model_shared.rds")
 model_rank      <- readRDS(here("tests", "v2", "Models", "rf_model_rank.rds"))
 model_direction <- readRDS(here("tests", "v2", "Models", "rf_model_direction.rds"))
 
-# Annotation tables (biological layers)
+# Annotation tables (biological layers; always BTM-based for the model features)
 alignments_human2mouse_all <- readRDS(here("tables", "alignments_human2mouse_all.rds"))
 human_mouse_cds_distance <- readRDS(here("tables", "human_mouse_cds_distance.rds"))
 gene_tf_shared_unique <- readRDS(here("tables", "gene_tf_shared_unique.rds"))
@@ -37,6 +37,38 @@ cor_label <- function(df, x, y) {
     mutate(padj = p.adjust(p, method = "BH"),
            label = sprintf("rho=%.2f\npadj=%.1e", rho, padj))
 }
+
+# GSEA helper (uses the chosen gene set)
+run_gsea <- function(dge, geneset) {
+  term2gene <- geneset %>%
+    select(process, genes = hgnc_symbol)
+  df2 <- dge %>%
+    distinct() %>%
+    select(condition, genes = hgnc_symbol, log2fold_change = mean_l2fc, adj_p_val) %>%
+    filter(!is.na(genes), !is.na(log2fold_change)) %>%
+    mutate(rank = log2fold_change * -log(adj_p_val)) %>%
+    select(condition, genes, rank)
+  gsea_output <- autoGSEA(df = df2, TERM2GENE = term2gene, geneset_name = "user")
+  gsea_output$gsea %>%
+    as.data.frame() %>%
+    clean_names() %>%
+    rename(process = id) %>%
+    filter(!is.na(process)) %>%
+    rownames_to_column("del") %>%
+    select(-del, -description) %>%
+    rename(p_adjust_gsea = p_adjust,
+           q_value_gsea = qvalue,
+           rank_gsea = rank)
+}
+
+# Prediction helper
+predict_scores <- function(d) {
+  d %>%
+    bind_cols(predict(model_rank, new_data = d, type = "numeric") %>% rename(score_rank = .pred)) %>%
+    bind_cols(predict(model_direction, new_data = d, type = "prob") %>% select(score_direction = .pred_TRUE)) %>%
+    bind_cols(predict(model_shared, new_data = d, type = "prob") %>% select(score_shared = .pred_TRUE)) %>%
+    mutate(score_translational = score_rank * score_direction)
+}
 ```
 
 Sidebar {.sidebar}
@@ -48,7 +80,7 @@ fileInput("dge_file",
           accept = c(".rds", ".csv"))
 
 radioButtons("geneset_source",
-             "Gene set",
+             "Gene set (for GSEA)",
              choices = c("BTM (default)", "Custom"),
              selected = "BTM (default)")
 
@@ -66,7 +98,12 @@ numericInput("cut_shared",        "score_shared",        0,   min = 0, max = 1, 
 numericInput("cut_rank",          "score_rank",          0,   min = 0, max = 100, step = 1)
 numericInput("cut_direction",     "score_direction",     0,   min = 0, max = 1,   step = 0.05)
 
-downloadButton("download_table", "Download selected genes")
+textInput("output_name", "Output file name", value = "selected_genes")
+
+actionButton("run", "Run analysis", class = "btn-primary")
+
+downloadButton("download_table", "Download selected genes (CSV)")
+downloadButton("download_figure", "Download figure (PNG)")
 ```
 
 Column {data-width=650}
@@ -86,7 +123,7 @@ dge_data <- reactive({
   }
 })
 
-# --- Gene set (BTM or custom) ---
+# --- Gene set for GSEA (BTM or custom) ---
 geneset_data <- reactive({
   if (input$geneset_source == "BTM (default)") {
     btm_annotation_genes
@@ -104,16 +141,14 @@ geneset_data <- reactive({
   }
 })
 
-# --- Annotate features + compute ranks ---
-annotated <- reactive({
+# --- Annotate features (always BTM-based for the model) ---
+annotated_data <- reactive({
   dge <- dge_data()
-  gs <- geneset_data()
 
-  # Biological layers
   btm_wide <- bind_rows(
-    gs %>% select(hgnc_symbol, group),
+    btm_annotation_genes %>% select(hgnc_symbol, group),
     dge %>% select(hgnc_symbol) %>%
-      anti_join(gs %>% select(hgnc_symbol) %>% distinct(), by = "hgnc_symbol") %>%
+      anti_join(btm_annotation_genes %>% select(hgnc_symbol) %>% distinct(), by = "hgnc_symbol") %>%
       mutate(group = "Not-BTM")
   ) %>%
     group_by(hgnc_symbol, group) %>%
@@ -144,26 +179,33 @@ annotated <- reactive({
     mutate(rank_mouse = percent_rank(abs(mean_log2fc_mouse) * -log10(pmax(p_adj_mouse, 1e-300))) * 100) %>%
     ungroup() %>%
     inner_join(layers, by = "hgnc_symbol") %>%
-    # Shared model operates on BTM genes, using the BTM-only absolute rank
-    filter(hgnc_symbol %in% gs$hgnc_symbol) %>%
+    filter(hgnc_symbol %in% btm_annotation_genes$hgnc_symbol) %>%
     group_by(treatment, pathogen, timepoint_comparison) %>%
     mutate(rank_mouse_btm = percent_rank(abs(mean_log2fc_mouse) * -log10(pmax(p_adj_mouse, 1e-300))) * 100) %>%
     ungroup()
 })
 
-# --- Predict the three models ---
-predictions <- reactive({
-  d <- annotated()
-  d %>%
-    bind_cols(predict(model_rank, new_data = d, type = "numeric") %>% rename(score_rank = .pred)) %>%
-    bind_cols(predict(model_direction, new_data = d, type = "prob") %>% select(score_direction = .pred_TRUE)) %>%
-    bind_cols(predict(model_shared, new_data = d, type = "prob") %>% select(score_shared = .pred_TRUE)) %>%
-    mutate(score_translational = score_rank * score_direction)
+# --- Button-gated pipeline with progress ---
+results <- eventReactive(input$run, {
+  withProgress(message = "Running analysis...", value = 0, {
+    incProgress(0.15, detail = "Reading input")
+    d <- annotated_data()
+
+    incProgress(0.25, detail = "Running GSEA")
+    g <- run_gsea(dge_data(), geneset_data())
+
+    incProgress(0.35, detail = "Predicting scores")
+    p <- predict_scores(d)
+
+    incProgress(0.25, detail = "Done")
+    list(predictions = p, gsea = g)
+  })
 })
 
 # --- Apply the user-defined cutoffs ---
 selected <- reactive({
-  predictions() %>%
+  req(results())
+  results()$predictions %>%
     filter(score_translational >= input$cut_translational,
            score_shared >= input$cut_shared,
            score_rank >= input$cut_rank,
@@ -177,16 +219,27 @@ renderTable({
 }, striped = TRUE, bordered = TRUE, hover = TRUE)
 
 downloadHandler(
-  filename = function() "selected_genes.csv",
+  filename = function() paste0(input$output_name, ".csv"),
   content = function(file) write_csv(selected(), file)
 )
+```
+
+### Leading-edge genes (GSEA)
+
+```{r}
+renderTable({
+  req(results())
+  results()$gsea %>%
+    select(process, p_adjust_gsea, rank_gsea, core_enrichment)
+}, striped = TRUE, bordered = TRUE, hover = TRUE)
 ```
 
 ### Score plots (interactive)
 
 ```{r}
 renderPlotly({
-  p <- predictions() %>%
+  req(results())
+  p <- results()$predictions %>%
     ggplot() +
     aes(x = score_shared, y = rank_mouse) +
     geom_point(shape = 21, size = 1.5, fill = "#4DBBD5FF", alpha = 0.6, stroke = 0) +
@@ -198,7 +251,8 @@ renderPlotly({
 
 ```{r}
 renderPlotly({
-  p <- predictions() %>%
+  req(results())
+  p <- results()$predictions %>%
     ggplot() +
     aes(x = score_rank, y = rank_mouse) +
     geom_point(shape = 21, size = 1.5, fill = "#4361ee", alpha = 0.6, stroke = 0) +
@@ -210,7 +264,8 @@ renderPlotly({
 
 ```{r}
 renderPlotly({
-  p <- predictions() %>%
+  req(results())
+  p <- results()$predictions %>%
     ggplot() +
     aes(x = score_direction, y = rank_mouse) +
     geom_point(shape = 21, size = 1.5, fill = "gray40", alpha = 0.6, stroke = 0) +
@@ -222,7 +277,8 @@ renderPlotly({
 
 ```{r}
 renderPlotly({
-  p <- predictions() %>%
+  req(results())
+  p <- results()$predictions %>%
     ggplot() +
     aes(x = score_translational, y = rank_mouse) +
     geom_point(shape = 21, size = 1.5, fill = "#e5383b", alpha = 0.6, stroke = 0) +
@@ -238,7 +294,7 @@ Column {data-width=350}
 ### Selected genes heatmap (interactive)
 
 ```{r}
-renderPlotly({
+heat_plot <- reactive({
   sel <- selected()
   req(nrow(sel) > 1)
 
@@ -276,9 +332,10 @@ renderPlotly({
     mutate(hgnc_symbol = factor(hgnc_symbol, levels = gene_levels),
            feature = factor(feature, levels = feat_levels))
 
-  p <- heat_long %>%
+  heat_long %>%
     ggplot() +
-    aes(x = feature, y = hgnc_symbol, fill = z, text = paste0(hgnc_symbol, "\n", feature, ": ", round(value, 2))) +
+    aes(x = feature, y = hgnc_symbol, fill = z,
+        text = paste0(hgnc_symbol, "\n", feature, ": ", round(value, 2))) +
     geom_tile(color = "white", linewidth = 0.3) +
     scale_fill_gradientn(colours = c("#4361ee", "white", "#e5383b"),
                          limits = c(-2.5, 2.5),
@@ -287,7 +344,14 @@ renderPlotly({
     theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
           axis.text.y = element_text(size = 7)) +
     labs(x = "", y = "", fill = "z-score", title = "Selected genes")
-
-  ggplotly(p, tooltip = "text")
 })
+
+renderPlotly({
+  ggplotly(heat_plot(), tooltip = "text")
+})
+
+downloadHandler(
+  filename = function() paste0(input$output_name, "_heatmap.png"),
+  content = function(file) ggsave(file, heat_plot(), width = 10, height = 8, dpi = 300)
+)
 ```
