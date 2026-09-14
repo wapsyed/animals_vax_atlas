@@ -45,6 +45,7 @@ The computational pipeline is structured into 9 modular R Markdown notebooks des
 7.  **`4_Performance_EqualTImepoints.Rmd` & `4_Performance_DifferentTimepoints.rmd`** — Assesses murine predictive power for human module regulation. Generates ROC curves and computes Area Under the Curve (AUC) (**Figure 43b**) for matched (equal) timepoints and cross-temporal (different) timepoints, benchmarked against biological controls (e.g., Duchenne Muscular Dystrophy, DMD) and permutation null distributions.
 8.  **`5.1_EvolutionaryAnalysis_Protein.Rmd` & `5.2_EvolutionaryAnalysis_Regulation.Rmd`** — Dissects evolutionary determinants. Retrieves Ensembl BioMart coding sequences (CDS) and amino acid identity %, computes codon-level pairwise alignment and **Kimura 2-Parameter (K80) genetic distances**, and integrates ENCODE candidate Cis-Regulatory Elements (cCREs: PLS, pELS, dELS, and CTCF-bound sites) across GRCh38 and mm10 to assess promoter conservation.
 9.  **`6_Statistical_Modelling.Rmd`** — Builds multi-modal machine learning workflows using `tidymodels` (Random Forest via `ranger`, Elastic Net) combining coding sequence distance (`dist_k80`), amino acid identity, transcription factor networks, and promoter cCRE structures to model the genomic determinants of translatability.
+10. **`Modelling/6_Statistical_Modelling_v2.Rmd`** — Consolidated modelling pipeline that predicts the **human** response gene by gene. Uses two nested feature layers (**DGE Baseline → Full + BTM**), two universes (all human DEGs for *rank transfer* and *direction*; mouse LEGs for *shared-LEG classification*), and **leave-one-pathogen-out (LOCO)** cross-validation. Benchmarks four algorithms — linear/logistic regression, **lasso**, **random forest** and a **neural network** — and exports the best model per task plus four out-of-fold scores (`score_shared`, `score_rank`, `score_direction`, `score_translational`). See [Statistical modelling](#statistical-modelling-v2) below.
 
 ------------------------------------------------------------------------
 
@@ -67,6 +68,11 @@ animals_vax_atlas/
 │   ├── 5.2_EvolutionaryAnalysis_Regulation.Rmd # ENCODE cCRE promoter/enhancer regulatory architecture
 │   ├── 6_Statistical_Modelling.Rmd          # tidymodels predictive modeling of translatability drivers
 │   └── FIT_training_datasets.Rmd            # Found In Translation (FIT) benchmarking
+├── Modelling/                               # Consolidated mouse-to-human transfer modelling (v2)
+│   ├── 6_Statistical_Modelling_v2.Rmd       # LOCO modelling: DGE Baseline -> Full + BTM
+│   ├── Models/                              # Fitted workflows (rf_model_*.rds, nn_model_*.rds) and metrics
+│   ├── Tables/                              # LOCO metrics, observed-vs-predicted, priority lists
+│   └── Figures/                             # Fig. 7 (multilayer modelling), contributions, AUC bars
 ├── tables/                                  # Intermediate and processed RDS/CSV data files
 │   ├── DataCuration/                        # BioProject search outputs and curation tables
 │   ├── Genomic/                             # ENCODE cCRE BED files (PLS, pELS, dELS, CTCF-bound)
@@ -116,8 +122,11 @@ All package dependencies are managed via `renv`. Pinned core specifications:
 | **biomaRt** | 2.66.1 | Bioconductor | Cross-species orthology and Ensembl sequence retrieval |
 | **pwalign** | Bioconductor 3.22 | Bioconductor | Pairwise global sequence alignment |
 | **ape** | 5.8 | CRAN | DNAbin conversion and Kimura K80 distance calculation |
-| **tidymodels** | 1.2.0 | CRAN | Machine learning recipes, workflows, and evaluation |
-| **ranger** | 0.16.0 | CRAN | High-performance Random Forest implementation |
+| **tidymodels** | 1.5.0 | CRAN | Machine learning recipes, workflows, and evaluation |
+| **ranger** | 0.18.0 | CRAN | High-performance Random Forest implementation |
+| **glmnet** | 5.0 | CRAN | Lasso and elastic-net regularised regression |
+| **nnet** | 7.3.21 | CRAN | Single-hidden-layer neural network |
+| **butcher** | 0.4.0 | CRAN | Model size reduction for serialisation (`butcher()`) |
 | **ComplexHeatmap** | 2.26.1 | Bioconductor | High-dimensional heatmap visualizations |
 | **pROC** | 1.18.5 | CRAN | ROC curve and AUC generation |
 
@@ -174,6 +183,7 @@ Each notebook sources `scripts_notebooks/required.R`, initializing the shared wo
 | **5.1** | `5.1_EvolutionaryAnalysis_Protein.Rmd` | Ensembl BioMart CDS data, `all_alignments`, `all_human_mouse_gsea_btm_legs.rds` | `human_mouse_cds_distance.rds` (Kimura K80), protein identity vs $\Delta\text{log}_2\text{FC}$ |
 | **5.2** | `5.2_EvolutionaryAnalysis_Regulation.Rmd` | ENCODE cCRE BED files (`tables/Genomic/*`), gene TSS coords | `cres_type_homology_comparison_wide.rds`, promoter conservation plots |
 | **6** | `6_Statistical_Modelling.Rmd` | `human_mouse_statsmodelling_parameters_values.rds` | `tidymodels` Random Forest & Elastic Net models, VIP feature importance |
+| **6 (v2)** | `Modelling/6_Statistical_Modelling_v2.Rmd` | `human_mouse_statsmodelling_gene_annotated_layers.rds`, `dge_btm_process_genes_diff_bygene_clean_filtered.rds` | `Modelling/Models/rf_model_*.rds`, LOCO metrics, `score_table_v2.rds`, Fig. 7 |
 
 ------------------------------------------------------------------------
 
@@ -189,23 +199,52 @@ Outputs are saved directly to `Figures/example_btm_correlation_day7.png`.
 
 ------------------------------------------------------------------------
 
-## Apply the trained models to your own data
+## Statistical modelling (v2)
 
-The `tests/v2/` pipeline trains mouse-to-human transfer models and exports
-reusable fitted workflows (recipe + model):
+The consolidated pipeline [`Modelling/6_Statistical_Modelling_v2.Rmd`](Modelling/6_Statistical_Modelling_v2.Rmd) predicts the **human** response gene by gene from a mouse experiment, using biological feature layers and **leave-one-pathogen-out (LOCO)** cross-validation.
 
-| Model | Task | Best algorithm |
-|:------|:-----|:---------------|
-| `rf_model_shared.rds` / `nn_model_shared.rds` | Shared vs Mouse-only classification | Random Forest |
-| `rf_model_rank.rds` / `nn_model_rank.rds` | Human absolute rank regression | Random Forest |
-| `rf_model_direction.rds` / `nn_model_direction.rds` | Directional concordance classification | Random Forest |
+### Design
 
-Each model can be applied to a new mouse experiment with `predict()`:
+- **Feature layers (2, nested):** `DGE Baseline` (mouse differential-expression summary) → `Full + BTM` (adds BTM enrichment scores/ranks, sequence evolution, TF features and cCRE architecture).
+- **Universes:** all human DEGs (`p_adj_human <= 0.05`) for **rank transfer** and **direction**; mouse leading-edge genes (`Shared` vs `Mouse only`) for **shared-LEG classification**.
+- **Targets:** absolute rank (0–100, percentile of `|Log2FC| x -log10(adj P)`), directional concordance (`sign_mouse == sign_human`), and LEG sharing (`Shared` vs `Mouse only`).
+- **Framings:** `A_predictive` keeps the mouse magnitude; `B_explanatory` removes it (tests the biological layers alone).
+- **Algorithms benchmarked:** linear/logistic regression, **lasso** (`glmnet`, penalty = 0.01), **random forest** (`ranger`, 500 trees) and a single-hidden-layer **neural network** (`nnet`, 10 units).
+
+### Best model per task (out-of-fold, LOCO)
+
+| Task | Metric | Random Forest | Neural Network | Lasso | Linear |
+|:-----|:-------|:-------------:|:--------------:|:-----:|:------:|
+| Shared LEGs (predictive, Full + BTM) | ROC-AUC | **0.557** | 0.536 | 0.489 | 0.487 |
+| Shared LEGs (explanatory, Full + BTM) | ROC-AUC | **0.592** | 0.580 | 0.507 | 0.521 |
+| Human rank transfer (Mouse + layers) | R² | **0.234** | 0.068 | 0.072 | 0.072 |
+| Directional concordance (Direction + layers) | ROC-AUC | **0.868** | 0.722 | 0.502 | 0.499 |
+
+The **random forest is the best algorithm for every task**; the lasso never improved on the unregularised linear model, indicating the transferable signal is predominantly non-linear and multivariate.
+
+### Exported artefacts (`Modelling/Models/`)
+
+| File | Task |
+|:-----|:-----|
+| `rf_model_shared.rds` / `nn_model_shared.rds` | Shared vs Mouse-only classification |
+| `rf_model_rank.rds` / `nn_model_rank.rds` | Human absolute rank regression |
+| `rf_model_direction.rds` / `nn_model_direction.rds` | Directional concordance classification |
+
+Models are saved with `butcher()` and `compress = "xz"`. Each can be applied to a new mouse experiment with `predict()`:
 
 ``` r
-model_rank <- readRDS("tests/v2/Models/rf_model_rank.rds")
+model_rank <- readRDS("Modelling/Models/rf_model_rank.rds")
 predict(model_rank, new_data = my_features)
 ```
+
+### Out-of-fold scores
+
+Every gene is scored by a model trained without its pathogen:
+
+- `score_shared` — probability of being a shared LEG.
+- `score_rank` — predicted human absolute rank (0–100).
+- `score_direction` — probability of concordant direction.
+- `score_translational` — `score_rank x score_direction`.
 
 Resources to help you apply the models:
 

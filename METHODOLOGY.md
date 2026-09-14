@@ -216,9 +216,13 @@ To interrogate promoter and enhancer rewiring, Candidate Cis-Regulatory Elements
 
 ## VIII. MULTI-MODAL STATISTICAL MODELING (`tidymodels`)
 
-Script `6_Statistical_Modelling.Rmd` integrates heterogeneous evolutionary, regulatory, and transcriptomic metrics into a unified predictive modeling framework.
+Two complementary scripts perform statistical modelling:
 
-### VIII.A Feature Matrix Construction
+- `scripts_notebooks/6_Statistical_Modelling.Rmd` — the original, exploratory script (feature matrix + Random Forest / Elastic Net with in-sample metrics).
+- `Modelling/6_Statistical_Modelling_v2.Rmd` — the consolidated **mouse-to-human transfer** pipeline used for the manuscript (Figure 7). It predicts the **human** response gene by gene using **leave-one-pathogen-out (LOCO)** cross-validation.
+
+### VIII.A Original Exploratory Script (`6_Statistical_Modelling.Rmd`)
+
 A master feature matrix (`human_mouse_statsmodelling_parameters_values.rds`) was assembled by merging:
 1. **Structural Coding Evolution:** Kimura K80 CDS distance (`dist_k80`), amino acid identity %.
 2. **Transcriptional Concordance:** $\Delta \log_2\text{FC}$, sampling stability $SD$, linear model standard error $SE$.
@@ -226,10 +230,69 @@ A master feature matrix (`human_mouse_statsmodelling_parameters_values.rds`) was
 4. **Transcription Factor (TF) Networks:** Shared vs. species-unique TF binding site counts within orthologous promoters.
 5. **Functional Domain Annotations:** BTM module category, immune vs. non-immune designation.
 
-### VIII.B Model Training & Variable Importance
-- **Algorithms:** Random Forest classifiers/regressors (via the `ranger` engine) and regularized Elastic Net regression (via `glmnet`) implemented within the `tidymodels` ecosystem.
-- **Cross-Validation:** 10-fold cross-validation repeated 5 times, stratified by condition and immune module category.
-- **Variable Importance in Projection (VIP):** Permutation-based variable importance metrics were computed via `vip::vip()` to rank the genomic and epigenetic predictors governing cross-species translatability.
+Algorithms were Random Forest classifiers/regressors (`ranger`) and regularized Elastic Net regression (`glmnet`), evaluated by 10-fold cross-validation repeated 5 times and ranked by permutation-based Variable Importance in Projection (`vip::vip()`).
+
+### VIII.B Consolidated Transfer Pipeline (`6_Statistical_Modelling_v2.Rmd`)
+
+#### VIII.B.1 Feature layers (two nested sets)
+Instead of adding six independent layers, the v2 pipeline uses two nested feature sets, separating the transferable biological signal from the mouse magnitude:
+1. **DGE Baseline** — mouse differential-expression summary: absolute rank (`rank_mouse`) for rank transfer; direction sign (`sign_mouse`) for directional concordance; `mean_log2fc_mouse`, BTM-only rank (`rank_mouse_btm`) and precision (`inverse_se_mouse`) for shared-LEG classification.
+2. **Full + BTM** — adds the biological layers: sequence evolution (`dist_k80`, `identity_human2mouse`), TF features (`n_tf_total`, `pct_tf_shared`), cCRE architecture (PLS/pELS/dELS counts and match percentages, CTCF-bound fractions) and BTM membership.
+
+For the classification task two framings are compared:
+- **A (predictive):** retains the mouse magnitude (`mean_log2fc_mouse`, `rank_mouse_btm`).
+- **B (explanatory):** removes the mouse magnitude to test the biological layers alone.
+
+#### VIII.B.2 Universes, targets and ranks
+Two gene universes are defined:
+1. **All human DEGs** (`p_adj_human <= 0.05`) — rank transfer and direction.
+2. **Mouse LEGs** (`Shared` or `Mouse only`, BTM scope) — shared-LEG classification.
+
+Each gene receives an **absolute rank** (0–100) from the percentile of $|\text{Log}_2\text{FC}| \times -\log_{10}(\text{adjusted } P)$ within its universe and condition:
+
+$$\text{rank} = \text{percent\_rank}\left(|\text{Log}_2\text{FC}| \times -\log_{10}(\text{adj. } P)\right) \times 100$$
+
+Targets:
+- **Rank transfer:** `rank_human` (continuous, 0–100).
+- **Direction:** `sign_concordant = sign(Log2FC_mouse) == sign(Log2FC_human)` (binary).
+- **Shared-LEG classification:** `Shared` vs `Mouse only` (binary).
+
+Derived metrics: $\text{rank\_diff} = |\text{rank\_mouse} - \text{rank\_human}|$ (convergence) and $\text{dual\_rank} = \min(\text{rank\_mouse}, \text{rank\_human})$ (relevance).
+
+#### VIII.B.3 Leave-one-pathogen-out cross-validation
+To avoid optimistic bias, models are evaluated by **leave-one-pathogen-out (LOCO)** cross-validation over the four infection/injury folds (*S. aureus*, *E. coli*, Burn, Trauma). Every gene is predicted by a model trained without its pathogen; these out-of-fold predictions feed both the metrics and the exported scores.
+
+#### VIII.B.4 Algorithms benchmarked
+Four paradigms are compared under identical recipes (`step_dummy`, `step_zv`/`step_nzv`, `step_corr` for classification at threshold 0.9, and `step_normalize`):
+1. **Linear/logistic regression** (baseline).
+2. **Lasso** (`glmnet`, `mixture = 1`, penalty = 0.01). Skipped automatically when fewer than two predictors remain (glmnet requires $\ge 2$).
+3. **Random forest** (`ranger`, 500 trees, `mtry = 8`, `min_n = 5`, Gini importance).
+4. **Neural network** (`nnet`, one hidden layer of 10 units, `epochs = 200`, weight decay 0.01).
+
+The **random forest was the best algorithm in all three tasks**; the lasso never improved on the unregularised linear model, indicating that the transferable signal is predominantly non-linear and multivariate.
+
+#### VIII.B.5 Performance metrics
+- **Classification (shared LEGs, direction):** ROC-AUC and PR-AUC (`yardstick`).
+- **Regression (rank transfer):** $R^2$ and RMSE.
+
+Out-of-fold LOCO results (best feature set per task):
+
+| Task | Metric | Random Forest | Neural Network | Lasso | Linear |
+|:-----|:-------|:-------------:|:--------------:|:-----:|:------:|
+| Shared LEGs (predictive, Full + BTM) | ROC-AUC | **0.557** | 0.536 | 0.489 | 0.487 |
+| Shared LEGs (explanatory, Full + BTM) | ROC-AUC | **0.592** | 0.580 | 0.507 | 0.521 |
+| Human rank transfer (Mouse + layers) | $R^2$ | **0.234** | 0.068 | 0.072 | 0.072 |
+| Directional concordance (Direction + layers) | ROC-AUC | **0.868** | 0.722 | 0.502 | 0.499 |
+
+#### VIII.B.6 Out-of-fold scores
+From the best model per task, four scores are exported (each gene scored by a model trained without its condition):
+- `score_shared` — probability of being a shared LEG.
+- `score_rank` — predicted human absolute rank (0–100).
+- `score_direction` — probability of concordant direction.
+- `score_translational` — $\text{score\_rank} \times \text{score\_direction}$.
+
+#### VIII.B.7 Model serialisation and application
+The best workflows are reduced with `butcher()` and stored with `compress = "xz"` (`rf_model_*.rds`, `nn_model_*.rds` in `Modelling/Models/`) so they can be reloaded and applied to new mouse experiments with `predict()`. The interactive app (`Run your analysis here/MouseToHuman_app.Rmd`) and the worked example (`RunYourAnalysis_MouseToHuman_v2.Rmd`) consume these artefacts directly.
 
 ---
 
@@ -261,3 +324,7 @@ renv::restore()
 10. **tidyverse:** Wickham, H., Averick, M., Bryan, J., Chang, W., McGowan, L. D., François, R., ... & Yutani, H. (2019). Welcome to the tidyverse. *Journal of Open Source Software*, 4(43), 1686.
 11. **ComplexHeatmap:** Gu, Z., Eils, R., & Schlesner, M. (2016). Complex heatmaps reveal patterns and correlations in multidimensional genomic data. *Bioinformatics*, 32(18), 2847-2849.
 12. **pROC:** Robin, X., Turck, N., Hainard, A., Tiberti, N., Lisacek, F., Sanchez, J. C., & Müller, M. (2011). pROC: an open-source package for R and S+ to analyze and compare ROC curves. *BMC Bioinformatics*, 12(1), 77.
+13. **glmnet:** Friedman, J., Hastie, T., & Tibshirani, R. (2010). Regularization paths for generalized linear models via coordinate descent. *Journal of Statistical Software*, 33(1), 1-22.
+14. **nnet:** Venables, W. N., & Ripley, B. D. (2002). *Modern Applied Statistics with S* (4th ed.). Springer. (R package `nnet`.)
+15. **butcher:** Kuhn, M., & Silge, J. (2024). *butcher: Model butchering for R*. R package. https://butcher.tidymodels.org
+16. **yardstick:** Kuhn, M., Vaughan, D., & Hvitfeldt, E. (2024). *yardstick: Tidy characterizations of model performance*. R package. https://yardstick.tidymodels.org
