@@ -25,22 +25,27 @@ bioc_pkgs <- c(
   "limma", "fgsea"
 )
 
-# devtools::install_github('erocoar/gghalves')
-# install.packages("https://cran.r-project.org/src/contrib/Archive/notifier/notifier_1.0.0.tar.gz")
-# install.packages("vip", repos = c("https://bgreenwell.r-universe.dev", "https://cloud.r-project.org"))
-library(vip)
-
 # 3. Safe, Non-Destructive Loading Pipeline
 # Combining lists to load sequentially via base R
 all_packages <- c(cran_pkgs, "notifier", bioc_pkgs)
 
-for (pkg in all_packages) {
-  if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
-    stop(paste0(
-      "\n[ERRO] O pacote '", pkg, "' nao esta instalado no ambiente renv.\n",
-      "Por favor, execute no console: renv::install('", pkg, "')\n",
-      "Depois disso, reinicie a sessao e rode o script novamente."
-    ))
+# Set `options(vaxgo.skip_package_loading = TRUE)` before sourcing this file to
+# skip the full package load (used by lightweight apps that load only the
+# packages they need). The helper definitions below are still created.
+if (!isTRUE(getOption("vaxgo.skip_package_loading"))) {
+  # devtools::install_github('erocoar/gghalves')
+  # install.packages("https://cran.r-project.org/src/contrib/Archive/notifier/notifier_1.0.0.tar.gz")
+  # install.packages("vip", repos = c("https://bgreenwell.r-universe.dev", "https://cloud.r-project.org"))
+  library(vip)
+
+  for (pkg in all_packages) {
+    if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+      stop(paste0(
+        "\n[ERRO] O pacote '", pkg, "' nao esta instalado no ambiente renv.\n",
+        "Por favor, execute no console: renv::install('", pkg, "')\n",
+        "Depois disso, reinicie a sessao e rode o script novamente."
+      ))
+    }
   }
 }
 
@@ -128,8 +133,15 @@ colors = list(organism = c("FIT" = "#4361ee",
                                   "DEG, both" = "#4DBBD5FF", 
                                   "DEG, human" = "black", 
                                   "DEG, mouse" = "#90A4AEFF",
-                                  "not DEG" = "gray50",
-                                  "not DEG, both" = "gray90"), 
+                                  "not DEG" = "gray25",
+                                  "not DEG, both" = "gray50",
+                                  "All genes" = "#4361ee"), 
+              degs_comparison_boxplot = c("DEG" = "black",
+                                       "DEG, both" = "black", 
+                                       "DEG, human" = "white", 
+                                       "DEG, mouse" = "black",
+                                       "not DEG" = "black",
+                                       "not DEG, both" = "black"), 
               shared = c("All genes" = "gray75",
                          "All DEGs" = "gray25",
                          "Shared DEGs" = "#3dccc7",

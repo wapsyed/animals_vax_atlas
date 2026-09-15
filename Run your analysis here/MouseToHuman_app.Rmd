@@ -3,24 +3,81 @@ title: "Mouse-to-Human Translational Analysis"
 output:
   flexdashboard::flex_dashboard:
     orientation: columns
-    vertical_layout: fill
+    vertical_layout: scroll
     runtime: shiny
+runtime: shiny
 ---
 
+<!--
+================================================================================
+ HOW TO EDIT THIS APP  (flexdashboard + Shiny)
+================================================================================
+ Layout
+ ------
+   Column {.sidebar}  -> LEFT panel (global): all the INPUTS
+   <Page name>        -> every level-1 header (`=======`) is a PAGE, shown as a
+                         tab in the top navbar (e.g. "Selected genes")
+
+   Inside a page you will find `### Title` subpanels, each with:
+     * a ```{r} chunk that builds the UI (plotlyOutput / dataTableOutput)
+     * a ```{r} chunk that defines the outputs (renderPlotly / renderDataTable)
+
+ Where to change things
+ ----------------------
+   * Packages, models, annotation tables .......... chunk `setup`  (below)
+   * Colours, fonts, cards, titles ................ the ```{css} chunk
+   * Inputs (cutoffs, padj filter, file upload) ... section `Column {.sidebar}`
+   * Each table / figure .......................... its page / `### ...` section
+
+ IMPORTANT
+ ---------
+   Outputs inside `if (exists("output", inherits = TRUE)) { ... }` are assigned
+   explicitly to `output$<id>` (the guard keeps the file renderable outside of
+   Shiny). The page tabs come from the level-1 headers (`=======`).
+================================================================================
+-->
+
 ```{r setup, include=FALSE}
-library(flexdashboard)
-library(shiny)
-library(here)
+# ============================================================================
+# SETUP - packages, models, annotation tables and helper functions.
+# Edit this chunk if you need extra packages or other model / table files.
+# ============================================================================
+
+# `required.R` normally loads ~80 packages (~35 s). The option below makes it
+# skip that load (the app loads only what it needs) while still defining the
+# helper functions used here (theme_vaxgo, autoGSEA, ...).
+options(vaxgo.skip_package_loading = TRUE)
+
+# Packages used by the app ---------------------------------------------------
+suppressPackageStartupMessages({
+  library(here)          # project-relative paths
+  library(tidyverse)     # dplyr / ggplot2 / readr / tidyr ...
+  library(janitor)       # clean_names() used by run_gsea()
+  library(tidymodels)    # predict() on the fitted workflows
+  library(plotly)        # ggplotly()
+  library(shiny)         # inputs / outputs
+  library(flexdashboard) # dashboard layout
+})
+
 source(here("scripts_notebooks", "required.R"))
-library(tidymodels)
-library(plotly)
 
-# Best model per task (selected in the modeling script)
-model_shared    <- readRDS(here("Modelling", "Models", "rf_model_shared.rds"))
-model_rank      <- readRDS(here("Modelling", "Models", "rf_model_rank.rds"))
-model_direction <- readRDS(here("Modelling", "Models", "rf_model_direction.rds"))
+# --- Fitted models (best algorithm per task, from the modelling script) -----
+# Loaded lazily on the first prediction so the app starts faster.
+models <- local({
+  cache <- NULL
+  function() {
+    if (is.null(cache)) {
+      cache <<- list(
+        shared    = readRDS(here("Modelling", "Models", "rf_model_shared.rds")),
+        rank      = readRDS(here("Modelling", "Models", "rf_model_rank.rds")),
+        direction = readRDS(here("Modelling", "Models", "rf_model_direction.rds"))
+      )
+    }
+    cache
+  }
+})
 
-# Annotation tables (biological layers; always BTM-based for the model features)
+# --- Annotation tables (biological layers; always BTM-based for the model) --
 alignments_human2mouse_all <- readRDS(here("tables", "alignments_human2mouse_all.rds"))
 human_mouse_cds_distance <- readRDS(here("tables", "human_mouse_cds_distance.rds"))
 gene_tf_shared_unique <- readRDS(here("tables", "gene_tf_shared_unique.rds"))
@@ -38,8 +95,10 @@ cor_label <- function(df, x, y) {
            label = sprintf("rho=%.2f\npadj=%.1e", rho, padj))
 }
 
-# GSEA helper (uses the chosen gene set)
+# GSEA helper (uses the chosen gene set). clusterProfiler is loaded lazily on
+# the first run to keep app startup fast.
 run_gsea <- function(dge, geneset) {
+  suppressPackageStartupMessages(library(clusterProfiler))
   term2gene <- geneset %>%
     select(process, genes = hgnc_symbol)
   df2 <- dge %>%
@@ -63,63 +122,132 @@ run_gsea <- function(dge, geneset) {
 
 # Prediction helper
 predict_scores <- function(d) {
+  m <- models()
   d %>%
-    bind_cols(predict(model_rank, new_data = d, type = "numeric") %>% rename(score_rank = .pred)) %>%
-    bind_cols(predict(model_direction, new_data = d, type = "prob") %>% select(score_direction = .pred_TRUE)) %>%
-    bind_cols(predict(model_shared, new_data = d, type = "prob") %>% select(score_shared = .pred_TRUE)) %>%
+    bind_cols(predict(m$rank, new_data = d, type = "numeric") %>% rename(score_rank = .pred)) %>%
+    bind_cols(predict(m$direction, new_data = d, type = "prob") %>% select(score_direction = .pred_TRUE)) %>%
+    bind_cols(predict(m$shared, new_data = d, type = "prob") %>% select(score_shared = .pred_TRUE)) %>%
     mutate(score_translational = score_rank * score_direction)
+}
+
+# --- Feature heatmap helpers --------------------------------------------------
+# Features shown in the heatmaps (readable label = column name)
+heat_map <- c(
+  "Log2FC (mouse)"        = "mean_log2fc_mouse",
+  "Absolute rank (mouse)" = "rank_mouse",
+  "1/SE"                  = "inverse_se_mouse",
+  "Protein identity"      = "identity_human2mouse",
+  "Kimura"                = "dist_k80",
+  "nTotal TFs"            = "n_tf_total",
+  "%Shared TFs"           = "pct_tf_shared",
+  "nTotal cCREs"          = "n_total_cres_gene",
+  "%Match Type (PLS)"     = "pct_match_type_PLS",
+  "%Match Type (pELS)"    = "pct_match_type_pELS",
+  "%Match Type (dELS)"    = "pct_match_type_dELS",
+  "CTCF match"            = "pct_match_ctcf_dELS_CTCF-bound"
+)
+
+build_heat_mat <- function(df) {
+  df %>%
+    distinct(hgnc_symbol, .keep_all = TRUE) %>%
+    select(hgnc_symbol, all_of(unname(heat_map))) %>%
+    setNames(c("hgnc_symbol", names(heat_map))) %>%
+    column_to_rownames("hgnc_symbol") %>%
+    as.matrix()
+}
+
+# Rows = genes, columns = features. z-scores are computed relative to `baseline`
+# (all genes) so the colours are comparable across different gene selections.
+feature_heatmap <- function(genes_df, baseline_mat, title) {
+  base_mean <- colMeans(baseline_mat, na.rm = TRUE)
+  base_sd   <- apply(baseline_mat, 2, sd, na.rm = TRUE)
+  heat_dat  <- build_heat_mat(genes_df)
+  heat_z    <- sweep(sweep(heat_dat, 2, base_mean, "-"), 2, base_sd, "/")
+  heat_z[is.na(heat_z)] <- 0
+  gene_levels <- rownames(heat_z)[hclust(dist(heat_z))$order]
+  feat_levels <- colnames(heat_z)[hclust(dist(t(heat_z)))$order]
+  heat_dat %>%
+    as.data.frame() %>%
+    rownames_to_column("hgnc_symbol") %>%
+    pivot_longer(-hgnc_symbol, names_to = "feature", values_to = "value") %>%
+    mutate(z = (value - base_mean[feature]) / base_sd[feature],
+           hgnc_symbol = factor(hgnc_symbol, levels = gene_levels),
+           feature = factor(feature, levels = feat_levels)) %>%
+    ggplot() +
+    aes(x = feature, y = hgnc_symbol, fill = z,
+        text = paste0(hgnc_symbol, "\n", feature, ": ", round(value, 2))) +
+    geom_tile(color = "white", linewidth = 0.3) +
+    scale_fill_gradientn(colours = c("#4DBBD5FF", "white", "#4361ee"),
+                         limits = c(-2.5, 2.5), oob = scales::squish) +
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+          axis.text.y = element_text(size = 7)) +
+    labs(x = "", y = "", fill = "z-score (all genes)", title = title)
+}
+
+# --- Score heatmap helper -----------------------------------------------------
+# Rows = genes, columns = the four model scores (z-scored across ALL genes).
+score_heat_cols <- c(
+  "Shared"        = "score_shared",
+  "Rank"          = "score_rank",
+  "Direction"     = "score_direction",
+  "Translational" = "score_translational"
+)
+
+score_heatmap <- function(genes_df, baseline_df, title) {
+  score_mat <- function(df) {
+    df %>%
+      distinct(hgnc_symbol, .keep_all = TRUE) %>%
+      select(hgnc_symbol, all_of(unname(score_heat_cols))) %>%
+      setNames(c("hgnc_symbol", names(score_heat_cols))) %>%
+      column_to_rownames("hgnc_symbol") %>%
+      as.matrix()
+  }
+  base_mat  <- score_mat(baseline_df)
+  base_mean <- colMeans(base_mat, na.rm = TRUE)
+  base_sd   <- apply(base_mat, 2, sd, na.rm = TRUE)
+  heat_dat  <- score_mat(genes_df)
+  heat_z    <- sweep(sweep(heat_dat, 2, base_mean, "-"), 2, base_sd, "/")
+  heat_z[is.na(heat_z)] <- 0
+  gene_levels <- rownames(heat_z)[hclust(dist(heat_z))$order]
+  heat_dat %>%
+    as.data.frame() %>%
+    rownames_to_column("hgnc_symbol") %>%
+    pivot_longer(-hgnc_symbol, names_to = "score", values_to = "value") %>%
+    mutate(z = (value - base_mean[score]) / base_sd[score],
+           hgnc_symbol = factor(hgnc_symbol, levels = gene_levels),
+           score = factor(score, levels = colnames(heat_dat))) %>%
+    ggplot() +
+    aes(x = score, y = hgnc_symbol, fill = z,
+        text = paste0(hgnc_symbol, "\n", score, ": ", round(value, 3))) +
+    geom_tile(color = "white", linewidth = 0.3) +
+    scale_fill_gradientn(colours = c("#4DBBD5FF", "white", "#4361ee"),
+                         limits = c(-2.5, 2.5), oob = scales::squish) +
+    theme_vaxgo() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 8),
+          axis.text.y = element_text(size = 7)) +
+    labs(x = "", y = "", fill = "z-score (all genes)", title = title)
 }
 ```
 
-Sidebar {.sidebar}
-=====================================
+```{r reactives, include=FALSE}
+# ============================================================================
+# REACTIVES - the data pipeline, shared by all pages.
+# They update when the user clicks "Run analysis" (or changes an input).
+# ============================================================================
 
-```{r}
-fileInput("dge_file",
-          "DGE table (.rds or .csv)",
-          accept = c(".rds", ".csv"))
-
-radioButtons("geneset_source",
-             "Gene set (for GSEA)",
-             choices = c("BTM (default)", "Custom"),
-             selected = "BTM (default)")
-
-conditionalPanel(
-  condition = "input.geneset_source == 'Custom'",
-  fileInput("geneset_file",
-            "Custom gene set (TERM2GENE: term, gene)",
-            accept = c(".rds", ".csv"))
-)
-
-h4("Score cutoffs")
-
-numericInput("cut_translational", "score_translational", 0.8, min = 0, max = 100, step = 0.1)
-numericInput("cut_shared",        "score_shared",        0,   min = 0, max = 1,   step = 0.05)
-numericInput("cut_rank",          "score_rank",          0,   min = 0, max = 100, step = 1)
-numericInput("cut_direction",     "score_direction",     0,   min = 0, max = 1,   step = 0.05)
-
-textInput("output_name", "Output file name", value = "selected_genes")
-
-actionButton("run", "Run analysis", class = "btn-primary")
-
-downloadButton("download_table", "Download selected genes (CSV)")
-downloadButton("download_figure", "Download figure (PNG)")
-```
-
-Column {data-width=650}
--------------------------------------
-
-### Selected genes
-
-```{r}
 # --- Input table ---
 dge_data <- reactive({
-  req(input$dge_file)
-  ext <- tools::file_ext(input$dge_file$name)
-  if (ext == "rds") {
-    readRDS(input$dge_file$datapath)
+  if (input$dge_source == "example") {
+    readRDS(here("Run your analysis here", "example_dge_result.rds"))
   } else {
-    readr::read_csv(input$dge_file$datapath, show_col_types = FALSE)
+    req(input$dge_file)
+    ext <- tools::file_ext(input$dge_file$name)
+    if (ext == "rds") {
+      readRDS(input$dge_file$datapath)
+    } else {
+      readr::read_csv(input$dge_file$datapath, show_col_types = FALSE)
+    }
   }
 })
 
@@ -212,146 +340,455 @@ selected <- reactive({
            score_direction >= input$cut_direction)
 })
 
-renderTable({
-  selected() %>%
-    select(hgnc_symbol, score_shared, score_rank, score_direction, score_translational) %>%
-    arrange(desc(score_translational))
-}, striped = TRUE, bordered = TRUE, hover = TRUE)
-
-downloadHandler(
-  filename = function() paste0(input$output_name, ".csv"),
-  content = function(file) write_csv(selected(), file)
-)
-```
-
-### Leading-edge genes (GSEA)
-
-```{r}
-renderTable({
+# --- Enriched GSEA processes passing the padj cutoff ---
+enriched_processes <- reactive({
   req(results())
   results()$gsea %>%
-    select(process, p_adjust_gsea, rank_gsea, core_enrichment)
-}, striped = TRUE, bordered = TRUE, hover = TRUE)
+    filter(p_adjust_gsea < input$padj_filter) %>%
+    distinct(process) %>%
+    arrange(process) %>%
+    pull(process)
+})
+
+# --- Mouse leading-edge genes of the selected process ---
+process_genes <- reactive({
+  req(results(), input$process_select)
+  results()$gsea %>%
+    filter(process == input$process_select) %>%
+    pull(core_enrichment) %>%
+    strsplit("/") %>%
+    unlist() %>%
+    unique()
+})
+
+# --- Keep the sidebar process dropdown in sync with the results ------------
+if (exists("session", inherits = TRUE)) {
+  observe({
+    updateSelectInput(session, "process_select", choices = enriched_processes())
+  })
+}
 ```
 
-### Score plots (interactive)
+```{css, echo=FALSE}
+/* ==========================================================================
+   THEME / STYLE - edit the colours and sizes here.
+   Layout: white background, dark LEFT sidebar, dark subpanel titles.
+   The colour palette is defined once in `:root` and reused everywhere.
+   ========================================================================== */
+:root {
+  --ink:           #0f172a;
+  --blue:          #2563eb;
+  --blue-soft:     #3b82f6;
+  --blue-light:    #60a5fa;
+  --line:          #e5e7eb;
+  --bg:            #ffffff;
+  --sidebar-bg:    #0b0f1a;
+  --sidebar-bg-2:  #111c33;
+  --sidebar-text:  #e5e7eb;
+  --sidebar-input: #1e293b;
+}
 
-```{r}
-renderPlotly({
-  req(results())
-  p <- results()$predictions %>%
-    ggplot() +
-    aes(x = score_shared, y = rank_mouse) +
-    geom_point(shape = 21, size = 1.5, fill = "#4DBBD5FF", alpha = 0.6, stroke = 0) +
-    theme_vaxgo() +
-    labs(x = "score_shared", y = "Absolute rank (mouse)", title = "Shared score")
-  ggplotly(p, tooltip = c("x", "y"))
-})
+html, body, #dashboard-container, .dashboard-container {
+  background: var(--bg) !important;
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* --- Sidebar ------------------------------------------------------------- */
+.section.sidebar {
+  background: linear-gradient(180deg, var(--sidebar-bg) 0%, var(--sidebar-bg-2) 100%) !important;
+  color: var(--sidebar-text);
+  border-right: 3px solid var(--blue);
+  padding: 18px 16px;
+}
+.section.sidebar h1,
+.section.sidebar h2.sidebar { display: none; }          /* hide the generic "Column" label */
+.section.sidebar h4,
+.section.sidebar .control-label {
+  color: var(--sidebar-text) !important;
+  font-weight: 600;
+}
+.section.sidebar h4 {
+  color: var(--blue-light) !important;
+  font-size: 1.02rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  margin-top: 18px;
+}
+.section.sidebar .form-control {
+  background: var(--sidebar-input) !important;
+  color: var(--sidebar-text) !important;
+  border: 1px solid #2b3a5c !important;
+  border-radius: 8px;
+}
+.section.sidebar .form-control:focus {
+  border-color: var(--blue-soft) !important;
+  box-shadow: 0 0 0 0.18rem rgba(59,130,246,0.35) !important;
+}
+.section.sidebar .radio label,
+.section.sidebar .checkbox label {
+  color: var(--sidebar-text) !important;
+}
+
+/* --- Constrain the width of the main content area ------------------------ */
+.section.level2:not(.sidebar) {
+  max-width: 1150px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* --- Buttons ------------------------------------------------------------- */
+.btn {
+  border-radius: 8px !important;
+  font-weight: 600;
+}
+.btn-default, .btn-primary {
+  background: var(--blue) !important;
+  border-color: var(--blue) !important;
+  color: #fff !important;
+}
+.btn-default:hover, .btn-primary:hover {
+  background: var(--blue-soft) !important;
+  border-color: var(--blue-soft) !important;
+  box-shadow: 0 4px 14px rgba(37,99,235,0.35);
+}
+
+/* --- Subpanels: white cards with dark titles ----------------------------- */
+.section.level3 {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(15,23,42,0.06), 0 10px 28px rgba(15,23,42,0.06);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  overflow: auto;
+  min-height: 240px;
+}
+.section.level3 > h3 {
+  color: var(--ink) !important;
+  font-weight: 700;
+  font-size: 1.02rem;
+  padding-left: 10px;
+  border-left: 4px solid var(--blue);
+  margin: 0 0 12px 0;
+}
+
+/* --- Tables -------------------------------------------------------------- */
+.shiny-html-output table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+.shiny-html-output table thead th {
+  background: #eff6ff;
+  color: var(--ink);
+  border-bottom: 2px solid var(--blue);
+  font-weight: 600;
+  padding: 6px 8px;
+}
+.shiny-html-output table tbody td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.shiny-html-output table tbody tr:nth-child(even) { background: #f8fafc; }
+.shiny-html-output table tbody tr:hover          { background: #eff6ff; }
+
+/* --- Scrollbars ---------------------------------------------------------- */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #f1f5f9; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--blue-light); }
 ```
 
-```{r}
-renderPlotly({
-  req(results())
-  p <- results()$predictions %>%
-    ggplot() +
-    aes(x = score_rank, y = rank_mouse) +
-    geom_point(shape = 21, size = 1.5, fill = "#4361ee", alpha = 0.6, stroke = 0) +
-    theme_vaxgo() +
-    labs(x = "score_rank", y = "Absolute rank (mouse)", title = "Rank score")
-  ggplotly(p, tooltip = c("x", "y"))
-})
-```
+Column {.sidebar}
+======================================================================
 
 ```{r}
-renderPlotly({
-  req(results())
-  p <- results()$predictions %>%
-    ggplot() +
-    aes(x = score_direction, y = rank_mouse) +
-    geom_point(shape = 21, size = 1.5, fill = "gray40", alpha = 0.6, stroke = 0) +
-    theme_vaxgo() +
-    labs(x = "score_direction", y = "Absolute rank (mouse)", title = "Direction score")
-  ggplotly(p, tooltip = c("x", "y"))
-})
-```
+# ============================================================================
+# INPUTS (left sidebar). Add or change controls here.
+# ============================================================================
 
-```{r}
-renderPlotly({
-  req(results())
-  p <- results()$predictions %>%
-    ggplot() +
-    aes(x = score_translational, y = rank_mouse) +
-    geom_point(shape = 21, size = 1.5, fill = "#e5383b", alpha = 0.6, stroke = 0) +
-    theme_vaxgo() +
-    labs(x = "score_translational", y = "Absolute rank (mouse)", title = "Translational score")
-  ggplotly(p, tooltip = c("x", "y"))
-})
-```
+# --- Data source: bundled example vs. your own DGE table --------------------
+radioButtons("dge_source",
+             "DGE input",
+             choices = c("Example dataset (S. aureus)" = "example",
+                         "Upload my own" = "upload"),
+             selected = "example")
 
-Column {data-width=350}
--------------------------------------
-
-### Selected genes heatmap (interactive)
-
-```{r}
-heat_plot <- reactive({
-  sel <- selected()
-  req(nrow(sel) > 1)
-
-  heat_dat <- sel %>%
-    distinct(hgnc_symbol, .keep_all = TRUE) %>%
-    transmute(
-      hgnc_symbol,
-      `Log2FC (mouse)` = mean_log2fc_mouse,
-      `Absolute rank (mouse)` = rank_mouse,
-      `1/SE` = inverse_se_mouse,
-      `Protein identity` = identity_human2mouse,
-      `Kimura` = dist_k80,
-      `nTotal TFs` = n_tf_total,
-      `%Shared TFs` = pct_tf_shared,
-      `nTotal cCREs` = n_total_cres_gene,
-      `%Match Type (PLS)` = `pct_match_type_PLS`,
-      `%Match Type (pELS)` = `pct_match_type_pELS`,
-      `%Match Type (dELS)` = `pct_match_type_dELS`,
-      `CTCF match` = `pct_match_ctcf_dELS_CTCF-bound`
-    )
-
-  # Cluster rows and columns, then use the resulting order in the ggplot
-  mat <- heat_dat %>%
-    column_to_rownames("hgnc_symbol") %>%
-    as.matrix()
-  mat_z <- scale(mat)
-  gene_levels <- rownames(mat_z)[hclust(dist(mat_z))$order]
-  feat_levels <- colnames(mat_z)[hclust(dist(t(mat_z)))$order]
-
-  heat_long <- heat_dat %>%
-    pivot_longer(-hgnc_symbol, names_to = "feature", values_to = "value") %>%
-    group_by(feature) %>%
-    mutate(z = as.numeric(scale(value))) %>%
-    ungroup() %>%
-    mutate(hgnc_symbol = factor(hgnc_symbol, levels = gene_levels),
-           feature = factor(feature, levels = feat_levels))
-
-  heat_long %>%
-    ggplot() +
-    aes(x = feature, y = hgnc_symbol, fill = z,
-        text = paste0(hgnc_symbol, "\n", feature, ": ", round(value, 2))) +
-    geom_tile(color = "white", linewidth = 0.3) +
-    scale_fill_gradientn(colours = c("#4361ee", "white", "#e5383b"),
-                         limits = c(-2.5, 2.5),
-                         oob = scales::squish) +
-    theme_vaxgo() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
-          axis.text.y = element_text(size = 7)) +
-    labs(x = "", y = "", fill = "z-score", title = "Selected genes")
-})
-
-renderPlotly({
-  ggplotly(heat_plot(), tooltip = "text")
-})
-
-downloadHandler(
-  filename = function() paste0(input$output_name, "_heatmap.png"),
-  content = function(file) ggsave(file, heat_plot(), width = 10, height = 8, dpi = 300)
+conditionalPanel(
+  condition = "input.dge_source == 'upload'",
+  fileInput("dge_file",
+            "DGE table (.rds or .csv)",
+            accept = c(".rds", ".csv"))
 )
+
+radioButtons("geneset_source",
+             "Gene set (for GSEA)",
+             choices = c("BTM (default)", "Custom"),
+             selected = "BTM (default)")
+
+conditionalPanel(
+  condition = "input.geneset_source == 'Custom'",
+  fileInput("geneset_file",
+            "Custom gene set (TERM2GENE: term, gene)",
+            accept = c(".rds", ".csv"))
+)
+
+h4("Score cutoffs")
+
+numericInput("cut_translational", "score_translational", 0.8, min = 0, max = 100, step = 0.1)
+numericInput("cut_shared",        "score_shared",        0,   min = 0, max = 1,   step = 0.05)
+numericInput("cut_rank",          "score_rank",          0,   min = 0, max = 100, step = 1)
+numericInput("cut_direction",     "score_direction",     0,   min = 0, max = 1,   step = 0.05)
+
+h4("GSEA process filter")
+
+numericInput("padj_filter", "padj cutoff (GSEA)", 0.25, min = 0, max = 1, step = 0.05)
+
+# Filled dynamically after "Run analysis" (see the reactives chunk).
+selectInput("process_select", "Process (GSEA)", choices = NULL)
+
+textInput("output_name", "Output file name", value = "selected_genes")
+
+actionButton("run", "Run analysis", class = "btn-primary")
+
+downloadButton("download_table", "Download selected genes (CSV)")
+downloadButton("download_figure", "Download figure (PNG)")
+```
+
+Selected genes
+======================================================================
+
+Column
+----------------------------------------------------------------------
+
+<!-- =========================================================================
+     PAGE 1 - selected genes: table (top) + score scatter (bottom).
+     ========================================================================= -->
+
+### Selected genes and scores
+
+<!-- Table of selected genes (paginated, 10 rows per page). Reacts to the score
+     cutoffs in the sidebar. -->
+
+```{r}
+DT::dataTableOutput("tbl_selected")
+```
+
+```{r}
+if (exists("output", inherits = TRUE)) {
+  output$tbl_selected <- DT::renderDataTable({
+    req(results())
+    selected() %>%
+      select(hgnc_symbol, score_shared, score_rank, score_direction, score_translational) %>%
+      arrange(desc(score_translational))
+  }, options = list(pageLength = 10, scrollX = TRUE), rownames = FALSE)
+
+  output$download_table <- downloadHandler(
+    filename = function() paste0(input$output_name, ".csv"),
+    content = function(file) write_csv(selected(), file)
+  )
+}
+```
+
+### Score scatter
+
+<!-- Pick the score on the x-axis with the dropdown (y is always the mouse
+     absolute rank). Hover shows the gene symbol and the selected score. -->
+
+```{r}
+selectInput("score_x", "Score (x-axis)",
+            choices = c("score_shared", "score_rank", "score_direction", "score_translational"),
+            selected = "score_shared")
+```
+
+```{r}
+plotlyOutput("plot_score", height = "520px")
+```
+
+```{r}
+if (exists("output", inherits = TRUE)) {
+  output$plot_score <- renderPlotly({
+    req(results())
+    score_col <- input$score_x
+    p <- results()$predictions %>%
+      ggplot() +
+      aes(x = .data[[score_col]], y = rank_mouse,
+          text = paste0(hgnc_symbol,
+                        "\n", score_col, ": ", round(.data[[score_col]], 2),
+                        "\nrank_mouse: ", round(rank_mouse, 1))) +
+      geom_point(shape = 21, size = 1.5, fill = "#4DBBD5FF",
+                 colour = "black", stroke = 0.3, alpha = 0.7) +
+      theme_vaxgo() +
+      labs(x = score_col, y = "Absolute rank (mouse)", title = "Score vs mouse rank")
+    ggplotly(p, tooltip = "text") %>%
+      layout(margin = list(l = 60, r = 15, b = 55, t = 40))
+  })
+}
+```
+
+GSEA processes
+======================================================================
+
+Column
+----------------------------------------------------------------------
+
+<!-- =========================================================================
+     PAGE 2 - GSEA: processes table (top) + process heatmap (bottom).
+     ========================================================================= -->
+
+### Enriched processes (GSEA)
+
+<!-- GSEA results table (paginated, 10 rows per page). -->
+
+```{r}
+DT::dataTableOutput("tbl_gsea")
+```
+
+```{r}
+if (exists("output", inherits = TRUE)) {
+  output$tbl_gsea <- DT::renderDataTable({
+    req(results())
+    results()$gsea %>%
+      select(process, p_adjust_gsea, rank_gsea, core_enrichment)
+  }, options = list(pageLength = 10, scrollX = TRUE), rownames = FALSE)
+}
+```
+
+### Process heatmap
+
+<!-- NES heatmap of every process that passes `padj cutoff (GSEA)` (sidebar). -->
+
+```{r}
+plotlyOutput("plot_processes", height = "600px")
+```
+
+```{r}
+if (exists("output", inherits = TRUE)) {
+  output$plot_processes <- renderPlotly({
+    req(results())
+    g <- results()$gsea %>%
+      filter(p_adjust_gsea < input$padj_filter, !is.na(nes))
+    req(nrow(g) > 0)
+    p <- g %>%
+      mutate(process = fct_reorder(process, nes, .fun = function(x) max(abs(x)))) %>%
+      ggplot() +
+      aes(x = condition, y = process, fill = nes,
+          text = paste0(process, "\n", condition,
+                        "\nNES: ", round(nes, 2),
+                        "\npadj: ", signif(p_adjust_gsea, 2))) +
+      geom_tile(color = "white", linewidth = 0.3) +
+      scale_fill_gradient2(low = "#4361ee", mid = "white", high = "#e5383b", midpoint = 0) +
+      theme_vaxgo() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+            axis.text.y = element_text(size = 7)) +
+      labs(x = "", y = "", fill = "NES",
+           title = paste0("Enriched processes (padj < ", input$padj_filter, ")"))
+    ggplotly(p, tooltip = "text")
+  })
+}
+```
+
+Selected process
+======================================================================
+
+Column
+----------------------------------------------------------------------
+
+<!-- =========================================================================
+     PAGE 3 - one GSEA process: shared score scatter + genes heatmap.
+     The process is chosen from the sidebar dropdown ("Process (GSEA)").
+     ========================================================================= -->
+
+### Shared score (selected process)
+
+<!-- Leading-edge genes of the selected process: score_shared vs mouse rank. -->
+
+```{r}
+plotlyOutput("plot_process_score", height = "520px")
+```
+
+```{r}
+if (exists("output", inherits = TRUE)) {
+  output$plot_process_score <- renderPlotly({
+    req(results(), input$process_select)
+    d <- results()$predictions %>%
+      filter(hgnc_symbol %in% process_genes())
+    req(nrow(d) > 0)
+    p <- d %>%
+      ggplot() +
+      aes(x = score_shared, y = rank_mouse,
+          fill = score_shared,
+          text = paste0(hgnc_symbol,
+                        "\nscore_shared: ", round(score_shared, 2),
+                        "\nrank_mouse: ", round(rank_mouse, 1))) +
+      geom_point(shape = 21, size = 2, colour = "black", stroke = 0.3, alpha = 0.85) +
+      scale_fill_gradient(low = "white", high = "#4DBBD5FF") +
+      theme_vaxgo() +
+      labs(x = "score_shared", y = "Absolute rank (mouse)",
+           title = paste0("Shared score - ", input$process_select))
+    ggplotly(p, tooltip = "text") %>%
+      layout(margin = list(l = 60, r = 15, b = 55, t = 40))
+  })
+}
+```
+
+### Genes heatmap (selected process)
+
+<!-- Feature heatmap of the leading-edge genes of the selected process. -->
+
+```{r}
+plotlyOutput("plot_process_heatmap", height = "520px")
+```
+
+```{r}
+if (exists("output", inherits = TRUE)) {
+  output$plot_process_heatmap <- renderPlotly({
+    req(results(), input$process_select)
+    d <- results()$predictions %>%
+      filter(hgnc_symbol %in% process_genes())
+    req(nrow(d) > 1)
+    ggplotly(feature_heatmap(d, build_heat_mat(results()$predictions),
+                             paste0("Process: ", input$process_select)),
+             tooltip = "text")
+  })
+}
+```
+
+Heatmap
+======================================================================
+
+Column
+----------------------------------------------------------------------
+
+<!-- =========================================================================
+     PAGE 4 - heatmap of the selected genes with the four SCORES as columns.
+     ========================================================================= -->
+
+### Selected genes heatmap
+
+<!-- Rows = selected genes, columns = the four scores (z-scored over ALL genes). -->
+
+```{r}
+plotlyOutput("plot_selected_heatmap", height = "700px")
+```
+
+```{r}
+if (exists("output", inherits = TRUE)) {
+  output$plot_selected_heatmap <- renderPlotly({
+    req(results())
+    sel <- selected()
+    req(nrow(sel) > 1)
+    ggplotly(score_heatmap(sel, results()$predictions, "Selected genes (scores)"),
+             tooltip = "text")
+  })
+
+  output$download_figure <- downloadHandler(
+    filename = function() paste0(input$output_name, "_heatmap.png"),
+    content = function(file) {
+      ggsave(file, score_heatmap(selected(), results()$predictions, "Selected genes (scores)"),
+             width = 10, height = 8, dpi = 300)
+    }
+  )
+}
 ```

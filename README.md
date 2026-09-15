@@ -145,7 +145,7 @@ All pre-processed intermediate files are archived in `tables/`, allowing downstr
 | *S. aureus* infection | Human | GSE33341 | Affymetrix Human Gene 1.0 ST | GPL6244 |
 | *E. coli* infection | Mouse | GSE33341 | Affymetrix Mouse Genome 430 2.0 Array | GPL1261 |
 | *E. coli* infection | Human | GSE33341 | Affymetrix Human Gene 1.0 ST | GPL6244 |
-| Burn | Mouse | GSE7404 | Affymetrix  Mouse 430.2 | GPL1261 |
+| Burn | Mouse | GSE7404 | Affymetrix Mouse 430.2 | GPL1261 |
 | Burn | Human | GSE37069 | Affymetrix Human Genome U133 Plus 2.0 Array | GPL570 |
 | Trauma | Mouse | GSE7404 | Affymetrix Mouse Genome 430 2.0 Array | GPL1261 |
 | Trauma | Human | GSE36809 | Affymetrix Human Gene 1.0 ST | GPL6244 |
@@ -172,7 +172,7 @@ renv::restore()   # Restores exact package environment
 Each notebook sources `scripts_notebooks/required.R`, initializing the shared workspace, custom ggplot2 themes (`theme_vaxgo`), palettes, and utility functions.
 
 | Step | Notebook | Key Inputs | Key Outputs |
-|:--------------|:--------------|:--------------|:--------------|
+|:-----------------|:-----------------|:-----------------|:-----------------|
 | **0** | `0_Data_Curation.Rmd` | `tables/DataCuration/animals_vaccines_bioproject_result.csv` | `tables/DataCuration/datacuration_step2.csv` |
 | **1** | `1_QualityControl.Rmd` | `tables/*_eset.rds`, `tables/*_metadata.rds` | `ArrayQM/` reports, RLE plots |
 | **2** | `2_Preprocessing_and_DGE.Rmd` | Raw GEO ExpressionSets or `tables/*_exprs.rds` | `tables/*_dge_limma_degs.rds`, `tables/*_log2fc_sample_clean_long.rds` |
@@ -199,7 +199,7 @@ Outputs are saved directly to `Figures/example_btm_correlation_day7.png`.
 
 ------------------------------------------------------------------------
 
-## Statistical modelling (v2)
+## Statistical modelling (v2) {#statistical-modelling-v2}
 
 The consolidated pipeline [`Modelling/6_Statistical_Modelling_v2.Rmd`](Modelling/6_Statistical_Modelling_v2.Rmd) predicts the **human** response gene by gene from a mouse experiment, using biological feature layers and **leave-one-pathogen-out (LOCO)** cross-validation.
 
@@ -214,7 +214,7 @@ The consolidated pipeline [`Modelling/6_Statistical_Modelling_v2.Rmd`](Modelling
 ### Best model per task (out-of-fold, LOCO)
 
 | Task | Metric | Random Forest | Neural Network | Lasso | Linear |
-|:-----|:-------|:-------------:|:--------------:|:-----:|:------:|
+|:-----------|:-----------|:----------:|:------------:|:----------:|:----------:|
 | Shared LEGs (predictive, Full + BTM) | ROC-AUC | **0.557** | 0.536 | 0.489 | 0.487 |
 | Shared LEGs (explanatory, Full + BTM) | ROC-AUC | **0.592** | 0.580 | 0.507 | 0.521 |
 | Human rank transfer (Mouse + layers) | R² | **0.234** | 0.068 | 0.072 | 0.072 |
@@ -225,7 +225,7 @@ The **random forest is the best algorithm for every task**; the lasso never impr
 ### Exported artefacts (`Modelling/Models/`)
 
 | File | Task |
-|:-----|:-----|
+|:-----------------------------------|:-----------------------------------|
 | `rf_model_shared.rds` / `nn_model_shared.rds` | Shared vs Mouse-only classification |
 | `rf_model_rank.rds` / `nn_model_rank.rds` | Human absolute rank regression |
 | `rf_model_direction.rds` / `nn_model_direction.rds` | Directional concordance classification |
